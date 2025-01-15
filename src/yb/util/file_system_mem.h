@@ -11,8 +11,7 @@
 // under the License.
 //
 
-#ifndef YB_UTIL_FILE_SYSTEM_MEM_H
-#define YB_UTIL_FILE_SYSTEM_MEM_H
+#pragma once
 
 #include <vector>
 
@@ -39,13 +38,13 @@ class InMemoryFileState {
 
   uint64_t Size() const { return size_; }
 
-  CHECKED_STATUS Read(uint64_t offset, size_t n, Slice* result, uint8_t* scratch) const;
+  Status Read(uint64_t offset, size_t n, Slice* result, uint8_t* scratch) const;
 
-  CHECKED_STATUS PreAllocate(uint64_t size);
+  Status PreAllocate(uint64_t size);
 
-  CHECKED_STATUS Append(const Slice& data);
+  Status Append(const Slice& data);
 
-  CHECKED_STATUS AppendRaw(const uint8_t *src, size_t src_len);
+  Status AppendRaw(const uint8_t *src, size_t src_len);
 
   const std::string& filename() const { return filename_; }
 
@@ -70,9 +69,9 @@ class InMemorySequentialFile : public SequentialFile {
 
   ~InMemorySequentialFile() {}
 
-  CHECKED_STATUS Read(size_t n, Slice* result, uint8_t* scratch) override;
+  Status Read(size_t n, Slice* result, uint8_t* scratch) override;
 
-  CHECKED_STATUS Skip(uint64_t n) override;
+  Status Skip(uint64_t n) override;
 
   const std::string& filename() const override {
     return file_->filename();
@@ -111,5 +110,3 @@ class InMemoryRandomAccessFile : public RandomAccessFile {
 };
 
 } // namespace yb
-
-#endif  // YB_UTIL_FILE_SYSTEM_MEM_H

@@ -13,12 +13,11 @@
 //
 // This file contains the QLValue class that represents QL values.
 
-#ifndef YB_COMMON_QL_VALUE_H
-#define YB_COMMON_QL_VALUE_H
+#pragma once
 
 #include <stdint.h>
 
-#include <glog/logging.h>
+#include "yb/util/logging.h"
 
 #include "yb/common/common_fwd.h"
 #include "yb/common/common_types.pb.h"
@@ -32,17 +31,17 @@
 
 // The list of unsupported datatypes to use in switch statements
 #define QL_UNSUPPORTED_TYPES_IN_SWITCH \
-  case NULL_VALUE_TYPE: FALLTHROUGH_INTENDED; \
-  case TUPLE: FALLTHROUGH_INTENDED;     \
-  case TYPEARGS: FALLTHROUGH_INTENDED;  \
-  case UNKNOWN_DATA
+  case DataType::NULL_VALUE_TYPE: FALLTHROUGH_INTENDED; \
+  case DataType::TYPEARGS: FALLTHROUGH_INTENDED;  \
+  case DataType::UNKNOWN_DATA
 
 #define QL_INVALID_TYPES_IN_SWITCH     \
-  case UINT8:  FALLTHROUGH_INTENDED;    \
-  case UINT16: FALLTHROUGH_INTENDED;    \
-  case UINT32: FALLTHROUGH_INTENDED;    \
-  case UINT64: FALLTHROUGH_INTENDED;    \
-  case GIN_NULL
+  case DataType::UINT8:  FALLTHROUGH_INTENDED;    \
+  case DataType::UINT16: FALLTHROUGH_INTENDED;    \
+  case DataType::UINT32: FALLTHROUGH_INTENDED;    \
+  case DataType::UINT64: FALLTHROUGH_INTENDED;    \
+  case DataType::GIN_NULL: FALLTHROUGH_INTENDED;  \
+  case DataType::VECTOR
 
 namespace yb {
 
@@ -134,6 +133,7 @@ class QLValue {
   QLVALUE_PRIMITIVE_GETTER(list);
   QLVALUE_PRIMITIVE_GETTER(frozen);
   QLVALUE_PRIMITIVE_GETTER(gin_null);
+  QLVALUE_PRIMITIVE_GETTER(tuple);
   #undef QLVALUE_PRIMITIVE_GETTER
 
   static Timestamp timestamp_value(const QLValuePB& pb);
@@ -218,18 +218,18 @@ class QLValue {
     return timeuuid_value(pb_);
   }
 
-  static util::VarInt varint_value(const QLValuePB& pb);
-  static util::VarInt varint_value(const LWQLValuePB& pb);
+  static VarInt varint_value(const QLValuePB& pb);
+  static VarInt varint_value(const LWQLValuePB& pb);
 
-  static util::VarInt varint_value(const QLValue& value) {
+  static VarInt varint_value(const QLValue& value) {
     return varint_value(value.pb_);
   }
 
-  util::VarInt varint_value() const {
+  VarInt varint_value() const {
     return varint_value(pb_);
   }
 
-  void AppendToKeyBytes(string *bytes) const {
+  void AppendToKeyBytes(std::string *bytes) const {
     AppendToKey(pb_, bytes);
   }
 
@@ -272,6 +272,9 @@ class QLValue {
   }
   void set_jsonb_value(const std::string& val) {
     pb_.set_jsonb_value(val);
+  }
+  void set_jsonb_value(const void* value, size_t size) {
+    pb_.set_jsonb_value(value, size);
   }
   void set_bool_value(bool val) {
     pb_.set_bool_value(val);
@@ -370,7 +373,7 @@ class QLValue {
   static void set_timeuuid_value(const Uuid& val, QLValuePB* out);
   static void set_timeuuid_value(const Uuid& val, QLValue* out);
 
-  void set_varint_value(const util::VarInt& val) {
+  void set_varint_value(const VarInt& val) {
     pb_.set_varint_value(val.EncodeToComparable());
   }
 
@@ -427,6 +430,9 @@ class QLValue {
   QLValuePB* add_frozen_elem() {
     return pb_.mutable_frozen_value()->add_elems();
   }
+  QLValuePB* add_tuple_elem() {
+    return pb_.mutable_tuple_value()->add_elems();
+  }
 
   // For collections, the call to `mutable_foo` takes care of setting the correct type to `foo`
   // internally and allocating the message if needed
@@ -443,6 +449,7 @@ class QLValue {
   void set_frozen_value() {
     pb_.mutable_frozen_value();
   }
+  void set_tuple_value() { pb_.mutable_tuple_value(); }
 
   //----------------------------------- assignment methods ----------------------------------
   QLValue& operator=(const QLValuePB& other) {
@@ -496,9 +503,9 @@ class QLValue {
   }
 
   //----------------------------- serializer / deserializer ---------------------------------
-  CHECKED_STATUS Deserialize(const std::shared_ptr<QLType>& ql_type,
-                             const QLClient& client,
-                             Slice* data);
+  Status Deserialize(const std::shared_ptr<QLType>& ql_type,
+                     const QLClient& client,
+                     Slice* data);
 
   //------------------------------------ debug string ---------------------------------------
   // Return a string for debugging.
@@ -511,7 +518,7 @@ class QLValue {
   // is the coverter's return type. The converter's return type <data_type> is unsigned while
   // <num_type> may be signed or unsigned. <setter> sets the value in QLValue.
   template<typename num_type, typename data_type>
-  CHECKED_STATUS CQLDeserializeNum(
+  Status CQLDeserializeNum(
       size_t len, data_type (*converter)(const void*), void (QLValue::*setter)(num_type),
       Slice* data);
 
@@ -520,7 +527,7 @@ class QLValue {
   // <data_type> is the coverter's return type. The converter's return type <data_type> is an
   // integer type. <setter> sets the value in QLValue.
   template<typename float_type, typename data_type>
-  CHECKED_STATUS CQLDeserializeFloat(
+  Status CQLDeserializeFloat(
       size_t len, data_type (*converter)(const void*), void (QLValue::*setter)(float_type),
       Slice* data);
 
@@ -600,5 +607,3 @@ void ConcatStrings(const Slice& lhs, const Slice& rhs, LWQLValuePB* result);
   } break;
 
 } // namespace yb
-
-#endif // YB_COMMON_QL_VALUE_H

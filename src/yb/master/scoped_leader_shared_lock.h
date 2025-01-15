@@ -29,16 +29,16 @@
 // or implied.  See the License for the specific language governing permissions and limitations
 // under the License.
 
-#ifndef YB_MASTER_SCOPED_LEADER_SHARED_LOCK_H
-#define YB_MASTER_SCOPED_LEADER_SHARED_LOCK_H
+#pragma once
 
 #include <chrono>
 #include <shared_mutex>
 #include <string>
 #include <unordered_map>
 
-#include <glog/logging.h>
+#include "yb/util/logging.h"
 
+#include "yb/master/leader_epoch.h"
 #include "yb/master/master_fwd.h"
 
 #include "yb/rpc/service_if.h"
@@ -89,12 +89,6 @@ class ScopedLeaderSharedLock {
       int line_number,
       const char* function_name);
 
-  explicit ScopedLeaderSharedLock(
-      enterprise::CatalogManager* catalog,
-      const char* file_name,
-      int line_number,
-      const char* function_name);
-
   ~ScopedLeaderSharedLock();
 
   void Unlock();
@@ -118,6 +112,28 @@ class ScopedLeaderSharedLock {
       return catalog_status_;
     }
     return leader_status_;
+  }
+
+  // Is the catalog manager initialized and is it the leader of its Raft configuration.
+  bool IsInitializedAndIsLeader() const { return first_failed_status().ok(); }
+
+  // String representation of first non-OK status. Should only be called when first_failed_status()
+  // is not ok.
+  std::string failed_status_string() const {
+    if (!catalog_status_.ok()) {
+      return "Catalog status failure: " + catalog_status_.ToString();
+    }
+
+    DCHECK(!leader_status_.ok());
+    if (!leader_status_.ok()) {
+      return "Leader status failure: " + leader_status_.ToString();
+    }
+
+    return "Status success.";
+  }
+
+  const LeaderEpoch& epoch() const {
+    return epoch_;
   }
 
   // Check that the catalog manager is initialized. It may or may not be the
@@ -146,6 +162,9 @@ class ScopedLeaderSharedLock {
   bool CheckIsInitializedOrRespondTServer(RespClass* resp, rpc::RpcContext* rpc,
                                           bool set_error = true);
 
+  // The term of the leader when the lock was acquired.
+  int64_t GetLeaderReadyTerm() const;
+
  private:
   template<typename RespClass, typename ErrorClass>
   bool CheckIsInitializedAndIsLeaderOrRespondInternal(RespClass* resp, rpc::RpcContext* rpc);
@@ -159,6 +178,7 @@ class ScopedLeaderSharedLock {
   Status catalog_status_;
   Status leader_status_;
   std::chrono::steady_clock::time_point start_;
+  LeaderEpoch epoch_;
 
   const char* file_name_;
   int line_number_;
@@ -167,5 +187,3 @@ class ScopedLeaderSharedLock {
 
 }  // namespace master
 }  // namespace yb
-
-#endif  // YB_MASTER_SCOPED_LEADER_SHARED_LOCK_H

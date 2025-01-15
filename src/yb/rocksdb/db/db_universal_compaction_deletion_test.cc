@@ -14,9 +14,9 @@
 #include "yb/rocksdb/db/db_test_util.h"
 #include "yb/rocksdb/util/testutil.h"
 
+#include "yb/util/backoff_waiter.h"
 #include "yb/util/path_util.h"
 #include "yb/util/test_macros.h"
-#include "yb/util/test_util.h"
 
 using namespace std::literals;
 
@@ -39,7 +39,7 @@ class OnFileCreationListener : public EventListener {
 
     bool do_pause;
     {
-      std::lock_guard<std::mutex> l(mutex_);
+      std::lock_guard l(mutex_);
       created_file_names_.push_back(file_name);
       do_pause = created_file_names_.size() > pause_after_num_files_created_;
     }
@@ -47,7 +47,7 @@ class OnFileCreationListener : public EventListener {
     if (do_pause) {
       ASSERT_OK(yb::LoggedWaitFor(
           [this, &file_name] {
-            std::lock_guard<std::mutex> l(mutex_);
+            std::lock_guard l(mutex_);
             return file_names_to_resume_.erase(file_name) > 0;
           }, kWaitTimeout, yb::Format("Pausing on $0 ...", file_name)));
     }
@@ -64,22 +64,22 @@ class OnFileCreationListener : public EventListener {
   }
 
   void ResumeFileName(const std::string& file_name) {
-    std::lock_guard<std::mutex> l(mutex_);
+    std::lock_guard l(mutex_);
     file_names_to_resume_.insert(file_name);
   }
 
   std::vector<std::string> CreatedFileNames() {
-    std::lock_guard<std::mutex> l(mutex_);
+    std::lock_guard l(mutex_);
     return created_file_names_;
   }
 
   const std::string& GetLastCreatedFileName() {
-    std::lock_guard<std::mutex> l(mutex_);
+    std::lock_guard l(mutex_);
     return created_file_names_.back();
   }
 
   size_t NumFilesCreated() {
-    std::lock_guard<std::mutex> l(mutex_);
+    std::lock_guard l(mutex_);
     return created_file_names_.size();
   }
 
@@ -122,14 +122,14 @@ class DBTestUniversalCompactionDeletion : public DBTestBase {
     return options;
   }
 
-  CHECKED_STATUS WaitForNumFilesCreated(const std::string& desc, size_t num_files) {
+  Status WaitForNumFilesCreated(const std::string& desc, size_t num_files) {
     return yb::LoggedWaitFor(
         [this, num_files] { return file_create_listener_->NumFilesCreated() >= num_files; },
         kWaitTimeout, desc);
   }
 
   template <class FilePathsContainer>
-  CHECKED_STATUS WaitFilePathsDeleted(
+  Status WaitFilePathsDeleted(
       FilePathsContainer file_paths, const std::string& description) {
     RETURN_NOT_OK_PREPEND(
         yb::LoggedWaitFor(
@@ -148,7 +148,7 @@ class DBTestUniversalCompactionDeletion : public DBTestBase {
     return Status::OK();
   }
 
-  CHECKED_STATUS WaitLiveFilesDeleted(
+  Status WaitLiveFilesDeleted(
       const std::vector<LiveFileMetaData>& files, const std::string& description) {
     std::vector<std::string> file_paths;
     for (const auto& file : files) {

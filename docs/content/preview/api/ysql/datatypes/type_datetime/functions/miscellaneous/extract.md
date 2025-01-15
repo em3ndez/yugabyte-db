@@ -4,12 +4,11 @@ headerTitle: Function extract() | date_part() returns double precision
 linkTitle: Function extract() | date_part()
 description: The semantics of The functions extract() returns double precision, and its alternative formulation date_part() [YSQL]
 menu:
-  preview:
+  preview_api:
     identifier: extract
     parent: miscellaneous
     weight: 20
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 The function _extract()_, and the alternative syntax that the function _date_part()_ supports for the same semantics, return a _double precision_ value corresponding to a nominated so-called _field_, like _year_ or _second_, from the input _date-time_ value.
@@ -60,7 +59,7 @@ This is the result:
 
 The _extract()_ function is specified in the SQL Standard and seems to be supported in all SQL database systems. The list of keywords, though, is database-system-specific. (For example, Oracle Database supports only about ten of these while PostgreSQL, and therefore YSQL, support about twenty.) In contrast, the _date_part()_ function is specific to PostgreSQL (and any system like YSQL that aims to support the identical syntax and semantics).
 
-The \\_df_ metacommand produces output for _date_part()_ in the normal way; but it produces no output for _extract()_. Here is the interesting part of the output from \\_df date_part()_:
+The \\_df_ meta-command produces output for _date_part()_ in the normal way; but it produces no output for _extract()_. Here is the interesting part of the output from \\_df date_part()_:
 
 ```output
  Result data type |        Argument data types
@@ -83,7 +82,7 @@ Three rows were removed manually:
 The remaining rows were re-ordered, and blank lines were added, to improve the readability.
 
 {{< tip title="Avoid using the 'abstime' and 'reltime' fields." >}}
-The <a href="https://www.postgresql.org/docs/11/datatype-datetime.html#DATATYPE-DATETIME-TABLE" target="_blank">PostgreSQL documentation <i class="fas fa-external-link-alt"></i></a> says this:
+The [PostgreSQL documentation](https://www.postgresql.org/docs/11/datatype-datetime.html#DATATYPE-DATETIME-TABLE) says this:
 
 > The data types _abstime_ and _reltime_ are lower precision types which are used internally. Don't use these types in applications; these internal types might disappear in a future release.
 {{< /tip >}}

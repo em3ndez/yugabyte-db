@@ -4,12 +4,11 @@ headerTitle: Interval value limits
 linkTitle: Interval value limits
 description: Explains how the upper and lower limits for interval values must be understood and specified in terms of the three fields of the internal representation. [YSQL]
 menu:
-  preview:
+  preview_api:
     identifier: interval-limits
     parent: type-interval
     weight: 20
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 {{< tip title="Download and install the date-time utilities code." >}}

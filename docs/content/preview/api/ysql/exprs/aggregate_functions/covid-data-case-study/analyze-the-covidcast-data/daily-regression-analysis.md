@@ -4,12 +4,11 @@ linkTitle: symptoms vs mask-wearing by day
 headerTitle: Daily values for regr_r2(), regr_slope(), regr_intercept() for symptoms vs mask-wearing
 description: Reporting the daily values for regr_r2(), regr_slope(), regr_intercept() for symptoms vs mask-wearing
 menu:
-  preview:
+  preview_api:
     identifier: report-daily-regression-analysis
     parent: analyze-the-covidcast-data
     weight: 10
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 This is the semantic essence of the query:

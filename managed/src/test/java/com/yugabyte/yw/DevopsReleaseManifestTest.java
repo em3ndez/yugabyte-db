@@ -38,7 +38,6 @@ public class DevopsReleaseManifestTest {
                   "create_instance.yml",
                   "local_role.yml",
                   "python3_requirements.txt",
-                  "python_requirements.txt",
                   "replicated.yml",
                   "version.txt",
                   "yb_release",
@@ -47,7 +46,6 @@ public class DevopsReleaseManifestTest {
           .put(
               "bin",
               ImmutableSet.of(
-                  "ansible-playbook.sh",
                   "ansible_runner.sh",
                   "diagnostics.sh",
                   "filter_ansible_output.py",
@@ -60,10 +58,10 @@ public class DevopsReleaseManifestTest {
           .build();
 
   private static final Set<String> PREFIXES_TO_SKIP =
-      ImmutableSet.of("build", "python_virtual_env", "tests", "third-party", "venv");
+      ImmutableSet.of("build", "python_virtual_env", "tests", "third-party", "venv", ".idea");
 
   private static final Set<String> FILE_EXTENSIONS_TO_SKIP =
-      ImmutableSet.of("gitignore", "retry", "pyc");
+      ImmutableSet.of("gitignore", "retry", "pyc", "orig");
 
   @Test
   public void testReleaseManifestFiles() throws IOException {

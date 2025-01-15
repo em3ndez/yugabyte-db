@@ -9,19 +9,18 @@ menu:
 aliases:
   - /preview/api/redis/tsrem
   - /preview/api/yedis/tsrem
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 ## Synopsis
 
-<b>`TSREM key timestamp [timestamp ...]`</b><br>
+**`TSREM key timestamp [timestamp ...]`**
+
 This command removes one or more specified timestamps from the time series that is associated with the given `key`.
-<li>If the `key` exists, but is not of time series type, an error is raised.</li>
-<li>If the given `timestamp` is not a valid signed 64 bit integer, an error is raised.</li>
-<li>If the provided timestamps don't exist, TSREM still returns "OK". As a result, TSREM just
-ensures the provided timestamps no longer exist, but doesn't provide any information about whether
-they existed before the command was run.</li>
+
+- If the `key` exists, but is not of time series type, an error is raised.
+- If the given `timestamp` is not a valid signed 64 bit integer, an error is raised.
+- If the provided timestamps don't exist, TSREM still returns "OK". As a result, TSREM just ensures the provided timestamps no longer exist, but doesn't provide any information about whether they existed before the command was run.
 
 ## Return value
 

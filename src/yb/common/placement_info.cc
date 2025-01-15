@@ -21,6 +21,9 @@
 #include "yb/gutil/strings/split.h"
 #include "yb/util/status.h"
 
+using std::string;
+using std::vector;
+
 namespace yb {
 
 namespace {
@@ -160,6 +163,19 @@ Result<PlacementInfoConverter::Placement> PlacementInfoConverter::FromQLValue(
   }
 
   return FromString(placement.front());
+}
+
+LocalityLevel PlacementInfoConverter::GetLocalityLevel(
+    const CloudInfoPB& src_cloud_info, const CloudInfoPB& dest_cloud_info) {
+  if (!src_cloud_info.has_placement_region() || !dest_cloud_info.has_placement_region() ||
+      src_cloud_info.placement_region() != dest_cloud_info.placement_region()) {
+    return LocalityLevel::kNone;
+  }
+  if (!src_cloud_info.has_placement_zone() || !dest_cloud_info.has_placement_zone() ||
+      src_cloud_info.placement_zone() != dest_cloud_info.placement_zone()) {
+    return LocalityLevel::kRegion;
+  }
+  return LocalityLevel::kZone;
 }
 
 } // namespace yb

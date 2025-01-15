@@ -1,13 +1,18 @@
 // Copyright (c) YugaByte, Inc.
 
-import React from 'react';
+import i18n from 'i18next';
 import ReactDOM from 'react-dom';
+import { CssBaseline, ThemeProvider } from '@material-ui/core';
+import { mainTheme } from './redesign/theme/mainTheme';
+import { initReactI18next } from 'react-i18next';
 import { Provider } from 'react-redux';
 import { Router, browserHistory } from 'react-router';
 import { IntlProvider } from 'react-intl';
 import { QueryClient, QueryClientProvider } from 'react-query';
 import fetchRoutes from './routes';
 import configureStore from './store/configureStore.js';
+import en from './translations/en.json';
+// import '@yugabytedb/ui-components';
 import 'intl';
 import 'intl/locale-data/jsonp/en.js';
 
@@ -21,14 +26,25 @@ const queryClient = new QueryClient({
   }
 });
 
+void i18n.use(initReactI18next).init({
+  resources: { en },
+  fallbackLng: 'en',
+  interpolation: {
+    escapeValue: false
+  }
+});
+
 const AppWrapper = () => (
   <Provider store={store}>
     <QueryClientProvider client={queryClient}>
-      <IntlProvider locale="en">
-        <Router history={browserHistory}>
-          {fetchRoutes(store)}
-        </Router>
-      </IntlProvider>
+      <ThemeProvider theme={mainTheme}>
+        <IntlProvider locale="en">
+          <Router history={browserHistory}>
+            <CssBaseline />
+            {fetchRoutes(store)}
+          </Router>
+        </IntlProvider>
+      </ThemeProvider>
     </QueryClientProvider>
   </Provider>
 );

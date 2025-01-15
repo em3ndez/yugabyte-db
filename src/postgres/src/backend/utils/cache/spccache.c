@@ -8,7 +8,7 @@
  * be a measurable performance gain from doing this, but that might change
  * in the future as we add more options.
  *
- * Portions Copyright (c) 1996-2018, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2022, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * IDENTIFICATION
@@ -16,28 +16,28 @@
  *
  *-------------------------------------------------------------------------
  */
-#include <float.h>
-
 #include "postgres.h"
 
 #include "access/reloptions.h"
 #include "catalog/pg_tablespace.h"
 #include "commands/tablespace.h"
-#include "common/pg_yb_common.h"
-
-#include "pg_yb_utils.h"
-
 #include "miscadmin.h"
-#include "optimizer/cost.h"
+#include "optimizer/optimizer.h"
 #include "storage/bufmgr.h"
-#include "utils/builtins.h"
 #include "utils/catcache.h"
 #include "utils/hsearch.h"
 #include "utils/inval.h"
-#include "utils/jsonfuncs.h"
 #include "utils/spccache.h"
 #include "utils/syscache.h"
 
+/* Yugabyte includes */
+#include <float.h>
+#include "common/pg_yb_common.h"
+#include "optimizer/cost.h"
+#include "utils/builtins.h"
+#include "utils/jsonfuncs.h"
+#include "utils/memutils.h"
+#include "pg_yb_utils.h"
 
 /* Hash table for information about each tablespace */
 static HTAB *TableSpaceCacheHash = NULL;
@@ -45,11 +45,12 @@ static HTAB *TableSpaceCacheHash = NULL;
 typedef struct
 {
 	Oid			oid;			/* lookup key - must be first */
-	union Opts_t
+	union
 	{
 		TableSpaceOpts *pg_opts;
 		YBTableSpaceOpts *yb_opts;
 	} opts; 					/* options, or NULL if none */
+	YbGeolocationDistance ts_distance;
 } TableSpaceCacheEntry;
 
 /*
@@ -90,7 +91,6 @@ InitializeTableSpaceCache(void)
 	HASHCTL		ctl;
 
 	/* Initialize the hash table. */
-	MemSet(&ctl, 0, sizeof(ctl));
 	ctl.keysize = sizeof(Oid);
 	ctl.entrysize = sizeof(TableSpaceCacheEntry);
 	TableSpaceCacheHash =
@@ -187,6 +187,7 @@ get_tablespace(Oid spcid)
 	 * yb_opts and pg_opts.
 	 */
 	spc->opts.pg_opts = opts;
+	spc->ts_distance = UNKNOWN_DISTANCE;
 	return spc;
 }
 
@@ -194,20 +195,42 @@ get_tablespace(Oid spcid)
 /*
  * get_tablespace_distance
  *
- *		Returns a GeolocationDistance indicating how far away a given
+ *		Returns a YbGeolocationDistance indicating how far away a given
  *		tablespace is from the current node.
  */
-GeolocationDistance get_tablespace_distance(Oid spcid)
+YbGeolocationDistance get_tablespace_distance(Oid spcid)
 {
 	Assert(IsYugaByteEnabled());
-    if (spcid == InvalidOid)
-       return UNKNOWN_DISTANCE;
+	if (spcid == InvalidOid)
+		return UNKNOWN_DISTANCE;
 
 	TableSpaceCacheEntry *spc = get_tablespace(spcid);
 	if (spc->opts.yb_opts == NULL)
 	{
 		return UNKNOWN_DISTANCE;
 	}
+
+	if (spc->ts_distance != UNKNOWN_DISTANCE)
+	{
+		/* return cached geolocation distance */
+		return spc->ts_distance;
+	}
+
+	const char *current_cloud = YBGetCurrentCloud();
+	const char *current_region = YBGetCurrentRegion();
+	const char *current_zone = YBGetCurrentZone();
+
+	if (current_cloud == NULL || current_region == NULL || current_zone == NULL)
+	{
+		/* no placement info specified, so nothing to do */
+		return UNKNOWN_DISTANCE;
+	}
+
+	MemoryContext tablespaceDistanceContext = AllocSetContextCreate(GetCurrentMemoryContext(),
+														   "tablespace distance calculation",
+														   ALLOCSET_SMALL_SIZES);
+
+	MemoryContext oldContext = MemoryContextSwitchTo(tablespaceDistanceContext);
 
 	/*
 	 * The tablespace options json is stored as a payload after the header
@@ -221,29 +244,41 @@ GeolocationDistance get_tablespace_distance(Oid spcid)
 	text *placement_array = json_get_value(tsp_options_json,
 											"placement_blocks");
 	const int length = get_json_array_length(placement_array);
-	char *keys[4] = {"cloud", "region", "zone", "min_num_replicas"};
-	const char *current_cloud = YBGetCurrentCloud();
-	const char *current_region = YBGetCurrentRegion();
-	const char *current_zone = YBGetCurrentZone();
 
-	if (current_cloud == NULL || current_region == NULL || current_zone == NULL)
-	{
-		/* no placement info specified, so nothing to do */
-		return UNKNOWN_DISTANCE;
-	}
+	static char *cloudKey = "cloud";
+	static char *regionKey = "region";
+	static char *zoneKey = "zone";
+	static char *leaderPrefKey = "leader_preference";
 
-	GeolocationDistance farthest = ZONE_LOCAL;
+	YbGeolocationDistance farthest = ZONE_LOCAL;
+	bool leader_pref_exists = false;
 
 	for (size_t i = 0; i < length; i++)
 	{
-		GeolocationDistance current_dist;
 		text *json_element = get_json_array_element(placement_array, i);
-		const char *tsp_cloud = text_to_cstring(
-			json_get_denormalized_value(json_element, keys[0]));
-		const char *tsp_region = text_to_cstring(
-			json_get_denormalized_value(json_element, keys[1]));
-		const char *tsp_zone = text_to_cstring(
-			json_get_denormalized_value(json_element, keys[2]));
+		text *pref = json_get_denormalized_value(json_element, leaderPrefKey);
+		bool preferred = (pref != NULL) && (atoi(text_to_cstring(pref)) == 1);
+
+		/*
+		 * YB: If we've seen a preferred placement,
+		 * skip all non-preferred ones.
+		 */
+		if (!preferred && leader_pref_exists)
+			continue;
+
+		YbGeolocationDistance current_dist;
+		const char *tsp_cloud;
+		const char *tsp_region;
+		const char *tsp_zone;
+		tsp_cloud =
+			text_to_cstring(json_get_denormalized_value(json_element,
+														cloudKey));
+		tsp_region =
+			text_to_cstring(json_get_denormalized_value(json_element,
+														regionKey));
+		tsp_zone =
+			text_to_cstring(json_get_denormalized_value(json_element,
+														zoneKey));
 
 
 		/* are the current cloud and the given cloud the same */
@@ -271,8 +306,25 @@ GeolocationDistance get_tablespace_distance(Oid spcid)
 		{
 			current_dist = INTER_CLOUD;
 		}
-		farthest = current_dist > farthest ? current_dist : farthest;
+
+		/*
+		 * YB: If this is the first preferred placement we find,
+		 * disregard all previous placements.
+		 */
+		if (preferred && !leader_pref_exists)
+		{
+			leader_pref_exists = true;
+			farthest = current_dist;
+		}
+		else
+		{
+			farthest = current_dist > farthest ? current_dist : farthest;
+		}
 	}
+	MemoryContextSwitchTo(oldContext);
+	MemoryContextDelete(tablespaceDistanceContext);
+
+	spc->ts_distance = farthest;
 	return farthest;
 }
 
@@ -281,7 +333,7 @@ GeolocationDistance get_tablespace_distance(Oid spcid)
  *
  *		Costs per-tuple access on a given tablespace. Currently we score a
  *		placement option in a tablespace by assigning a cost based on its
- *		distance that is denoted by a GeolocationDistance. The computed cost
+ *		distance that is denoted by a YbGeolocationDistance. The computed cost
  *		is stored in yb_tsp_cost. Returns false iff geolocation costing is
  *		disabled or a NULL pointer was passed in for yb_tsp_cost.
  */
@@ -299,7 +351,7 @@ bool get_yb_tablespace_cost(Oid spcid, double *yb_tsp_cost)
 		return false;
 	}
 
-	GeolocationDistance distance = get_tablespace_distance(spcid);
+	YbGeolocationDistance distance = get_tablespace_distance(spcid);
 	double cost;
 	switch (distance)
 	{
@@ -369,8 +421,23 @@ get_tablespace_io_concurrency(Oid spcid)
 {
 	TableSpaceCacheEntry *spc = get_tablespace(spcid);
 
-	if (!spc->opts.pg_opts || spc->opts.pg_opts->effective_io_concurrency < 0)
+	if (!spc->opts.pg_opts || spc->opts.pg_opts->effective_io_concurrency < 0
+			|| IsYugaByteEnabled())
 		return effective_io_concurrency;
 	else
 		return spc->opts.pg_opts->effective_io_concurrency;
+}
+
+/*
+ * get_tablespace_maintenance_io_concurrency
+ */
+int
+get_tablespace_maintenance_io_concurrency(Oid spcid)
+{
+	TableSpaceCacheEntry *spc = get_tablespace(spcid);
+
+	if (!spc->opts.pg_opts || spc->opts.pg_opts->maintenance_io_concurrency < 0)
+		return maintenance_io_concurrency;
+	else
+		return spc->opts.pg_opts->maintenance_io_concurrency;
 }

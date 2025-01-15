@@ -4,13 +4,12 @@ headerTitle: EXPLAIN
 linkTitle: EXPLAIN
 description: Use the EXPLAIN statement to show the execution plan for a YCQL statement.
 menu:
-  preview:
+  preview_api:
     parent: api-cassandra
     weight: 1320
 aliases:
   - /preview/api/ycql/explain/
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 ## Synopsis

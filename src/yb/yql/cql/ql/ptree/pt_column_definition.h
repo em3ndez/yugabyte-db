@@ -15,8 +15,7 @@
 // Column Definition Tree node definition.
 //--------------------------------------------------------------------------------------------------
 
-#ifndef YB_YQL_CQL_QL_PTREE_PT_COLUMN_DEFINITION_H
-#define YB_YQL_CQL_QL_PTREE_PT_COLUMN_DEFINITION_H
+#pragma once
 
 #include "yb/yql/cql/ql/ptree/list_node.h"
 #include "yb/yql/cql/ql/ptree/tree_node.h"
@@ -53,7 +52,7 @@ class PTColumnDefinition : public TreeNode {
   }
 
   // Node semantics analysis.
-  virtual CHECKED_STATUS Analyze(SemContext *sem_context) override;
+  virtual Status Analyze(SemContext *sem_context) override;
 
   // Node type.
   virtual TreeNodeOpcode opcode() const override {
@@ -198,11 +197,11 @@ class PTIndexColumn : public PTColumnDefinition {
     return MCMakeShared<PTIndexColumn>(memctx, std::forward<TypeArgs>(args)...);
   }
 
-  virtual CHECKED_STATUS Analyze(SemContext *sem_context) override;
+  virtual Status Analyze(SemContext *sem_context) override;
 
-  CHECKED_STATUS SetupPrimaryKey(SemContext *sem_context);
-  CHECKED_STATUS SetupHashKey(SemContext *sem_context);
-  CHECKED_STATUS SetupCoveringIndexColumn(SemContext *sem_context);
+  Status SetupPrimaryKey(SemContext *sem_context);
+  Status SetupHashKey(SemContext *sem_context);
+  Status SetupCoveringIndexColumn(SemContext *sem_context);
 
   std::shared_ptr<QLType> ql_type() const override;
 
@@ -231,5 +230,3 @@ class PTIndexColumn : public PTColumnDefinition {
 
 }  // namespace ql
 }  // namespace yb
-
-#endif  // YB_YQL_CQL_QL_PTREE_PT_COLUMN_DEFINITION_H

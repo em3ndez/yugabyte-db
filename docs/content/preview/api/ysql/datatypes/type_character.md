@@ -4,13 +4,12 @@ headerTitle: Character data types
 linkTitle: Character
 description: Use character-based data types to specify data of a string of Unicode characters.
 menu:
-  preview:
+  preview_api:
     identifier: api-ysql-datatypes-character
     parent: api-ysql-datatypes
 aliases:
   - /preview/api/ysql/type_text/
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 ## Synopsis
@@ -29,7 +28,7 @@ Data type | Description |
 
 ## Description
 
-```
+```ebnf
 text_literal ::= "'" [ '' | letter ...] "'"
 ```
 

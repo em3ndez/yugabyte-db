@@ -30,8 +30,7 @@
 // under the License.
 //
 
-#ifndef YB_UTIL_THREAD_H
-#define YB_UTIL_THREAD_H
+#pragma once
 
 #include <pthread.h>
 #include <sys/syscall.h>
@@ -55,6 +54,18 @@ namespace yb {
 class MetricEntity;
 class Thread;
 class WebCallbackRegistry;
+
+const char* TEST_GetThreadLogPrefix();
+std::string TEST_GetThreadUnformattedLogPrefix();
+
+class TEST_SetThreadPrefixScoped {
+ public:
+  explicit TEST_SetThreadPrefixScoped(const std::string& prefix);
+  ~TEST_SetThreadPrefixScoped();
+
+ private:
+  std::string old_prefix_;
+};
 
 // Utility to join on a thread, printing warning messages if it
 // takes too long. For example:
@@ -92,7 +103,7 @@ class ThreadJoiner {
   // Join the thread, subject to the above parameters. If the thread joining
   // fails for any reason, returns RuntimeError. If it times out, returns
   // Aborted.
-  CHECKED_STATUS Join();
+  Status Join();
 
  private:
   Thread* thread_;
@@ -144,45 +155,45 @@ class Thread : public RefCountedThreadSafe<Thread> {
   //  - A1...An - argument types whose instances are passed to f(...)
   //  - holder - optional shared pointer to hold a reference to the created thread.
   template <class F>
-  static CHECKED_STATUS Create(const std::string& category, const std::string& name, const F& f,
+  static Status Create(const std::string& category, const std::string& name, const F& f,
                        scoped_refptr<Thread>* holder) {
     return StartThread(category, name, f, holder);
   }
 
   template <class F, class A1>
-  static CHECKED_STATUS Create(const std::string& category, const std::string& name, const F& f,
+  static Status Create(const std::string& category, const std::string& name, const F& f,
                        const A1& a1, scoped_refptr<Thread>* holder) {
     return StartThread(category, name, std::bind(f, a1), holder);
   }
 
   template <class F, class A1, class A2>
-  static CHECKED_STATUS Create(const std::string& category, const std::string& name, const F& f,
+  static Status Create(const std::string& category, const std::string& name, const F& f,
                        const A1& a1, const A2& a2, scoped_refptr<Thread>* holder) {
     return StartThread(category, name, std::bind(f, a1, a2), holder);
   }
 
   template <class F, class A1, class A2, class A3>
-  static CHECKED_STATUS Create(const std::string& category, const std::string& name, const F& f,
+  static Status Create(const std::string& category, const std::string& name, const F& f,
                        const A1& a1, const A2& a2, const A3& a3, scoped_refptr<Thread>* holder) {
     return StartThread(category, name, std::bind(f, a1, a2, a3), holder);
   }
 
   template <class F, class A1, class A2, class A3, class A4>
-  static CHECKED_STATUS Create(const std::string& category, const std::string& name, const F& f,
+  static Status Create(const std::string& category, const std::string& name, const F& f,
                        const A1& a1, const A2& a2, const A3& a3, const A4& a4,
                        scoped_refptr<Thread>* holder) {
     return StartThread(category, name, std::bind(f, a1, a2, a3, a4), holder);
   }
 
   template <class F, class A1, class A2, class A3, class A4, class A5>
-  static CHECKED_STATUS Create(const std::string& category, const std::string& name, const F& f,
+  static Status Create(const std::string& category, const std::string& name, const F& f,
                        const A1& a1, const A2& a2, const A3& a3, const A4& a4, const A5& a5,
                        scoped_refptr<Thread>* holder) {
     return StartThread(category, name, std::bind(f, a1, a2, a3, a4, a5), holder);
   }
 
   template <class F, class A1, class A2, class A3, class A4, class A5, class A6>
-  static CHECKED_STATUS Create(const std::string& category, const std::string& name, const F& f,
+  static Status Create(const std::string& category, const std::string& name, const F& f,
                        const A1& a1, const A2& a2, const A3& a3, const A4& a4, const A5& a5,
                        const A6& a6, scoped_refptr<Thread>* holder) {
     return StartThread(category, name, std::bind(f, a1, a2, a3, a4, a5, a6), holder);
@@ -245,6 +256,8 @@ class Thread : public RefCountedThreadSafe<Thread> {
   // The current thread of execution, or NULL if the current thread isn't a yb::Thread.
   // This call is signal-safe.
   static Thread* current_thread() { return tls_; }
+
+  static Status SendSignal(ThreadIdForStack tid, int signal);
 
   // Returns a unique, stable identifier for this thread. Note that this is a static
   // method and thus can be used on any thread, including the main thread of the
@@ -320,14 +333,7 @@ class Thread : public RefCountedThreadSafe<Thread> {
   // Function object that wraps the user-supplied function to run in a separate thread.
   typedef std::function<void()> ThreadFunctor;
 
-  Thread(std::string category, std::string name, ThreadFunctor functor)
-      : thread_(0),
-        category_(std::move(category)),
-        name_(std::move(name)),
-        tid_(CHILD_WAITING_TID),
-        functor_(std::move(functor)),
-        done_(1),
-        joinable_(false) {}
+  Thread(std::string category, std::string name, ThreadFunctor functor);
 
   // Library-specific thread ID.
   pthread_t thread_;
@@ -335,6 +341,7 @@ class Thread : public RefCountedThreadSafe<Thread> {
   // Name and category for this thread.
   const std::string category_;
   const std::string name_;
+  const std::string TEST_log_prefix_;
 
   // OS-specific thread ID. Once the constructor finishes StartThread(),
   // guaranteed to be set either to a non-negative integer, or to INVALID_TID.
@@ -366,7 +373,7 @@ class Thread : public RefCountedThreadSafe<Thread> {
   // initialised and its TID has been read. Waits for notification from the started
   // thread that initialisation is complete before returning. On success, stores a
   // reference to the thread in holder.
-  static CHECKED_STATUS StartThread(
+  static Status StartThread(
       const std::string& category, const std::string& name,
       ThreadFunctor functor, ThreadPtr* holder);
 
@@ -392,6 +399,8 @@ class Thread : public RefCountedThreadSafe<Thread> {
   // Invoked when the user-supplied function finishes or in the case of an
   // abrupt exit (i.e. pthread_exit()). Cleans up after SuperviseThread().
   static void FinishThread(void* arg);
+
+  static Status TryStartThread(Thread* t);
 };
 
 typedef scoped_refptr<Thread> ThreadPtr;
@@ -412,6 +421,7 @@ class CDSAttacher {
   ~CDSAttacher();
 };
 
-} // namespace yb
+void RenderAllThreadStacks(std::ostream& output);
+size_t CountManagedThreads();
 
-#endif /* YB_UTIL_THREAD_H */
+} // namespace yb

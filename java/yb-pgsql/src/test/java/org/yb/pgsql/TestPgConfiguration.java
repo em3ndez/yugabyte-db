@@ -18,10 +18,12 @@ import static org.yb.AssertionWrappers.*;
 import java.io.File;
 import java.nio.file.Files;
 import java.sql.Connection;
+import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.List;
 
 import org.hamcrest.CoreMatchers;
 import org.junit.Test;
@@ -29,16 +31,23 @@ import org.junit.runner.RunWith;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import org.yb.util.YBTestRunnerNonTsanOnly;
+import org.yb.YBTestRunner;
 
 import com.google.common.collect.ImmutableMap;
 
 /**
  * Tests for PostgreSQL configuration.
  */
-@RunWith(value = YBTestRunnerNonTsanOnly.class)
+@RunWith(value = YBTestRunner.class)
 public class TestPgConfiguration extends BasePgSQLTest {
   private static final Logger LOG = LoggerFactory.getLogger(TestPgConfiguration.class);
+
+  // default max_connections
+  private static final int CLUSTER_DEFAULT_MAX_CON = 300;
+  // default superuser_reserved_connections
+  private static final int CLUSTER_DEFAULT_SUPERUSER_RES_CON = 3;
+  // default max_wal_senders
+  private static final int CLUSTER_DEFAULT_MAX_WAL_SENDERS = 10;
 
   @Test
   public void testPostgresConfigDefault() throws Exception {
@@ -245,11 +254,11 @@ public class TestPgConfiguration extends BasePgSQLTest {
     try (Connection connection = tsConnBldr.withUser("su")
         .withPassword("pass").connect();
          Statement statement = connection.createStatement()) {
-      assertQuery(
-          statement,
-          "SELECT type, database, user_name, address, netmask, auth_method" +
-              " FROM pg_hba_file_rules ORDER BY line_number",
-          new Row("host", Arrays.asList("all"), Arrays.asList("all"), "all", null, "md5"));
+      assertQuery(statement,
+          "SELECT type, database, user_name, address, netmask, auth_method"
+              + " FROM pg_hba_file_rules ORDER BY line_number",
+          new Row("host", Arrays.asList("all"), Arrays.asList("all"), "all", null, "md5"),
+          new Row("local", Arrays.asList("all"), Arrays.asList("yugabyte"), null, null, "trust"));
     }
   }
 
@@ -301,10 +310,14 @@ public class TestPgConfiguration extends BasePgSQLTest {
       );
 
       // Root setting value was set properly, but was overridden by JDBC client.
+      // With YSQL Connection Manager, certain SET statements are executed before the transaction
+      // begins. This causes changing the "source" value of the TimeZone session parameter
+      // in pg_settings.
+
       assertQuery(
           statement,
           "SELECT source, boot_val FROM pg_settings WHERE name='TimeZone'",
-          new Row("client", "GMT")
+          new Row(isTestRunningWithConnectionManager() ? "session":"client", "GMT")
       );
     }
   }
@@ -342,6 +355,44 @@ public class TestPgConfiguration extends BasePgSQLTest {
       assertQuery(statement, "SHOW max_connections", new Row("64"));
     }
   }
+
+  @Test
+  public void testAdjustedMaxConnectionsByRoles() throws Exception {
+    final int max_con_nonsuperuser = CLUSTER_DEFAULT_MAX_CON -
+        CLUSTER_DEFAULT_SUPERUSER_RES_CON -
+        CLUSTER_DEFAULT_MAX_WAL_SENDERS;
+    final String test_user = "test_user";
+
+    int tserver = spawnTServer();
+
+    try (Connection connection =
+           getConnectionBuilder().withTServer(tserver).withUser(DEFAULT_PG_USER).connect();
+         Statement statement = connection.createStatement()) {
+
+      // Verify the current user is yugabyte (superuser)
+      assertQuery(statement, "SELECT user", new Row(DEFAULT_PG_USER));
+      assertQuery(statement, "SELECT usesuper FROM pg_user WHERE usename = CURRENT_USER;",
+        new Row(true));
+
+      assertQuery(
+          statement, "SHOW max_connections", new Row(String.valueOf(CLUSTER_DEFAULT_MAX_CON)));
+
+      // Switch to non-superuser
+      statement.execute("CREATE USER " + test_user);
+      statement.execute("SET ROLE " + test_user);
+      assertQuery(statement, "SELECT user", new Row(test_user));
+      assertQuery(statement, "SELECT usesuper FROM pg_user WHERE usename = CURRENT_USER;",
+        new Row(false));
+
+      assertQuery(statement, "SHOW max_connections", new Row(String.valueOf(max_con_nonsuperuser)));
+      assertQuery(
+          statement,
+          "SELECT setting FROM pg_settings WHERE name = 'max_connections'",
+          new Row(String.valueOf(max_con_nonsuperuser))
+      );
+    }
+  }
+
 
   @Test
   public void testDefaultTransactionIsolationFlag() throws Exception {
@@ -494,7 +545,19 @@ public class TestPgConfiguration extends BasePgSQLTest {
     }
   }
 
-  private int spawnTServer() throws Exception {
+  @Test
+  public void testShowAll() throws Exception {
+    int tserver = spawnTServer();
+
+    try (Connection connection = getConnectionBuilder().withTServer(tserver).connect();
+         Statement statement = connection.createStatement()) {
+      ResultSet rs = statement.executeQuery("SHOW ALL;");
+      List<Row> rows = getRowList(rs);
+      assertGreaterThan(rows.size(), 0);
+    }
+  }
+
+  protected int spawnTServer() throws Exception {
     return spawnTServerWithFlags(Collections.emptyMap());
   }
 }

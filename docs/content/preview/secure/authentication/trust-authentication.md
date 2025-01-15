@@ -3,14 +3,12 @@ title: Trust authentication
 headerTitle: Trust authentication
 linkTitle: Trust authentication
 description: Allow clients to connect using a database user name.
-image: /images/section_icons/secure/authentication.png
 menu:
   preview:
     identifier: trust-authentication
     parent: authentication
     weight: 734
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 <ul class="nav nav-tabs-alt nav-tabs-yb">

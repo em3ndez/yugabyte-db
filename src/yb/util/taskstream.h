@@ -11,8 +11,7 @@
 // under the License.
 //
 
-#ifndef YB_UTIL_TASKSTREAM_H
-#define YB_UTIL_TASKSTREAM_H
+#pragma once
 
 #include <atomic>
 #include <chrono>
@@ -20,17 +19,16 @@
 #include <memory>
 #include <vector>
 
-#include <gflags/gflags.h>
-
-#include "yb/util/status_fwd.h"
 #include "yb/util/blocking_queue.h"
+#include "yb/util/callsite_profiling.h"
+#include "yb/util/flags.h"
 #include "yb/util/status_format.h"
+#include "yb/util/status_fwd.h"
 #include "yb/util/thread.h"
 #include "yb/util/threadpool.h"
 
 using namespace std::chrono_literals;
 
-using std::vector;
 
 namespace yb {
 class ThreadPool;
@@ -58,12 +56,12 @@ class TaskStream {
                       const MonoDelta& queue_max_wait);
   ~TaskStream();
 
-  CHECKED_STATUS Start();
+  Status Start();
   void Stop();
 
-  CHECKED_STATUS Submit(T* item);
+  Status Submit(T* item);
 
-  CHECKED_STATUS TEST_SubmitFunc(const std::function<void()>& func);
+  Status TEST_SubmitFunc(const std::function<void()>& func);
 
   std::string GetRunThreadStack() {
     auto result = ThreadStack(run_tid_);
@@ -219,7 +217,7 @@ void TaskStream<T>::Run() {
     }
     if (stop_requested_.load(std::memory_order_acquire)) {
       VLOG(1) << "TaskStream task's Run() function is returning because stop is requested.";
-      stop_cond_.notify_all();
+      YB_PROFILE(stop_cond_.notify_all());
       return;
     }
     VLOG(1) << "Returning from TaskStream task after inactivity:" << this;
@@ -233,5 +231,3 @@ void TaskStream<T>::ProcessItem(T* item) {
 }
 
 }  // namespace yb
-
-#endif  // YB_UTIL_TASKSTREAM_H

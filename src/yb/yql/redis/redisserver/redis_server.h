@@ -11,8 +11,7 @@
 // under the License.
 //
 
-#ifndef YB_YQL_REDIS_REDISSERVER_REDIS_SERVER_H_
-#define YB_YQL_REDIS_REDISSERVER_REDIS_SERVER_H_
+#pragma once
 
 #include <string>
 
@@ -32,7 +31,7 @@ class RedisServer : public server::RpcAndWebServerBase {
 
   explicit RedisServer(const RedisServerOptions& opts, tserver::TabletServerIf* tserver);
 
-  CHECKED_STATUS Start();
+  Status Start();
 
   using server::RpcAndWebServerBase::Shutdown;
 
@@ -51,4 +50,3 @@ class RedisServer : public server::RpcAndWebServerBase {
 
 }  // namespace redisserver
 }  // namespace yb
-#endif  // YB_YQL_REDIS_REDISSERVER_REDIS_SERVER_H_

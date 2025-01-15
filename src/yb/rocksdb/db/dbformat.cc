@@ -86,40 +86,25 @@ std::string InternalKey::DebugString(const std::string& rep, bool hex) {
   return result;
 }
 
-yb::Result<FileBoundaryValues<InternalKey>> MakeFileBoundaryValues(
-    BoundaryValuesExtractor* extractor,
-    const Slice& key,
-    const Slice& value) {
-  ParsedInternalKey parsed = { Slice(), 0, kTypeDeletion };
-  ParseInternalKey(key, &parsed);
-
-  FileBoundaryValues<InternalKey> result;
-  result.key = InternalKey::DecodeFrom(key);
-  result.seqno = parsed.sequence;
-
-  if (extractor) {
-    auto status = extractor->Extract(parsed.user_key, value, &result.user_values);
-    if (!status.ok()) {
-      return status;
-    }
-  }
-  return result;
-}
-
 const char* InternalKeyComparator::Name() const {
   return name_.c_str();
 }
 
-int InternalKeyComparator::Compare(const Slice& akey, const Slice& bkey) const {
+int InternalKeyComparator::Compare(Slice akey, Slice bkey) const {
   // Order by:
   //    increasing user key (according to user-supplied comparator)
   //    decreasing sequence number
   //    decreasing type (though sequence# should be enough to disambiguate)
-  int r = user_comparator_->Compare(ExtractUserKey(akey), ExtractUserKey(bkey));
+  DCHECK_GE(akey.size(), kLastInternalComponentSize);
+  auto user_key_end_a = akey.end() - kLastInternalComponentSize;
+  DCHECK_GE(bkey.size(), kLastInternalComponentSize);
+  auto user_key_end_b = bkey.end() - kLastInternalComponentSize;
+  int r = user_comparator_->Compare(
+      Slice(akey.data(), user_key_end_a), Slice(bkey.data(), user_key_end_b));
   PERF_COUNTER_ADD(user_key_comparison_count, 1);
   if (r == 0) {
-    const uint64_t anum = DecodeFixed64(akey.end() - 8);
-    const uint64_t bnum = DecodeFixed64(bkey.end() - 8);
+    const uint64_t anum = DecodeFixed64(user_key_end_a);
+    const uint64_t bnum = DecodeFixed64(user_key_end_b);
     if (anum > bnum) {
       r = -1;
     } else if (anum < bnum) {

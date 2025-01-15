@@ -12,20 +12,23 @@ package com.yugabyte.yw.common.alerts;
 
 import static com.yugabyte.yw.common.metrics.MetricService.buildMetricTemplate;
 
-import akka.actor.ActorSystem;
 import com.google.common.annotations.VisibleForTesting;
+import com.yugabyte.operator.OperatorConfig;
+import com.yugabyte.yw.common.PlatformScheduler;
 import com.yugabyte.yw.common.SwamperHelper;
 import com.yugabyte.yw.common.config.RuntimeConfigFactory;
 import com.yugabyte.yw.common.metrics.MetricService;
 import com.yugabyte.yw.metrics.MetricQueryHelper;
 import com.yugabyte.yw.models.AlertConfiguration;
 import com.yugabyte.yw.models.AlertDefinition;
+import com.yugabyte.yw.models.AlertTemplateSettings;
 import com.yugabyte.yw.models.MaintenanceWindow;
 import com.yugabyte.yw.models.MaintenanceWindow.State;
 import com.yugabyte.yw.models.filters.AlertConfigurationFilter;
 import com.yugabyte.yw.models.filters.AlertDefinitionFilter;
 import com.yugabyte.yw.models.filters.MaintenanceWindowFilter;
 import com.yugabyte.yw.models.helpers.PlatformMetrics;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
@@ -34,14 +37,11 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
 import javax.inject.Inject;
 import javax.inject.Singleton;
 import lombok.extern.slf4j.Slf4j;
-import scala.concurrent.ExecutionContext;
-import scala.concurrent.duration.Duration;
 
 @Singleton
 @Slf4j
@@ -52,19 +52,19 @@ public class AlertConfigurationWriter {
   @VisibleForTesting
   static final String CONFIG_SYNC_INTERVAL_PARAM = "yb.alert.config_sync_interval_sec";
 
-  private final AtomicBoolean running = new AtomicBoolean(false);
   private final AtomicBoolean requiresReload = new AtomicBoolean(true);
+
   private final AtomicBoolean requiresRecordingRulesWrite = new AtomicBoolean(true);
 
-  private final ActorSystem actorSystem;
-
-  private final ExecutionContext executionContext;
+  private final PlatformScheduler platformScheduler;
 
   private final MetricService metricService;
 
   private final AlertDefinitionService alertDefinitionService;
 
   private final AlertConfigurationService alertConfigurationService;
+
+  private final AlertTemplateSettingsService alertTemplateSettingsService;
 
   private final SwamperHelper swamperHelper;
 
@@ -76,20 +76,20 @@ public class AlertConfigurationWriter {
 
   @Inject
   public AlertConfigurationWriter(
-      ExecutionContext executionContext,
-      ActorSystem actorSystem,
+      PlatformScheduler platformScheduler,
       MetricService metricService,
       AlertDefinitionService alertDefinitionService,
       AlertConfigurationService alertConfigurationService,
+      AlertTemplateSettingsService alertTemplateSettingsService,
       SwamperHelper swamperHelper,
       MetricQueryHelper metricQueryHelper,
       RuntimeConfigFactory configFactory,
       MaintenanceService maintenanceService) {
-    this.actorSystem = actorSystem;
-    this.executionContext = executionContext;
+    this.platformScheduler = platformScheduler;
     this.metricService = metricService;
     this.alertDefinitionService = alertDefinitionService;
     this.alertConfigurationService = alertConfigurationService;
+    this.alertTemplateSettingsService = alertTemplateSettingsService;
     this.swamperHelper = swamperHelper;
     this.metricQueryHelper = metricQueryHelper;
     this.configFactory = configFactory;
@@ -97,6 +97,13 @@ public class AlertConfigurationWriter {
   }
 
   public void start() {
+    boolean COMMUNITY_OP_ENABLED = OperatorConfig.getOssMode();
+
+    if (COMMUNITY_OP_ENABLED) {
+      log.debug("Skipping metrics as community edition is enabled");
+      return;
+    }
+
     int configSyncPeriodSec = configFactory.globalRuntimeConf().getInt(CONFIG_SYNC_INTERVAL_PARAM);
     if (configSyncPeriodSec < MIN_CONFIG_SYNC_INTERVAL_SEC) {
       log.warn(
@@ -106,17 +113,11 @@ public class AlertConfigurationWriter {
           MIN_CONFIG_SYNC_INTERVAL_SEC);
       configSyncPeriodSec = MIN_CONFIG_SYNC_INTERVAL_SEC;
     }
-    this.actorSystem
-        .scheduler()
-        .schedule(
-            Duration.Zero(),
-            Duration.create(configSyncPeriodSec, TimeUnit.SECONDS),
-            this::process,
-            this.executionContext);
-  }
-
-  public void scheduleDefinitionSync(UUID definitionUuid) {
-    this.actorSystem.dispatcher().execute(() -> syncDefinition(definitionUuid));
+    platformScheduler.schedule(
+        getClass().getSimpleName(),
+        Duration.ZERO,
+        Duration.ofSeconds(configSyncPeriodSec),
+        this::process);
   }
 
   private SyncResult syncDefinition(UUID definitionUuid) {
@@ -132,13 +133,21 @@ public class AlertConfigurationWriter {
           || !configuration.isActive()) {
         swamperHelper.removeAlertDefinition(definitionUuid);
         requiresReload.set(true);
+        if (definition != null) {
+          // Don't want to retry inactive definitions.
+          definition.setConfigWritten(true);
+          alertDefinitionService.save(definition);
+        }
         return SyncResult.REMOVED;
       }
       if (definition.isConfigWritten()) {
         log.info("Alert definition {} has config in sync", definitionUuid);
         return SyncResult.IN_SYNC;
       }
-      swamperHelper.writeAlertDefinition(configuration, definition);
+      AlertTemplateSettings templateSettings =
+          alertTemplateSettingsService.get(
+              configuration.getCustomerUUID(), configuration.getTemplate().name());
+      swamperHelper.writeAlertDefinition(configuration, definition, templateSettings);
       definition.setConfigWritten(true);
       alertDefinitionService.save(definition);
       requiresReload.set(true);
@@ -151,17 +160,9 @@ public class AlertConfigurationWriter {
 
   @VisibleForTesting
   void process() {
-    if (!running.compareAndSet(false, true)) {
-      log.info("Previous run of alert configuration writer is still underway");
-      return;
-    }
-    try {
-      applyMaintenanceWindows();
-      writeRecordingRules();
-      syncDefinitions();
-    } finally {
-      running.set(false);
-    }
+    applyMaintenanceWindows();
+    writeRecordingRules();
+    syncDefinitions();
   }
 
   private void applyMaintenanceWindows() {
@@ -174,17 +175,13 @@ public class AlertConfigurationWriter {
       Map<UUID, Set<UUID>> maintenanceWindowToAlertConfigs = new HashMap<>();
       for (MaintenanceWindow window : activeWindows) {
         AlertConfigurationFilter alertConfigurationFilter =
-            window
-                .getAlertConfigurationFilter()
-                .toFilter()
-                .toBuilder()
+            window.getAlertConfigurationFilter().toFilter().toBuilder()
                 .customerUuid(window.getCustomerUUID())
                 .build();
         List<AlertConfiguration> configurations =
             alertConfigurationService.list(alertConfigurationFilter);
         List<AlertConfiguration> toSave =
-            configurations
-                .stream()
+            configurations.stream()
                 .filter(
                     configuration ->
                         !configuration.getMaintenanceWindowUuidsSet().contains(window.getUuid())
@@ -192,7 +189,7 @@ public class AlertConfigurationWriter {
                 .map(configuration -> configuration.addMaintenanceWindowUuid(window.getUuid()))
                 .collect(Collectors.toList());
 
-        alertConfigurationService.save(toSave);
+        alertConfigurationService.save(window.getCustomerUUID(), toSave);
         maintenanceWindowToAlertConfigs.put(
             window.getUuid(),
             configurations.stream().map(AlertConfiguration::getUuid).collect(Collectors.toSet()));
@@ -227,7 +224,9 @@ public class AlertConfigurationWriter {
               toUnsuspend.add(configuration);
             }
           });
-      alertConfigurationService.save(toUnsuspend);
+      toUnsuspend.stream()
+          .collect(Collectors.groupingBy(AlertConfiguration::getCustomerUUID))
+          .forEach(alertConfigurationService::save);
 
       metricService.setOkStatusMetric(
           buildMetricTemplate(PlatformMetrics.ALERT_MAINTENANCE_WINDOW_PROCESSOR_STATUS));
@@ -264,8 +263,7 @@ public class AlertConfigurationWriter {
           new HashSet<>(alertDefinitionService.listIds(AlertDefinitionFilter.builder().build()));
 
       results.addAll(
-          configUuids
-              .stream()
+          configUuids.stream()
               .filter(uuid -> !definitionUuids.contains(uuid))
               .map(this::syncDefinition)
               .collect(Collectors.toList()));

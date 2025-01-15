@@ -1,19 +1,19 @@
 // Copyright (c) YugaByte, Inc.
-
-import React, { Component } from 'react';
-import { YBModal } from '../../common/forms/fields';
-import PropTypes from 'prop-types';
+import { Component } from 'react';
 import { browserHistory } from 'react-router';
+import { toast } from 'react-toastify';
+import PropTypes from 'prop-types';
+import { YBModal } from '../../common/forms/fields';
 import { NodeAction } from '../../universes';
+import { createErrorMessage } from '../../../utils/ObjectUtils';
 
 const nodeActionExpectedResult = {
   START: 'Live',
   STOP: 'Stopped',
-  REMOVE: 'Unreachable',
+  REMOVE: 'Removed',
   RELEASE: 'Unreachable',
   DELETE: 'Unreachable'
 };
-
 export default class NodeActionModal extends Component {
   static propTypes = {
     nodeInfo: PropTypes.object.isRequired,
@@ -21,20 +21,17 @@ export default class NodeActionModal extends Component {
   };
 
   pollNodeStatusUpdate = (universeUUID, actionType, nodeName, payload) => {
-    const { preformGetUniversePerNodeStatus, preformGetUniversePerNodeStatusResponse } = this.props;
+    const { getNodeDetails, getNodeDetailsResponse } = this.props;
     this.interval = setTimeout(() => {
-      preformGetUniversePerNodeStatus(universeUUID).then((response) => {
-        if (response.payload && response.payload.data) {
-          const node = response.payload.data[nodeName];
-          if (
-            actionType === 'DELETE' ||
-            node.node_status === nodeActionExpectedResult[actionType]
-          ) {
+      getNodeDetails(universeUUID, nodeName).then((response) => {
+        if (response.payload?.data) {
+          const node = response.payload.data;
+          if (actionType === 'DELETE' || node.state === nodeActionExpectedResult[actionType]) {
             clearInterval(this.interval);
-            preformGetUniversePerNodeStatusResponse(response.payload);
+            getNodeDetailsResponse(response.payload);
             return;
           }
-          preformGetUniversePerNodeStatusResponse(response.payload);
+          getNodeDetailsResponse(response.payload);
           this.pollNodeStatusUpdate(universeUUID, actionType, nodeName, payload);
         }
       });
@@ -58,12 +55,9 @@ export default class NodeActionModal extends Component {
     const universeUUID = currentUniverse.data.universeUUID;
     performUniverseNodeAction(universeUUID, nodeInfo.name, actionType).then((response) => {
       if (response.error !== true) {
-        this.pollNodeStatusUpdate(
-          universeUUID,
-          actionType,
-          nodeInfo.name,
-          response.payload
-        );
+        this.pollNodeStatusUpdate(universeUUID, actionType, nodeInfo.name, response.payload);
+      } else if (response.error && response.payload.status !== 200) {
+        toast.error(createErrorMessage(response.payload));
       }
     });
     onHide();

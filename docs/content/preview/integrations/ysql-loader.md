@@ -2,13 +2,12 @@
 title: YSQL Loader
 linkTitle: YSQL Loader
 description: YSQL Loader
-section: INTEGRATIONS
 menu:
-  preview:
+  preview_integrations:
     identifier: ysql-loader
+    parent: data-migration
     weight: 571
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 YSQL Loader is a data migration tool based on [pgloader](https://pgloader.readthedocs.io/en/latest/intro.html). You can use YSQL Loader to load data from different sources into YugabyteDB. In addition to the functionality provided by pgloader, YSQL Loader supports dumping DDLs and reading modified DDLs which enables you to use YugabyteDB-specific constructs such as tablets, for example.
@@ -21,7 +20,7 @@ Before starting the migration, ensure that you have the following:
 
 - Access to the MySQL database that is a subject of migration.
 
-- [ysqlsh](/preview/admin/ysqlsh/) command-line connectivity to a running YugabyteDB cluster that is a target of migration.
+- [ysqlsh](/preview/api/ysqlsh/) command-line connectivity to a running YugabyteDB cluster that is a target of migration.
 
 - A target database on the YugabyteDB cluster, with the database name matching the name of the MySQL database. You can create the YugabyteDB database as follows:
 
@@ -76,7 +75,7 @@ Before starting the migration, ensure that you have the following:
 
     If, after completing the preceding steps, you encounter "Failed to connect" error message, check the access permissions with your MySQL DBA:
 
-  - Verify that YSQL Loader instance can reach the target YugabyeDB cluster and communicate with one of the YugabyteDB nodes across port 5433, as follows:
+  - Verify that YSQL Loader instance can reach the target YugabyteDB cluster and communicate with one of the YugabyteDB nodes across port 5433, as follows:
 
     ```sh
     telnet <YugabyteDB_node_ip> 5433
@@ -86,7 +85,7 @@ Before starting the migration, ensure that you have the following:
 
   ```sh
   docker pull yugabytedb/pgloader:v1.1
-  docker run --rm --name pgloader yugabytedb/pgloader:v1.0 pgloader --version
+  docker run --rm --name pgloader yugabytedb/pgloader:v1.1 pgloader --version
   ```
 
   Expect output similar to the following:
@@ -104,7 +103,7 @@ Before starting the migration, ensure that you have the following:
   docker run --rm --name pgloader yugabytedb/pgloader:v1.1 pgloader --help
   ```
 
-## Using YSQL Loader
+## Use YSQL Loader
 
 You can use YSQL Loader to migrate both schema and data from MySQL, or to migrate only schema.
 
@@ -142,7 +141,7 @@ pgsql://yugabyte@172.161.20.43:5433/testdb #x302001D3B3AD>
 
 You can also verify that YSQL Loader is running by executing `docker ps`:
 
-![Migrating MySQL Blog Image 7](/images/ee/migrating-mysql-1.png)
+![Migrating MySQL Blog Image 1](/images/ee/migrating-mysql-1.png)
 
 You can tail the log file specified in the docker command, as follows:
 
@@ -156,7 +155,7 @@ If you have access to YugabyteDB Anywhere, you can check the status of YSQL Load
 
 In addition, you can check the live queries by navigating to the **Queries** section shown in the following illustration to see current queries and DDL changes made on the cluster in real time.
 
-![Migrating MySQL Blog Image 2](https://blog.yugabyte.com/wp-content/uploads/2021/06/Migrating-MySQL-Blog-Image-2.png)
+![Migrating MySQL Blog Image 3](/images/ee/migrating-mysql-6.png)
 
 ### Use a YSQL Loader command file
 
@@ -196,7 +195,7 @@ You can modify the DDL by performing the following steps:
      max parallel create index=1, dumpddl only;
    ```
 
-1. Modify the `ddl.sql` DDL file and run it using the [ysqlsh](/preview/admin/ysqlsh/) command-line tool.
+1. Modify the `ddl.sql` DDL file and run it using the [ysqlsh](/preview/api/ysqlsh/) command-line tool.
 
 1. Provide the DDL file using a command file similar to the following:
 
@@ -221,16 +220,16 @@ BEFORE LOAD EXECUTE
   '/Users/myname/quicklisp/local-projects/pgloader/ddl.sql';
 ```
 
-## Validating the migration
+## Validate the migration
 
 When YSQL Loader finishes the migration, you can see a summary of the migration steps, including the information on how long each step took and the number of rows inserted.
 
-![Migrating MySQL Blog Image 3](/images/ee/migrating-mysql-3.png)
+![Migrating MySQL Blog Image 4](/images/ee/migrating-mysql-3.png)
 
 Alternatively, if you have access to YugabyteDB Anywhere, you can check it to see if all tables are present. To do this, you open YugabyteDB Anywhere and navigate to its **Tables** section shown in the following illustration:
 
-![Migrating MySQL Blog Image 4](/images/ee/migrating-mysql-4.png)
+![Migrating MySQL Blog Image 5](/images/ee/migrating-mysql-4.png)
 
 To verify that there are no active migration queries against the cluster, navigate to the **Queries > Lie Queries** section shown in the following illustration:
 
-![Migrating MySQL Blog Image 5](/images/ee/migrating-mysql-5.png)
+![Migrating MySQL Blog Image 6](/images/ee/migrating-mysql-5.png)

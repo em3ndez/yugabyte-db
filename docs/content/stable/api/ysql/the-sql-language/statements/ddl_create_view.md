@@ -2,50 +2,25 @@
 title: CREATE VIEW statement [YSQL]
 headerTitle: CREATE VIEW
 linkTitle: CREATE VIEW
-description: Use the CREATE VIEW statement to create a view in a database. 
+description: Use the CREATE VIEW statement to create a view in a database.
 menu:
-  stable:
+  stable_api:
     identifier: ddl_create_view
     parent: statements
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 ## Synopsis
 
-Use the `CREATE VIEW` statement to create a view in a database. It defines the view name and the (select) statement defining it.  
+Use the `CREATE VIEW` statement to create a view in a database. It defines the view name and the (select) statement defining it.
 
 ## Syntax
 
-<ul class="nav nav-tabs nav-tabs-yb">
-  <li >
-    <a href="#grammar" class="nav-link active" id="grammar-tab" data-toggle="tab" role="tab" aria-controls="grammar" aria-selected="true">
-      <i class="fas fa-file-alt" aria-hidden="true"></i>
-      Grammar
-    </a>
-  </li>
-  <li>
-    <a href="#diagram" class="nav-link" id="diagram-tab" data-toggle="tab" role="tab" aria-controls="diagram" aria-selected="false">
-      <i class="fas fa-project-diagram" aria-hidden="true"></i>
-      Diagram
-    </a>
-  </li>
-</ul>
-
-<div class="tab-content">
-  <div id="grammar" class="tab-pane fade show active" role="tabpanel" aria-labelledby="grammar-tab">
-    {{% includeMarkdown "../../syntax_resources/the-sql-language/statements/create_view.grammar.md" /%}}
-  </div>
-  <div id="diagram" class="tab-pane fade" role="tabpanel" aria-labelledby="diagram-tab">
-    {{% includeMarkdown "../../syntax_resources/the-sql-language/statements/create_view.diagram.md" /%}}
-  </div>
-</div>
+{{%ebnf%}}
+  create_view
+{{%/ebnf%}}
 
 ## Semantics
-
-### *create_view*
-
-#### CREATE [ OR REPLACE ] VIEW *qualified_name* [ (*column_list* ) ] AS select
 
 Create a view.
 
@@ -60,6 +35,10 @@ Specify a comma-separated list of columns. If not specified, the column names ar
 ###### *select*
 
 Specify a `SELECT` or `VALUES` statement that will provide the columns and rows of the view.
+
+###### TEMPORARY or TEMP
+
+Using this qualifier will create a temporary view. Temporary views are visible only in the current client session in which they are created and are automatically dropped at the end of the session. See the section [Creating and using temporary schema-objects](../../creating-and-using-temporary-schema-objects/).
 
 ## Examples
 
@@ -97,4 +76,4 @@ yugabyte=# SELECT * FROM sample_view;
 
 ## See also
 
-- [`SELECT`](../dml_select)
+- [`SELECT`](../dml_select/)

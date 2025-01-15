@@ -4,12 +4,11 @@ linkTitle: Invocation syntax and semantics
 headerTitle: Window function invocation—SQL syntax and semantics
 description: This section specifies the syntax and semantics of the OVER clause and the WINDOW clause. You may also invoke aggregate functions t_is way.
 menu:
-  stable:
+  stable_api:
     identifier: window-functions-aggregate-functions-syntax-semantics
     parent: window-functions
     weight: 20
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 {{< note title="The rules described in this section also govern the invocation of aggregate functions." >}}
@@ -23,7 +22,7 @@ Notice these three different orthography styles:
 
 - `OVER` is a keyword that names a clause. You write such a keyword in a SQL statement.
 
-- [`window_definition`](../../../syntax_resources/grammar_diagrams/#window-definition) is the name of a rule within the overall SQL grammar. You never type such a name in a SQL statement. It is written in bold lower case with underscores, as appropriate, between the English words. Because such a rule is always shown as a link, you can jump directly to the rule in the [Grammar Diagrams](../../../syntax_resources/grammar_diagrams/#abort) page. This page shows every single one of the SQL rules. It so happens that the [`window_definition`](../../../syntax_resources/grammar_diagrams/#window-definition) rule starts with the keyword `WINDOW` and might therefore, according to the context of use, be referred to alternatively as the `WINDOW` clause. 
+- [`window_definition`](../../../syntax_resources/grammar_diagrams/#window-definition) is the name of a rule within the overall SQL grammar. You never type such a name in a SQL statement. It is written in bold lower case with underscores, as appropriate, between the English words. Because such a rule is always shown as a link, you can jump directly to the rule in the [Grammar Diagrams](../../../syntax_resources/grammar_diagrams/#abort) page. This page shows every single one of the SQL rules. It so happens that the [`window_definition`](../../../syntax_resources/grammar_diagrams/#window-definition) rule starts with the keyword `WINDOW` and might therefore, according to the context of use, be referred to alternatively as the `WINDOW` clause.
 
 - [_window frame_](./#frame-clause-semantics-for-window-functions) is a pure term of art. It is written in italic lower case with spaces, as appropriate, between the English words. You neither write it in a SQL statement nor use it to look up anything in the [Grammar Diagrams](../../../syntax_resources/grammar_diagrams/#abort) page. Because such a term of art is always shown as a link, you can jump directly to its definition within this _"Window function invocation—SQL syntax and semantics"_ page.
 
@@ -35,29 +34,11 @@ Notice these three different orthography styles:
 
 The following three diagrams, [`select_start`](../../../syntax_resources/grammar_diagrams/#select-start), [`WINDOW` clause](../../../syntax_resources/grammar_diagrams/#window-clause), and [`fn_over_window`](../../../syntax_resources/grammar_diagrams/#fn-over-window) rule, are reproduced from the section that describes the [`SELECT` statement](../../../the-sql-language/statements/dml_select/).
 
-<ul class="nav nav-tabs nav-tabs-yb">
-  <li >
-    <a href="#grammar" class="nav-link active" id="grammar-tab" data-toggle="tab" role="tab" aria-controls="grammar" aria-selected="true">
-      <i class="fas fa-file-alt" aria-hidden="true"></i>
-      Grammar
-    </a>
-  </li>
-  <li>
-    <a href="#diagram" class="nav-link" id="diagram-tab" data-toggle="tab" role="tab" aria-controls="diagram" aria-selected="false">
-      <i class="fas fa-project-diagram" aria-hidden="true"></i>
-      Diagram
-    </a>
-  </li>
-</ul>
-
-<div class="tab-content">
-  <div id="grammar" class="tab-pane fade show active" role="tabpanel" aria-labelledby="grammar-tab">
-    {{% includeMarkdown "../../syntax_resources/exprs/window_functions/select_start,window_clause,fn_over_window.grammar.md" /%}}
-  </div>
-  <div id="diagram" class="tab-pane fade" role="tabpanel" aria-labelledby="diagram-tab">
-    {{% includeMarkdown "../../syntax_resources/exprs/window_functions/select_start,window_clause,fn_over_window.diagram.md" /%}}
-  </div>
-</div>
+{{%ebnf localrefs="window_definition"%}}
+select_start,
+window_clause,
+fn_over_window
+{{%/ebnf%}}
 
 ### Definition of the window_definition rule
 
@@ -65,55 +46,20 @@ As promised in the `SELECT` statement section, this section explains the [`windo
 
 A [`window_definition`](../../../syntax_resources/grammar_diagrams/#window-definition) can be used only at these two syntax spots, within the enclosing syntax of a subquery.
 
-<ul class="nav nav-tabs nav-tabs-yb">
-  <li >
-    <a href="#grammar" class="nav-link active" id="grammar-tab" data-toggle="tab" role="tab" aria-controls="grammar" aria-selected="true">
-      <i class="fas fa-file-alt" aria-hidden="true"></i>
-      Grammar
-    </a>
-  </li>
-  <li>
-    <a href="#diagram" class="nav-link" id="diagram-tab" data-toggle="tab" role="tab" aria-controls="diagram" aria-selected="false">
-      <i class="fas fa-project-diagram" aria-hidden="true"></i>
-      Diagram
-    </a>
-  </li>
-</ul>
-
-<div class="tab-content">
-  <div id="grammar" class="tab-pane fade show active" role="tabpanel" aria-labelledby="grammar-tab">
-    {{% includeMarkdown "../../syntax_resources/exprs/window_functions/window_definition.grammar.md" /%}}
-  </div>
-  <div id="diagram" class="tab-pane fade" role="tabpanel" aria-labelledby="diagram-tab">
-    {{% includeMarkdown "../../syntax_resources/exprs/window_functions/window_definition.diagram.md" /%}}
-  </div>
-</div>
+{{%ebnf localrefs="frame_clause" %}}
+window_definition
+{{%/ ebnf %}}
 
 ### The frame_clause
 
-<ul class="nav nav-tabs nav-tabs-yb">
-  <li >
-    <a href="#grammar" class="nav-link active" id="grammar-tab" data-toggle="tab" role="tab" aria-controls="grammar" aria-selected="true">
-      <i class="fas fa-file-alt" aria-hidden="true"></i>
-      Grammar
-    </a>
-  </li>
-  <li>
-    <a href="#diagram" class="nav-link" id="diagram-tab" data-toggle="tab" role="tab" aria-controls="diagram" aria-selected="false">
-      <i class="fas fa-project-diagram" aria-hidden="true"></i>
-      Diagram
-    </a>
-  </li>
-</ul>
-
-<div class="tab-content">
-  <div id="grammar" class="tab-pane fade show active" role="tabpanel" aria-labelledby="grammar-tab">
-    {{% includeMarkdown "../../syntax_resources/exprs/window_functions/frame_clause,frame_bounds,frame_start,frame_end,frame_bound,frame_exclusion.grammar.md" /%}}
-  </div>
-  <div id="diagram" class="tab-pane fade" role="tabpanel" aria-labelledby="diagram-tab">
-    {{% includeMarkdown "../../syntax_resources/exprs/window_functions/frame_clause,frame_bounds,frame_start,frame_end,frame_bound,frame_exclusion.diagram.md" /%}}
-  </div>
-</div>
+{{% ebnf %}}
+frame_clause,
+frame_bounds,
+frame_start,
+frame_end,
+frame_bound,
+frame_exclusion
+{{%/ ebnf %}}
 
 ## Semantics
 
@@ -123,7 +69,7 @@ A window function can be invoked only at the syntax spot in a subquery that the 
 
 The number, data types, and meanings of a window function's formal parameters are function-specific. The eleven window functions are classified into functional groups, and summarized, in the two tables at the end of the section [Signature and purpose of each window function](../function-syntax-semantics/). Each entry links to the formal account of the function which also provides runnable code examples.
 
-Notice that, among the dedicated window functions (as opposed to aggreagte functions that may be invoked as window functions), only [`ntile()`](../function-syntax-semantics/percent-rank-cume-dist-ntile/#ntile) takes an argument. Every other dedicated window function is invoked with an empty parentheses pair. Some aggregate functions (like, for example, [`jsonb_object_agg()`](../../aggregate_functions/function-syntax-semantics/array-string-jsonb-jsonb-object-agg/#jsonb-object-agg)) take more than one argument. When an aggregate function is invoke as a window function, the keyword `DISTINCT` is not allowed within the parenthesized list of arguments. The attempt causes this error:
+Notice that, among the dedicated window functions (as opposed to aggregate functions that may be invoked as window functions), only [`ntile()`](../function-syntax-semantics/percent-rank-cume-dist-ntile/#ntile) takes an argument. Every other dedicated window function is invoked with an empty parentheses pair. Some aggregate functions (like, for example, [`jsonb_object_agg()`](../../aggregate_functions/function-syntax-semantics/array-string-jsonb-jsonb-object-agg/#jsonb-object-agg)) take more than one argument. When an aggregate function is invoke as a window function, the keyword `DISTINCT` is not allowed within the parenthesized list of arguments. The attempt causes this error:
 
 ```
 0A000: DISTINCT is not implemented for window functions
@@ -182,12 +128,12 @@ The [`frame_clause`](../../../syntax_resources/grammar_diagrams/#frame-clause) s
 - The functions in the first group, [Window functions that return an "int" or "double precision" value as a "classifier" of the rank of the row within its window](../function-syntax-semantics/#window-functions-that-return-an-int-or-double-precision-value-as-a-classifier-of-the-rank-of-the-row-within-its-window), are not sensitive to what the [`frame_clause`](../../../syntax_resources/grammar_diagrams/#frame-clause) specifies and always use all of the rows in the current [_window_](./#the-window-definition-rule). Yugabyte recommends that you therefore omit the [`frame_clause`](../../../syntax_resources/grammar_diagrams/#frame-clause) in the `OVER` clause that you use to invoke these functions.
 
 - The functions in the second group, [Window functions that return columns of another row within the window](../function-syntax-semantics/#window-functions-that-return-column-s-of-another-row-within-the-window), make obvious sense when the scope within which the specified row is found is the entire [_window_](./#the-window-definition-rule). If you have one of the very rare use cases where the output that you want is produced by a different [`frame_clause`](../../../syntax_resources/grammar_diagrams/#frame-clause), then specify what you want explicitly. Otherwise, because it isn't the default, you must specify that the [_window frame_](./#frame-clause-semantics-for-window-functions) includes the entire current [_window_](./#the-window-definition-rule) like this:
-  
+
   ```
   range between unbounded preceding and unbounded following
   ```
 
-Use cases where the [`frame_clause`](../../../syntax_resources/grammar_diagrams/#frame-clause)'s many other variants are useful arise when an aggregate function is invoked using the `OVER` clause. One example is given in the section [Using the aggregate function `avg()` to compute a moving average](../#using-the-aggregate-function-avg-to-compute-a-moving-average). Another example, that uses `count(*)`, is given in the code that explains the meaning of the [`percent_rank()`](../function-syntax-semantics/percent-rank-cume-dist-ntile/#percent-rank) function. Otherwise, see the main [Aggregate functions](../../aggregate_functions) section.
+Use cases where the [`frame_clause`](../../../syntax_resources/grammar_diagrams/#frame-clause)'s many other variants are useful arise when an aggregate function is invoked using the `OVER` clause. One example is given in the section [Using the aggregate function `avg()` to compute a moving average](../#using-the-aggregate-function-avg-to-compute-a-moving-average). Another example, that uses `count(*)`, is given in the code that explains the meaning of the [`percent_rank()`](../function-syntax-semantics/percent-rank-cume-dist-ntile/#percent-rank) function. Otherwise, see the main [Aggregate functions](../../aggregate_functions/) section.
 
 #### frame_clause semantics for aggregate functions
 

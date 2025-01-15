@@ -4,11 +4,10 @@ headerTitle: REVOKE PERMISSION
 linkTitle: REVOKE PERMISSION
 description: Use the REVOKE PERMISSION statement to revoke a permission (or all the granted permissions) from a role.
 menu:
-  stable:
+  stable_api:
     parent: api-cassandra
     weight: 1283
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 ## Synopsis
@@ -41,7 +40,7 @@ This statement is enabled by setting the YB-TServer flag [`--use_cassandra_authe
 
 ### Grammar
 
-```
+```ebnf
 revoke_permission := REVOKE all_permission | permission ON resource FROM role_name;
 all_permissions := ALL [ PERMISSIONS ]
 permission :=  ( CREATE | ALTER | DROP | SELECT | MODIFY | AUTHORIZE | DESCRIBE | EXECUTE ) [ PERMISSION ]

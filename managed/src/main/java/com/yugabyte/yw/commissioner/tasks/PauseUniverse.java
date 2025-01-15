@@ -10,18 +10,11 @@
 
 package com.yugabyte.yw.commissioner.tasks;
 
-import com.google.common.collect.Sets;
 import com.yugabyte.yw.commissioner.BaseTaskDependencies;
 import com.yugabyte.yw.commissioner.UserTaskDetails.SubTaskGroupType;
-import com.yugabyte.yw.forms.UniverseDefinitionTaskParams;
 import com.yugabyte.yw.forms.UniverseTaskParams;
 import com.yugabyte.yw.models.Universe;
-import com.yugabyte.yw.models.helpers.NodeDetails;
-import java.util.HashSet;
-import java.util.Map;
-import java.util.Set;
 import java.util.UUID;
-import java.util.stream.Collectors;
 import javax.inject.Inject;
 import lombok.extern.slf4j.Slf4j;
 
@@ -46,68 +39,21 @@ public class PauseUniverse extends UniverseTaskBase {
     try {
       // Update the universe DB with the update to be performed and set the
       // 'updateInProgress' flag to prevent other updates from happening.
-      Universe universe = lockUniverseForUpdate(-1 /* expectedUniverseVersion */);
+      Universe universe = lockAndFreezeUniverseForUpdate(-1, null /* Txn callback */);
       if (universe.getUniverseDetails().universePaused) {
-        String msg = "Unable to pause universe \"" + universe.name + "\" as it is already paused.";
+        String msg =
+            "Unable to pause universe \"" + universe.getName() + "\" as it is already paused.";
         log.error(msg);
         throw new RuntimeException(msg);
       }
 
-      preTaskActions();
+      createPauseUniverseTasks(universe, params().customerUUID);
 
-      Map<UUID, UniverseDefinitionTaskParams.Cluster> clusterMap =
-          universe
-              .getUniverseDetails()
-              .clusters
-              .stream()
-              .collect(Collectors.toMap(c -> c.uuid, c -> c));
-
-      Set<NodeDetails> tserverNodes = new HashSet<>(universe.getTServers());
-      Set<NodeDetails> masterNodes = new HashSet<>(universe.getMasters());
-
-      for (NodeDetails node : Sets.union(masterNodes, tserverNodes)) {
-        if (!node.disksAreMountedByUUID) {
-          UniverseDefinitionTaskParams.Cluster cluster = clusterMap.get(node.placementUuid);
-          createUpdateMountedDisksTask(
-              node, cluster.userIntent.instanceType, cluster.userIntent.deviceInfo);
-        }
-      }
-
-      for (NodeDetails node : tserverNodes) {
-        createTServerTaskForNode(node, "stop")
-            .setSubTaskGroupType(SubTaskGroupType.StoppingNodeProcesses);
-      }
-
-      createStopMasterTasks(masterNodes)
-          .setSubTaskGroupType(SubTaskGroupType.StoppingNodeProcesses);
-
-      if (!universe.getUniverseDetails().isImportedUniverse()) {
-        // Create tasks to pause the existing nodes.
-        createPauseServerTasks(universe.getNodes())
-            .setSubTaskGroupType(SubTaskGroupType.PauseUniverse);
-      }
-      createSwamperTargetUpdateTask(false);
-      // Remove alert definition files.
-      createUnivManageAlertDefinitionsTask(false)
-          .setSubTaskGroupType(SubTaskGroupType.PauseUniverse);
       // Mark universe task state to success.
       createMarkUniverseUpdateSuccessTasks().setSubTaskGroupType(SubTaskGroupType.PauseUniverse);
-      // Run all the tasks.
+
       getRunnableTask().runSubTasks();
 
-      saveUniverseDetails(
-          u -> {
-            UniverseDefinitionTaskParams universeDetails = u.getUniverseDetails();
-            universeDetails.universePaused = true;
-            for (NodeDetails node : universeDetails.nodeDetailsSet) {
-              if (node.isMaster || node.isTserver) {
-                node.disksAreMountedByUUID = true;
-              }
-            }
-            u.setUniverseDetails(universeDetails);
-          });
-
-      metricService.markSourceInactive(params().customerUUID, params().universeUUID);
     } catch (Throwable t) {
       log.error("Error executing task {} with error='{}'.", getName(), t.getMessage(), t);
       throw t;

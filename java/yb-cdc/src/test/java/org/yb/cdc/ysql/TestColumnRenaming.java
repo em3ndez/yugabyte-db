@@ -13,8 +13,9 @@
 
 package org.yb.cdc.ysql;
 
-import org.apache.log4j.Logger;
 import org.junit.runner.RunWith;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.yb.cdc.CdcService;
 import org.yb.cdc.common.CDCBaseClass;
 import org.yb.cdc.util.CDCSubscriber;
@@ -27,11 +28,11 @@ import org.junit.Before;
 import org.junit.Test;
 
 import org.yb.cdc.CdcService.RowMessage.Op;
-import org.yb.util.YBTestRunnerNonTsanOnly;
+import org.yb.YBTestRunner;
 
-@RunWith(value = YBTestRunnerNonTsanOnly.class)
+@RunWith(value = YBTestRunner.class)
 public class TestColumnRenaming extends CDCBaseClass {
-  private final static Logger LOG = Logger.getLogger(TestColumnRenaming.class);
+  private final static Logger LOG = LoggerFactory.getLogger(TestColumnRenaming.class);
 
   private static class ColumnName {
     public String col1;
@@ -111,14 +112,19 @@ public class TestColumnRenaming extends CDCBaseClass {
       };
 
 
+      int expectedRecordCount = 0;
       for (int i = 0; i < outputList.size(); ++i) {
         switch (outputList.get(i).getRowMessage().getOp()) {
           case DDL:
-            verifyColNameInDDLRecord(outputList.get(i), expectedRecords[i]);
+            verifyColNameInDDLRecord(outputList.get(i), expectedRecords[expectedRecordCount]);
+            expectedRecordCount++;
             break;
           case INSERT:
-            verifyColNameInInsertRecord(outputList.get(i), expectedRecords[i]);
+            verifyColNameInInsertRecord(outputList.get(i), expectedRecords[expectedRecordCount]);
+            expectedRecordCount++;
             break;
+          case BEGIN:
+          case COMMIT: break;
         }
       }
 

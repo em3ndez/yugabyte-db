@@ -4,12 +4,11 @@ headerTitle:  "|| (concatenation)"
 linkTitle: "|| (concatenation)"
 description: Concatenate two jsonb values using the JSON concatenation operator ("||").
 menu:
-  stable:
+  stable_api:
     identifier: concatenation-operator
     parent: json-functions-operators
     weight: 14
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 **Purpose:** Concatenate two `jsonb` values. The rule for deriving the output value depends upon the JSON data types of the operands.

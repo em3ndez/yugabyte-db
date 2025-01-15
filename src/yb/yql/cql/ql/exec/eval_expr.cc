@@ -60,7 +60,7 @@ Status Executor::PTExprToPB(const PTExpr::SharedPtr& expr, QLExpressionPB *expr_
         // Example: "List<BLOB>" with function calls.
         //   [ TextAsBlob('a'), IntAsBlob(1) ]
         RETURN_NOT_OK(PTExprToPB(static_cast<const PTCollectionExpr*>(expr.get()), expr_pb));
-        return EvalExpr(expr_pb, QLTableRow::empty_row());
+        return EvalExpr(expr_pb, qlexpr::QLTableRow::empty_row());
       }
       return Status::OK();
     }
@@ -112,24 +112,39 @@ Status Executor::PTExprToPB(const PTExpr::SharedPtr& expr, QLExpressionPB *expr_
 
 //--------------------------------------------------------------------------------------------------
 
-CHECKED_STATUS Executor::PTExprToPB(const PTBindVar *bind_pt, QLExpressionPB *expr_pb) {
+Status Executor::PTExprToPB(const PTBindVar *bind_pt, QLExpressionPB *expr_pb) {
   if (!bind_pt->name()) {
     return STATUS(NotSupported, "Undefined bind variable name, please contact the support");
   }
 
   QLValue ql_bind;
   DCHECK_NOTNULL(bind_pt->name().get());
-  RETURN_NOT_OK(exec_context_->params().GetBindVariable(bind_pt->name()->c_str(),
-                                                        bind_pt->pos(),
-                                                        bind_pt->ql_type(),
-                                                        &ql_bind));
-  *expr_pb->mutable_value() = std::move(*ql_bind.mutable_value());
-  return Status::OK();
+  auto status_primary_bindvar = exec_context_->params().GetBindVariable(
+      bind_pt->name()->c_str(), bind_pt->pos(), bind_pt->ql_type(), &ql_bind);
+
+  if (status_primary_bindvar.ok()) {
+    *expr_pb->mutable_value() = std::move(*ql_bind.mutable_value());
+    return Status::OK();
+  }
+
+  // Try finding the variable using alternative names.
+  for (auto alternative_name : *bind_pt->alternative_names()) {
+    auto s = exec_context_->params().GetBindVariable(
+        alternative_name->c_str(), bind_pt->pos(), bind_pt->ql_type(), &ql_bind);
+    if (s.ok()) {
+      *expr_pb->mutable_value() = std::move(*ql_bind.mutable_value());
+      return Status::OK();
+    }
+  }
+
+  LOG(WARNING) << "Bind variable: " << bind_pt->name()
+               << " was not found. Status: " << status_primary_bindvar;
+  return status_primary_bindvar;
 }
 
 //--------------------------------------------------------------------------------------------------
 
-CHECKED_STATUS Executor::PTExprToPB(const PTRef *ref_pt, QLExpressionPB *ref_pb) {
+Status Executor::PTExprToPB(const PTRef *ref_pt, QLExpressionPB *ref_pb) {
   // When processing constant folding by client, all columns are not yet accessible, and "PTRef"
   // execution should returns an error to indicate that the folding effort failed.
   const ColumnDesc *col_desc = ref_pt->desc();
@@ -145,7 +160,7 @@ CHECKED_STATUS Executor::PTExprToPB(const PTRef *ref_pt, QLExpressionPB *ref_pb)
   return Status::OK();
 }
 
-CHECKED_STATUS Executor::PTExprToPB(const PTSubscriptedColumn *ref_pt, QLExpressionPB *expr_pb) {
+Status Executor::PTExprToPB(const PTSubscriptedColumn *ref_pt, QLExpressionPB *expr_pb) {
   const ColumnDesc *col_desc = ref_pt->desc();
   auto col_pb = expr_pb->mutable_subscripted_col();
   col_pb->set_column_id(col_desc->id());
@@ -156,8 +171,8 @@ CHECKED_STATUS Executor::PTExprToPB(const PTSubscriptedColumn *ref_pt, QLExpress
   return Status::OK();
 }
 
-CHECKED_STATUS Executor::PTExprToPB(const PTJsonColumnWithOperators *ref_pt,
-                                    QLExpressionPB *expr_pb) {
+Status Executor::PTExprToPB(const PTJsonColumnWithOperators *ref_pt,
+                            QLExpressionPB *expr_pb) {
   const ColumnDesc *col_desc = ref_pt->desc();
   auto col_pb = expr_pb->mutable_json_column();
   col_pb->set_column_id(col_desc->id());
@@ -171,7 +186,7 @@ CHECKED_STATUS Executor::PTExprToPB(const PTJsonColumnWithOperators *ref_pt,
 
 //--------------------------------------------------------------------------------------------------
 
-CHECKED_STATUS Executor::PTExprToPB(const PTAllColumns *ref_pt, QLReadRequestPB *req) {
+Status Executor::PTExprToPB(const PTAllColumns *ref_pt, QLReadRequestPB *req) {
   QLRSRowDescPB *rsrow_desc_pb = req->mutable_rsrow_desc();
   for (const auto& col_desc : ref_pt->columns()) {
     req->add_selected_exprs()->set_column_id(col_desc.id());

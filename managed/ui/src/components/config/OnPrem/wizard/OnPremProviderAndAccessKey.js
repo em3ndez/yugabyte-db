@@ -1,13 +1,12 @@
 // Copyright (c) YugaByte, Inc.
 
-import React, { Component } from 'react';
+import { Component } from 'react';
 import { Field } from 'redux-form';
 import { Row, Col } from 'react-bootstrap';
 import { YBInputField, YBButton, YBTextArea, YBNumericInput } from '../../../common/forms/fields';
 import constants from './OnPremWizardConstants.json';
 import YBToggle from '../../../common/forms/fields/YBToggle';
 import { NTPConfig } from '../../PublicCloud/views/NTPConfig';
-import { YBTag } from '../../../common/YBTag';
 
 export default class OnPremProviderAndAccessKey extends Component {
   constructor(props) {
@@ -165,11 +164,16 @@ export default class OnPremProviderAndAccessKey extends Component {
           <Row>
             <Col lg={10}>
               <Row>
-                <Col lg={2} className='no-padding onprem-ntp'>
-                  <div className="form-item-custom-label">NTP Setup<YBTag>Beta</YBTag></div>
+                <Col lg={2} className="no-padding onprem-ntp">
+                  <div className="form-item-custom-label">NTP Setup</div>
                 </Col>
-                <Col lg={10} className='no-padding'>
-                  <NTPConfig onChange={change} hideOnPremProvider initialValues={initialValues} disabled={isEditProvider}/>
+                <Col lg={10} className="no-padding">
+                  <NTPConfig
+                    onChange={change}
+                    hideOnPremProvider
+                    initialValues={initialValues}
+                    disabled={isEditProvider}
+                  />
                 </Col>
               </Row>
             </Col>

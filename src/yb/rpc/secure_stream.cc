@@ -14,6 +14,7 @@
 #include "yb/rpc/secure_stream.h"
 
 #include <openssl/err.h>
+#include <openssl/provider.h>
 #include <openssl/ssl.h>
 #include <openssl/x509v3.h>
 
@@ -25,6 +26,7 @@
 
 #include "yb/rpc/outbound_data.h"
 #include "yb/rpc/refined_stream.h"
+#include "yb/rpc/reactor_thread_role.h"
 
 #include "yb/util/enums.h"
 #include "yb/util/errno.h"
@@ -33,21 +35,29 @@
 #include "yb/util/shared_lock.h"
 #include "yb/util/status_format.h"
 #include "yb/util/unique_lock.h"
+#include "yb/util/flags.h"
+#include "yb/util/env.h"
+#include "yb/util/env_util.h"
+#include "yb/util/path_util.h"
+#include "yb/util/subprocess.h"
 
 using namespace std::literals;
 
-DEFINE_bool(allow_insecure_connections, true, "Whether we should allow insecure connections.");
-DEFINE_bool(dump_certificate_entries, false, "Whether we should dump certificate entries.");
-DEFINE_bool(verify_client_endpoint, false, "Whether client endpoint should be verified.");
-DEFINE_bool(verify_server_endpoint, true, "Whether server endpoint should be verified.");
-DEFINE_string(ssl_protocols, "",
+DEFINE_UNKNOWN_bool(allow_insecure_connections, true,
+    "Whether we should allow insecure connections.");
+DEFINE_UNKNOWN_bool(dump_certificate_entries, false, "Whether we should dump certificate entries.");
+DEFINE_UNKNOWN_bool(verify_client_endpoint, false, "Whether client endpoint should be verified.");
+DEFINE_UNKNOWN_bool(verify_server_endpoint, true, "Whether server endpoint should be verified.");
+DEFINE_UNKNOWN_string(ssl_protocols, "",
               "List of allowed SSL protocols (ssl2, ssl3, tls10, tls11, tls12). "
                   "Empty to allow TLS only.");
 
-DEFINE_string(cipher_list, "",
+DEFINE_NON_RUNTIME_bool(openssl_require_fips, false, "Use OpenSSL FIPS Provider.");
+
+DEFINE_UNKNOWN_string(cipher_list, "",
               "Define the list of available ciphers (TLSv1.2 and below).");
 
-DEFINE_string(ciphersuites, "",
+DEFINE_UNKNOWN_string(ciphersuites, "",
               "Define the available TLSv1.3 ciphersuites.");
 
 #define YB_RPC_SSL_TYPE(name) \
@@ -132,7 +142,7 @@ class ExtensionConfigurator {
     X509V3_set_ctx(&ctx_, cert, cert, nullptr, nullptr, 0);
   }
 
-  CHECKED_STATUS Add(int nid, const char* value) {
+  Status Add(int nid, const char* value) {
     X509_EXTENSION *ex = X509V3_EXT_conf_nid(nullptr, &ctx_, nid, value);
     if (!ex) {
       return SSL_STATUS(InvalidArgument, "Failed to create extension: $0");
@@ -253,9 +263,48 @@ int64_t ProtocolsOption() {
   return result;
 }
 
+Result<std::string> ProviderSearchPath() {
+  // This is the provider search path for release package. For development builds,
+  // GetRootDirResult will result non-OK status, since we don't copy ossl-modules from
+  // thirdparty into the build directory. We instead rely on rpath to find providers
+  // within the thirdparty directory.
+  auto root = VERIFY_RESULT(env_util::GetRootDirResult("lib/ossl-modules"));
+  return JoinPathSegments(root, "lib", "ossl-modules");
+}
+
+Result<std::string> FIPSConfigPath() {
+  auto root = VERIFY_RESULT(env_util::GetRootDirResult("openssl-config"));
+  return JoinPathSegments(root, "openssl-config", "openssl-fips.cnf");
+}
+
 class OpenSSLInitializer {
  public:
+
   OpenSSLInitializer() {
+    if (FLAGS_openssl_require_fips) {
+      auto provider_path = ProviderSearchPath();
+      if (provider_path.ok()) {
+        LOG(INFO) << "Setting OpenSSL provider search path: " << provider_path;
+        if (!OSSL_PROVIDER_set_default_search_path(/* libctx= */ NULL, provider_path->c_str())) {
+          LOG(FATAL) << "Failed to set OpenSSL provider search path: "
+                     << SSLErrorMessage(ERR_get_error());
+        }
+      }
+
+      auto config_path = FIPSConfigPath();
+      CHECK_OK(config_path);
+      LOG(INFO) << "Loading OpenSSL config: " << config_path;
+      if (CONF_modules_load_file(config_path->c_str(), /* appname= */ NULL, /* flags= */ 0) <= 0) {
+        LOG(FATAL) << "Failed to load OpenSSL config: " << SSLErrorMessage(ERR_get_error());
+      }
+
+      CHECK(OSSL_PROVIDER_available(/* libctx= */ NULL, "fips"));
+      CHECK(OSSL_PROVIDER_available(/* libctx= */ NULL, "base"));
+      CHECK(!OSSL_PROVIDER_available(/* libctx= */ NULL, "default"));
+
+      LOG(INFO) << "OpenSSL FIPS enabled";
+    }
+
     SSL_library_init();
     SSL_load_error_strings();
     OpenSSL_add_all_algorithms();
@@ -273,7 +322,134 @@ class OpenSSLInitializer {
 
 YB_STRONGLY_TYPED_BOOL(UseCertificateKeyPair);
 
+// Matches pattern from RFC 2818:
+// Names may contain the wildcard character * which is considered to match any single domain name
+// component or component fragment. E.g., *.a.com matches foo.a.com but not bar.foo.a.com.
+// f*.com matches foo.com but not bar.com.
+bool MatchPattern(Slice pattern, Slice host) {
+  const char* p = pattern.cdata();
+  const char* p_end = pattern.cend();
+  const char* h = host.cdata();
+  const char* h_end = host.cend();
+
+  while (p != p_end && h != h_end) {
+    if (*p == '*') {
+      ++p;
+      while (h != h_end && *h != '.') {
+        if (MatchPattern(Slice(p, p_end), Slice(h, h_end))) {
+          return true;
+        }
+        ++h;
+      }
+    } else if (std::tolower(*p) == std::tolower(*h)) {
+      ++p;
+      ++h;
+    } else {
+      return false;
+    }
+  }
+
+  return p == p_end && h == h_end;
+}
+
+Slice GetEntryByNid(X509* cert, int nid) {
+  X509_NAME* name = X509_get_subject_name(cert);
+  int last_i = -1;
+  for (int i = -1; (i = X509_NAME_get_index_by_NID(name, nid, i)) >= 0; ) {
+    last_i = i;
+  }
+  if (last_i == -1) {
+    return Slice();
+  }
+  auto* name_entry = X509_NAME_get_entry(name, last_i);
+  if (!name_entry) {
+    LOG(DFATAL) << "No name entry in certificate at index: " << last_i;
+    return Slice();
+  }
+  auto* common_name = X509_NAME_ENTRY_get_data(name_entry);
+
+  if (common_name && common_name->data && common_name->length) {
+    return Slice(common_name->data, common_name->length);
+  }
+
+  return Slice();
+}
+
+Slice GetCommonName(X509* cert) {
+  return GetEntryByNid(cert, NID_commonName);
+}
+
+std::string X509CertToString(X509* cert) {
+  char * issuer_name = X509_NAME_oneline(X509_get_issuer_name(cert), nullptr, 0);
+  std::stringstream result;
+  result << "  Issuer: " << issuer_name;
+  OPENSSL_free(issuer_name);
+
+  result << "\n  Serial Number: " << ASN1_INTEGER_get(X509_get_serialNumber(cert));
+
+  // Validity - notBefore
+  auto appendTime = [&](const ASN1_TIME* time) {
+    BIO *bmem = BIO_new(BIO_s_mem());
+
+    if (ASN1_TIME_print(bmem, time)) {
+        BUF_MEM * bptr;
+
+        BIO_get_mem_ptr(bmem, &bptr);
+        result << std::string(bptr->data, bptr->length);
+    } else {
+      result << "<error>";
+    }
+    BIO_free_all(bmem);
+  };
+
+  // notBefore
+  result << "\n  Validity:\n    Not Before: ";
+  appendTime(X509_get_notBefore(cert));
+  result << "\n    Not After: ";
+  appendTime(X509_get_notAfter(cert));
+
+  char * sub_name = X509_NAME_oneline(X509_get_subject_name(cert), nullptr, 0);
+  result << "\n  Subject: " << sub_name;
+  OPENSSL_free(sub_name);
+
+  return result.str();
+}
+
 } // namespace
+
+void SetOpenSSLEnv(Subprocess* proc) {
+  if (FLAGS_openssl_require_fips) {
+    auto provider_path = ProviderSearchPath();
+    if (provider_path.ok()) {
+      proc->SetEnv("OPENSSL_MODULES", *provider_path);
+    }
+    auto config_path = FIPSConfigPath();
+    CHECK_OK(config_path);
+    proc->SetEnv("OPENSSL_CONF", *config_path);
+  }
+}
+
+bool AllowInsecureConnections() {
+  return FLAGS_allow_insecure_connections;
+}
+
+std::string GetSSLProtocols() {
+  const std::string& ssl_protocols = FLAGS_ssl_protocols;
+  if (ssl_protocols.empty()) { return "default - TLS only"; }
+  return ssl_protocols;
+}
+
+std::string GetCipherList() {
+  const auto& cipher_list = FLAGS_cipher_list;
+  if (cipher_list.empty()) { return "default"; }
+  return cipher_list;
+}
+
+std::string GetCipherSuites() {
+  const auto& ciphersuites = FLAGS_ciphersuites;
+  if (ciphersuites.empty()) { return "default"; }
+  return ciphersuites;
+}
 
 void InitOpenSSL() {
   static OpenSSLInitializer initializer;
@@ -289,15 +465,17 @@ class SecureContext::Impl {
   Impl(const Impl&) = delete;
   void operator=(const Impl&) = delete;
 
-  CHECKED_STATUS AddCertificateAuthorityFile(const std::string& file) EXCLUDES(mutex_);
+  Status AddCertificateAuthorityFile(const std::string& file) EXCLUDES(mutex_);
 
-  CHECKED_STATUS UseCertificates(
+  Status UseCertificates(
       const std::string& ca_cert_file, const Slice& certificate_data,
       const Slice& pkey_data) EXCLUDES(mutex_);
 
+  std::string GetCertificateDetails();
+
   // Generates and uses temporary keys, should be used only during testing.
-  CHECKED_STATUS TEST_GenerateKeys(int bits, const std::string& common_name,
-                                   MatchingCertKeyPair matching_cert_key_pair) EXCLUDES(mutex_);
+  Status TEST_GenerateKeys(int bits, const std::string& common_name,
+                           MatchingCertKeyPair matching_cert_key_pair) EXCLUDES(mutex_);
 
   Result<SSLPtr> Create(rpc::UseCertificateKeyPair use_certificate_key_pair)
       const EXCLUDES(mutex_);
@@ -315,14 +493,14 @@ class SecureContext::Impl {
   }
 
  private:
-  CHECKED_STATUS AddCertificateAuthorityFileUnlocked(const std::string& file) REQUIRES(mutex_);
+  Status AddCertificateAuthorityFileUnlocked(const std::string& file) REQUIRES(mutex_);
 
-  CHECKED_STATUS UseCertificateKeyPair(
+  Status UseCertificateKeyPair(
       const Slice& certificate_data, const Slice& pkey_data) REQUIRES(mutex_);
 
-  CHECKED_STATUS UseCertificateKeyPair(X509Ptr&& certificate, EVP_PKEYPtr&& pkey) REQUIRES(mutex_);
+  Status UseCertificateKeyPair(X509Ptr&& certificate, EVP_PKEYPtr&& pkey) REQUIRES(mutex_);
 
-  CHECKED_STATUS AddCertificateAuthority(X509* cert) REQUIRES(mutex_);
+  Status AddCertificateAuthority(X509* cert) REQUIRES(mutex_);
 
   Result<SSLPtr> Create(
       const X509Ptr& certificate, const EVP_PKEYPtr& pkey,
@@ -398,7 +576,7 @@ Result<SSLPtr> SecureContext::Impl::Create(
 }
 
 Status SecureContext::Impl::AddCertificateAuthorityFile(const std::string& file) {
-  UNIQUE_LOCK(lock, mutex_);
+  UniqueLock lock(mutex_);
   return AddCertificateAuthorityFileUnlocked(file);
 }
 
@@ -411,7 +589,10 @@ Status SecureContext::Impl::AddCertificateAuthorityFileUnlocked(const std::strin
   auto bytes = pointer_cast<const char*>(file.c_str());
   auto res = X509_STORE_load_locations(store, bytes, nullptr);
   if (res != 1) {
-    return SSL_STATUS(InvalidArgument, "Failed to add certificate file: $0");
+    return STATUS_FORMAT(InvalidArgument,
+                        "Failed to add certificate file: $0, filename: $1",
+                        SSLErrorMessage(ERR_get_error()),
+                        file.c_str());
   }
 
   return Status::OK();
@@ -457,12 +638,27 @@ Status SecureContext::Impl::UseCertificateKeyPair(X509Ptr&& certificate, EVP_PKE
 
 Status SecureContext::Impl::UseCertificates(
     const std::string& ca_cert_file, const Slice& certificate_data, const Slice& pkey_data) {
-  UNIQUE_LOCK(lock, mutex_);
+  UniqueLock lock(mutex_);
 
   RETURN_NOT_OK(AddCertificateAuthorityFileUnlocked(ca_cert_file));
   RETURN_NOT_OK(UseCertificateKeyPair(certificate_data, pkey_data));
 
   return Status::OK();
+}
+
+std::string SecureContext::Impl::GetCertificateDetails() {
+  UniqueLock lock(mutex_);
+
+  std::stringstream result;
+  if(certificate_) {
+    result << "Node certificate details: \n";
+    result << X509CertToString(certificate_.get());
+  }
+
+  // TODO: extend tabletserver to use certificate reloader callback like mechanism
+  // to capture server validation certificate.
+
+  return result.str();
 }
 
 Status SecureContext::Impl::TEST_GenerateKeys(int bits, const std::string& common_name,
@@ -476,7 +672,7 @@ Status SecureContext::Impl::TEST_GenerateKeys(int bits, const std::string& commo
     key = VERIFY_RESULT(GeneratePrivateKey(bits));
   }
 
-  UNIQUE_LOCK(lock, mutex_);
+  UniqueLock lock(mutex_);
   RETURN_NOT_OK(AddCertificateAuthority(ca_cert.get()));
   RETURN_NOT_OK(UseCertificateKeyPair(std::move(cert), std::move(key)));
 
@@ -500,6 +696,10 @@ Status SecureContext::UseCertificates(
   return impl_->UseCertificates(ca_cert_file, certificate_data, pkey_data);
 }
 
+std::string SecureContext::GetCertificateDetails() {
+  return impl_->GetCertificateDetails();
+}
+
 Status SecureContext::TEST_GenerateKeys(int bits, const std::string& common_name,
                                         MatchingCertKeyPair matching_cert_key_pair) {
   return impl_->TEST_GenerateKeys(bits, common_name, matching_cert_key_pair);
@@ -516,11 +716,11 @@ class SecureRefiner : public StreamRefiner {
     stream_ = stream;
   }
 
-  CHECKED_STATUS Handshake() override;
-  CHECKED_STATUS Init();
+  Status Handshake() ON_REACTOR_THREAD override;
+  Status Init();
 
-  CHECKED_STATUS Send(OutboundDataPtr data) override;
-  CHECKED_STATUS ProcessHeader() override;
+  Status Send(OutboundDataPtr data) ON_REACTOR_THREAD override;
+  Status ProcessHeader() ON_REACTOR_THREAD override;
   Result<ReadBufferFull> Read(StreamReadBuffer* out) override;
 
   std::string ToString() const override {
@@ -532,14 +732,14 @@ class SecureRefiner : public StreamRefiner {
   }
 
   static int VerifyCallback(int preverified, X509_STORE_CTX* store_context);
-  CHECKED_STATUS Verify(bool preverified, X509_STORE_CTX* store_context);
+  Status Verify(bool preverified, X509_STORE_CTX* store_context);
   bool MatchEndpoint(X509* cert, GENERAL_NAMES* gens);
   bool MatchUid(X509* cert, GENERAL_NAMES* gens);
   bool MatchUidEntry(const Slice& value, const char* name);
-  Result<bool> WriteEncrypted(OutboundDataPtr data);
+  Result<bool> WriteEncrypted(OutboundDataPtr data) ON_REACTOR_THREAD;
   void DecryptReceived();
 
-  CHECKED_STATUS Established(RefinedStreamState state) {
+  Status Established(RefinedStreamState state) ON_REACTOR_THREAD {
     VLOG_WITH_PREFIX(4) << "Established with state: " << state << ", used cipher: "
                         << SSL_get_cipher_name(ssl_.get());
 
@@ -561,7 +761,7 @@ class SecureRefiner : public StreamRefiner {
 };
 
 Status SecureRefiner::Send(OutboundDataPtr data) {
-  boost::container::small_vector<RefCntBuffer, 10> queue;
+  boost::container::small_vector<RefCntSlice, 10> queue;
   data->Serialize(&queue);
   for (const auto& buf : queue) {
     Slice slice(buf.data(), buf.size());
@@ -789,67 +989,6 @@ int SecureRefiner::VerifyCallback(int preverified, X509_STORE_CTX* store_context
   refiner->verification_status_ = status;
   return 0;
 }
-
-namespace {
-
-// Matches pattern from RFC 2818:
-// Names may contain the wildcard character * which is considered to match any single domain name
-// component or component fragment. E.g., *.a.com matches foo.a.com but not bar.foo.a.com.
-// f*.com matches foo.com but not bar.com.
-bool MatchPattern(Slice pattern, Slice host) {
-  const char* p = pattern.cdata();
-  const char* p_end = pattern.cend();
-  const char* h = host.cdata();
-  const char* h_end = host.cend();
-
-  while (p != p_end && h != h_end) {
-    if (*p == '*') {
-      ++p;
-      while (h != h_end && *h != '.') {
-        if (MatchPattern(Slice(p, p_end), Slice(h, h_end))) {
-          return true;
-        }
-        ++h;
-      }
-    } else if (std::tolower(*p) == std::tolower(*h)) {
-      ++p;
-      ++h;
-    } else {
-      return false;
-    }
-  }
-
-  return p == p_end && h == h_end;
-}
-
-Slice GetEntryByNid(X509* cert, int nid) {
-  X509_NAME* name = X509_get_subject_name(cert);
-  int last_i = -1;
-  for (int i = -1; (i = X509_NAME_get_index_by_NID(name, nid, i)) >= 0; ) {
-    last_i = i;
-  }
-  if (last_i == -1) {
-    return Slice();
-  }
-  auto* name_entry = X509_NAME_get_entry(name, last_i);
-  if (!name_entry) {
-    LOG(DFATAL) << "No name entry in certificate at index: " << last_i;
-    return Slice();
-  }
-  auto* common_name = X509_NAME_ENTRY_get_data(name_entry);
-
-  if (common_name && common_name->data && common_name->length) {
-    return Slice(common_name->data, common_name->length);
-  }
-
-  return Slice();
-}
-
-Slice GetCommonName(X509* cert) {
-  return GetEntryByNid(cert, NID_commonName);
-}
-
-} // namespace
 
 bool SecureRefiner::MatchEndpoint(X509* cert, GENERAL_NAMES* gens) {
   auto address = stream_->Remote().address();

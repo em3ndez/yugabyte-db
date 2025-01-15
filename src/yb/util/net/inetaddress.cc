@@ -21,10 +21,12 @@
 #include "yb/util/status.h"
 #include "yb/util/status_fwd.h"
 
+using std::string;
+using std::vector;
+
 using boost::asio::ip::address;
 using boost::asio::ip::address_v4;
 using boost::asio::ip::address_v6;
-using boost::asio::ip::tcp;
 
 namespace yb {
 
@@ -45,7 +47,7 @@ std::string InetAddress::ToString() const {
   return strval;
 }
 
-CHECKED_STATUS InetAddress::ToString(std::string *strval) const {
+Status InetAddress::ToString(std::string *strval) const {
   boost::system::error_code ec;
   *strval = boost_addr_.to_string(ec);
   if (ec.value()) {
@@ -61,7 +63,7 @@ std::string InetAddress::ToBytes() const {
   return result;
 }
 
-CHECKED_STATUS InetAddress::FromSlice(const Slice& slice, size_t size_hint) {
+Status InetAddress::FromSlice(const Slice& slice, size_t size_hint) {
   size_t expected_size = size_hint == 0 ? slice.size() : size_hint;
   if (expected_size > slice.size()) {
     return STATUS_FORMAT(

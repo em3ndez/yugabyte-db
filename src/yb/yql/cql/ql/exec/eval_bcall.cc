@@ -26,7 +26,7 @@ namespace ql {
 using yb::bfql::BFOpcode;
 using yb::bfql::BFOPCODE_NOOP;
 
-CHECKED_STATUS Executor::PTExprToPB(const PTBcall *bcall_pt, QLExpressionPB *expr_pb) {
+Status Executor::PTExprToPB(const PTBcall *bcall_pt, QLExpressionPB *expr_pb) {
   if (!bcall_pt->is_server_operator()) {
     // Regular builtin function call.
     return BFCallToPB(bcall_pt, expr_pb);
@@ -36,7 +36,7 @@ CHECKED_STATUS Executor::PTExprToPB(const PTBcall *bcall_pt, QLExpressionPB *exp
   }
 }
 
-CHECKED_STATUS Executor::BFCallToPB(const PTBcall *bcall_pt, QLExpressionPB *expr_pb) {
+Status Executor::BFCallToPB(const PTBcall *bcall_pt, QLExpressionPB *expr_pb) {
   if (bcall_pt->result_cast_op() != BFOPCODE_NOOP) {
       QLBCallPB *cast_pb = expr_pb->mutable_bfcall();
       cast_pb->set_opcode(static_cast<int32_t>(bcall_pt->result_cast_op()));
@@ -78,7 +78,7 @@ CHECKED_STATUS Executor::BFCallToPB(const PTBcall *bcall_pt, QLExpressionPB *exp
   return Status::OK();
 }
 
-CHECKED_STATUS Executor::TSCallToPB(const PTBcall *bcall_pt, QLExpressionPB *expr_pb) {
+Status Executor::TSCallToPB(const PTBcall *bcall_pt, QLExpressionPB *expr_pb) {
   if (bcall_pt->result_cast_op() != BFOPCODE_NOOP) {
       QLBCallPB *cast_pb = expr_pb->mutable_bfcall();
       cast_pb->set_opcode(static_cast<int32_t>(bcall_pt->result_cast_op()));
@@ -114,10 +114,10 @@ CHECKED_STATUS Executor::TSCallToPB(const PTBcall *bcall_pt, QLExpressionPB *exp
 }
 
 // Forming constructor call for collection and user-defined types.
-CHECKED_STATUS Executor::PTExprToPB(const PTCollectionExpr *expr, QLExpressionPB *expr_pb) {
+Status Executor::PTExprToPB(const PTCollectionExpr *expr, QLExpressionPB *expr_pb) {
   bool is_frozen = false;
   DataType data_type = expr->ql_type()->main();
-  if (data_type == FROZEN) {
+  if (data_type == DataType::FROZEN) {
     is_frozen = true;
     // Use the nested collection type.
     data_type = expr->ql_type()->param_type(0)->main();
@@ -126,7 +126,7 @@ CHECKED_STATUS Executor::PTExprToPB(const PTCollectionExpr *expr, QLExpressionPB
   QLExpressionPB *arg_pb;
   QLBCallPB *bcall_pb = expr_pb->mutable_bfcall();
   switch (data_type) {
-    case MAP:
+    case DataType::MAP:
       if (is_frozen) {
         bcall_pb->set_opcode(static_cast<int32_t>(BFOpcode::OPCODE_MAP_FROZEN));
       } else {
@@ -145,7 +145,7 @@ CHECKED_STATUS Executor::PTExprToPB(const PTCollectionExpr *expr, QLExpressionPB
       }
       break;
 
-    case SET:
+    case DataType::SET:
       if (is_frozen) {
         bcall_pb->set_opcode(static_cast<int32_t>(BFOpcode::OPCODE_SET_FROZEN));
       } else {
@@ -157,7 +157,7 @@ CHECKED_STATUS Executor::PTExprToPB(const PTCollectionExpr *expr, QLExpressionPB
       }
       break;
 
-    case LIST:
+    case DataType::LIST:
       if (is_frozen) {
         bcall_pb->set_opcode(static_cast<int32_t>(BFOpcode::OPCODE_LIST_FROZEN));
       } else {
@@ -169,7 +169,7 @@ CHECKED_STATUS Executor::PTExprToPB(const PTCollectionExpr *expr, QLExpressionPB
       }
       break;
 
-    case USER_DEFINED_TYPE: {
+    case DataType::USER_DEFINED_TYPE: {
       auto field_values = expr->udtype_field_values();
       if (is_frozen) {
         bcall_pb->set_opcode(static_cast<int32_t>(BFOpcode::OPCODE_UDT_FROZEN));

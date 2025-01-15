@@ -4,12 +4,11 @@ headerTitle: jsonb_build_object() and json_build_object()
 linkTitle: jsonb_build_object()
 description: Build a JSON object from a variadic list that specifies keys with values of arbitrary SQL data type.
 menu:
-  preview:
+  preview_api:
     identifier: jsonb-build-object
     parent: json-functions-operators
     weight: 100
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 **Purpose:** Create a JSON _object_ from a variadic list that specifies keys with values of arbitrary SQL data type.

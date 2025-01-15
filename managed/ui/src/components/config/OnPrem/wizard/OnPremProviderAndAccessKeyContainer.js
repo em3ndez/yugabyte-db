@@ -7,6 +7,7 @@ import { setOnPremConfigData } from '../../../../actions/cloud';
 import { isDefinedNotNull, isNonEmptyObject, isNonEmptyArray } from '../../../../utils/ObjectUtils';
 import _ from 'lodash';
 import { NTP_TYPES } from '../../PublicCloud/views/NTPConfig';
+import { ACCEPTABLE_CHARS } from '../../constants';
 
 const DEFAULT_NODE_EXPORTER_PORT = 9300;
 const DEFAULT_NODE_EXPORTER_USER = 'prometheus';
@@ -66,8 +67,9 @@ const mapStateToProps = (state, ownProps) => {
     cloud: { onPremJsonFormData, accessKeys }
   } = state;
   if (ownProps.isEditProvider && isNonEmptyObject(onPremJsonFormData)) {
-    
-    const access_keys_of_provider = accessKeys?.data.find((ak) => ak.idKey?.providerUUID === onPremJsonFormData.provider.uuid );
+    const access_keys_of_provider = accessKeys?.data.find(
+      (ak) => ak.idKey?.providerUUID === onPremJsonFormData.provider.uuid
+    );
     initialFormValues = {
       name: onPremJsonFormData.provider.name,
       keyCode: onPremJsonFormData.key.code,
@@ -105,9 +107,11 @@ const mapStateToProps = (state, ownProps) => {
             .join(', ')
         };
       }),
-      ntp_option: access_keys_of_provider.keyInfo?.setUpChrony ? NTP_TYPES.MANUAL : NTP_TYPES.NO_NTP,
-      ntpServers: access_keys_of_provider.keyInfo?.ntpServers ?? [],
-      setUpChrony: access_keys_of_provider.keyInfo?.setUpChrony
+      ntp_option: access_keys_of_provider?.keyInfo?.setUpChrony
+        ? NTP_TYPES.MANUAL
+        : NTP_TYPES.NO_NTP,
+      ntpServers: access_keys_of_provider?.keyInfo?.ntpServers ?? [],
+      setUpChrony: access_keys_of_provider?.keyInfo?.setUpChrony
     };
   }
   return {
@@ -121,6 +125,8 @@ const validate = (values) => {
   const errors = {};
   if (!isDefinedNotNull(values.name)) {
     errors.name = 'Required';
+  } else if (!ACCEPTABLE_CHARS.test(values.name)) {
+    errors.name = 'Cannot have special characters except - and _';
   }
   if (!isDefinedNotNull(values.sshUser)) {
     errors.sshUser = 'Required';
@@ -128,8 +134,8 @@ const validate = (values) => {
   if (!isDefinedNotNull(values.privateKeyContent)) {
     errors.privateKeyContent = 'Required';
   }
-  if(values.ntp_option === NTP_TYPES.MANUAL && values.ntpServers.length === 0){
-    errors.ntpServers = 'NTP servers cannot be empty'
+  if (values.ntp_option === NTP_TYPES.MANUAL && values.ntpServers.length === 0) {
+    errors.ntpServers = 'NTP servers cannot be empty';
   }
   return errors;
 };

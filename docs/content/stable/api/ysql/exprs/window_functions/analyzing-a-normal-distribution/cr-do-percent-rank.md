@@ -4,12 +4,11 @@ linkTitle: cr_do_percent_rank.sql
 headerTitle: cr_do_percent_rank.sql
 description: cr_do_percent_rank.sql - Part of the code kit for the "Analyzing a normal distribution" section within the YSQL window functions documentation.
 menu:
-  stable:
+  stable_api:
     identifier: cr-do-percent-rank
     parent: analyzing-a-normal-distribution
     weight: 120
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 Save this script as `cr_do_percent_rank.sql`.
 ```plpgsql

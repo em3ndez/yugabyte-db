@@ -11,8 +11,7 @@
 // under the License.
 //
 
-#ifndef YB_YQL_CQL_QL_PTREE_PT_KEYSPACE_PROPERTY_H_
-#define YB_YQL_CQL_QL_PTREE_PT_KEYSPACE_PROPERTY_H_
+#pragma once
 
 #include "yb/gutil/strings/substitute.h"
 #include "yb/yql/cql/ql/ptree/list_node.h"
@@ -53,7 +52,7 @@ class PTKeyspaceProperty : public PTProperty {
   }
 
   // Node semantics analysis.
-  virtual CHECKED_STATUS Analyze(SemContext *sem_context) override;
+  virtual Status Analyze(SemContext *sem_context) override;
   void PrintSemanticAnalysisResult(SemContext *sem_context);
 
   const TreeListNode<PTKeyspaceProperty>::SharedPtr map_elements() const {
@@ -105,7 +104,7 @@ class PTKeyspacePropertyListNode : public TreeListNode<PTKeyspaceProperty> {
     return MCMakeShared<PTKeyspacePropertyListNode>(memctx, std::forward<TypeArgs>(args)...);
   }
 
-  virtual CHECKED_STATUS Analyze(SemContext *sem_context) override;
+  virtual Status Analyze(SemContext *sem_context) override;
 };
 
 class PTKeyspacePropertyMap : public PTKeyspaceProperty {
@@ -126,7 +125,7 @@ class PTKeyspacePropertyMap : public PTKeyspaceProperty {
   }
 
   // Node semantics analysis.
-  virtual CHECKED_STATUS Analyze(SemContext *sem_context) override;
+  virtual Status Analyze(SemContext *sem_context) override;
   void PrintSemanticAnalysisResult(SemContext *sem_context);
 
   void SetPropertyName(MCSharedPtr<MCString> property_name) {
@@ -143,5 +142,3 @@ class PTKeyspacePropertyMap : public PTKeyspaceProperty {
 
 } // namespace ql
 } // namespace yb
-
-#endif // YB_YQL_CQL_QL_PTREE_PT_KEYSPACE_PROPERTY_H_

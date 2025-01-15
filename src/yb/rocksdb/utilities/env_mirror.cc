@@ -21,13 +21,13 @@
 // under the License.
 //
 
-#ifndef ROCKSDB_LITE
-
-#include <glog/logging.h>
+#include "yb/util/logging.h"
 
 #include "yb/rocksdb/utilities/env_mirror.h"
 #include "yb/util/result.h"
 #include "yb/util/status_format.h"
+
+using std::unique_ptr;
 
 namespace rocksdb {
 
@@ -191,11 +191,11 @@ class WritableFileMirror : public WritableFile {
     assert(as == b_->IsSyncThreadSafe());
     return as;
   }
-  void SetIOPriority(Env::IOPriority pri) override {
+  void SetIOPriority(yb::IOPriority pri) override {
     a_->SetIOPriority(pri);
     b_->SetIOPriority(pri);
   }
-  Env::IOPriority GetIOPriority() override {
+  yb::IOPriority GetIOPriority() override {
     // NOTE: we don't verify this one
     return a_->GetIOPriority();
   }
@@ -219,6 +219,8 @@ class WritableFileMirror : public WritableFile {
     assert(as.code() == bs.code());
     return as;
   }
+
+  const std::string& filename() const override { return fname; }
 
  protected:
   Status Allocate(uint64_t offset, uint64_t length) override {
@@ -413,4 +415,3 @@ Status EnvMirror::UnlockFile(FileLock* l) {
 }
 
 }  // namespace rocksdb
-#endif

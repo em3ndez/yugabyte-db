@@ -11,12 +11,11 @@
 // under the License.
 //
 
-#ifndef YB_UTIL_PRIORITY_THREAD_POOL_H
-#define YB_UTIL_PRIORITY_THREAD_POOL_H
+#pragma once
 
 #include <memory>
 
-#include <gflags/gflags_declare.h>
+#include "yb/util/flags.h"
 
 #include "yb/gutil/casts.h"
 
@@ -61,10 +60,10 @@ class PriorityThreadPoolTask {
   virtual std::string ToString() const = 0;
 
   // Updates any stats (ex: metrics) associated with the tasks changing state to another.
-  virtual void UpdateStatsStateChangedTo(PriorityThreadPoolTaskState state) const {}
+  virtual void StateChangedTo(PriorityThreadPoolTaskState state) {}
 
   // Updates any stats (ex: metrics) associated with the tasks changing state from another.
-  virtual void UpdateStatsStateChangedFrom(PriorityThreadPoolTaskState state) const {}
+  virtual void StateChangedFrom(PriorityThreadPoolTaskState state) {}
 
   // Calculates group no priority for the task based on the number of active_tasks.
   // Group No priority is used for prioritizing which tasks to run.
@@ -82,17 +81,17 @@ class PriorityThreadPoolTask {
 // Tasks submitted to this pool have assigned priority and are picked from queue using it.
 class PriorityThreadPool {
  public:
-  explicit PriorityThreadPool(size_t max_running_tasks);
+  explicit PriorityThreadPool(size_t max_running_tasks, bool use_group_no_priority = false);
   ~PriorityThreadPool();
 
   // Submit task to the pool.
   // On success task ownership is transferred to the pool, i.e. `task` would point to nullptr.
-  CHECKED_STATUS Submit(
+  Status Submit(
       int task_priority, std::unique_ptr<PriorityThreadPoolTask>* task,
       const uint64_t group_no = kDefaultGroupNo);
 
   template <class Task>
-  CHECKED_STATUS Submit(
+  Status Submit(
       int task_priority, std::unique_ptr<Task>* task, const uint64_t group_no = kDefaultGroupNo) {
     std::unique_ptr<PriorityThreadPoolTask> temp_task = std::move(*task);
     auto result = Submit(task_priority, &temp_task, group_no);
@@ -138,6 +137,7 @@ class PriorityThreadPool {
   void TEST_SetThreadCreationFailureProbability(double probability);
 
   size_t TEST_num_tasks_pending();
+  std::mutex* TEST_mutex();
 
  private:
   class Impl;
@@ -145,5 +145,3 @@ class PriorityThreadPool {
 };
 
 } // namespace yb
-
-#endif // YB_UTIL_PRIORITY_THREAD_POOL_H

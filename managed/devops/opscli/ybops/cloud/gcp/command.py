@@ -10,16 +10,19 @@
 
 from ybops.cloud.common.command import InstanceCommand, QueryCommand, AccessCommand, \
     NetworkCommand
-from ybops.cloud.common.method import ConfigureInstancesMethod, \
+from ybops.cloud.common.method import AddAuthorizedKey, ConfigureInstancesMethod, \
     ListInstancesMethod, AccessCreateVaultMethod, InitYSQLMethod, UpdateDiskMethod, \
-    CronCheckMethod, AccessEditVaultMethod, AccessDeleteKeyMethod, TransferXClusterCerts
+    CronCheckMethod, AccessEditVaultMethod, AccessDeleteKeyMethod, TransferXClusterCerts, \
+    VerifySSHConnection, RemoveAuthorizedKey, RebootInstancesMethod, RunHooks, \
+    WaitForConnection, ManageOtelCollector
 from ybops.cloud.gcp.method import GcpCreateInstancesMethod, GcpProvisionInstancesMethod, \
     GcpQueryRegionsMethod, GcpQueryZonesMethod, GcpQueryInstanceTypesMethod, \
     GcpQueryCurrentHostMethod, GcpQueryPreemptibleInstanceMethod, GcpDestroyInstancesMethod, \
     GcpAccessAddKeyMethod, GcpNetworkBootstrapMethod, GcpNetworkQueryMethod, \
     GcpNetworkCleanupMethod, GcpQueryVpcMethod, GcpCreateRootVolumesMethod, \
     GcpReplaceRootVolumeMethod, GcpChangeInstanceTypeMethod, GcpPauseInstancesMethod, \
-    GcpResumeInstancesMethod, GcpUpdateMountedDisksMethod, GcpDeleteRootVolumesMethod
+    GcpResumeInstancesMethod, GcpUpdateMountedDisksMethod, GcpDeleteRootVolumesMethod, \
+    GcpTagsMethod, GcpHardRebootInstancesMethod, GcpQueryDeviceNames
 
 
 class GcpInstanceCommand(InstanceCommand):
@@ -42,9 +45,18 @@ class GcpInstanceCommand(InstanceCommand):
         self.add_method(CronCheckMethod(self))
         self.add_method(GcpChangeInstanceTypeMethod(self))
         self.add_method(GcpPauseInstancesMethod(self))
+        self.add_method(GcpTagsMethod(self))
         self.add_method(GcpResumeInstancesMethod(self))
         self.add_method(GcpUpdateMountedDisksMethod(self))
         self.add_method(TransferXClusterCerts(self))
+        self.add_method(VerifySSHConnection(self))
+        self.add_method(AddAuthorizedKey(self))
+        self.add_method(RemoveAuthorizedKey(self))
+        self.add_method(RebootInstancesMethod(self))
+        self.add_method(RunHooks(self))
+        self.add_method(WaitForConnection(self))
+        self.add_method(GcpHardRebootInstancesMethod(self))
+        self.add_method(ManageOtelCollector(self))
 
 
 class GcpQueryCommand(QueryCommand):
@@ -58,6 +70,7 @@ class GcpQueryCommand(QueryCommand):
         self.add_method(GcpQueryCurrentHostMethod(self))
         self.add_method(GcpQueryPreemptibleInstanceMethod(self))
         self.add_method(GcpQueryVpcMethod(self))
+        self.add_method(GcpQueryDeviceNames(self))
 
 
 class GcpAccessCommand(AccessCommand):

@@ -9,13 +9,13 @@ menu:
 aliases:
   - /preview/api/redis/setex
   - /preview/api/yedis/setex
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 ## Synopsis
 
-<b>`SETEX key ttl_in_sec string_value`</b><br>
+**`SETEX key ttl_in_sec string_value`**
+
 This command sets the value of `key` to be `string_value`, and sets the key to expire in `ttl_in_sec` seconds.
 
 ## Return value

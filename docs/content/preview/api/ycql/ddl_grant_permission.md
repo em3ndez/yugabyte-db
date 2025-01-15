@@ -4,14 +4,13 @@ headerTitle: GRANT PERMISSION
 linkTitle: GRANT PERMISSION
 description: Use the GRANT PERMISSION statement to grant a permission (or all the available permissions) to a role.
 menu:
-  preview:
+  preview_api:
     parent: api-cassandra
     weight: 1281
 aliases:
   - /preview/api/cassandra/ddl_grant_permission
   - /preview/api/ycql/ddl_grant_permission
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 ## Synopsis
@@ -44,7 +43,7 @@ This statement is enabled by setting the YB-TServer flag [`--use_cassandra_authe
 
 ### Grammar
 
-```
+```ebnf
 grant_permission := GRANT all_permission | permission ON resource TO role_name;
 all_permissions := ALL [ PERMISSIONS ]
 permission :=  ( CREATE | ALTER | DROP | SELECT | MODIFY | AUTHORIZE | DESCRIBE | EXECUTE ) [ PERMISSION ]
@@ -92,19 +91,19 @@ Operation| Permission| Resource|
 
 ## Examples
 
-### Grant `MODIFY` permission on a table so role `qa` can insert rows into a table.
+### Grant `MODIFY` permission on a table so role `qa` can insert rows into a table
 
 ```sql
 ycqlsh:example> GRANT MODIFY ON TABLE performance_tests.metrics TO qa;
 ```
 
-### Grant `SELECT` permission on a table so role `qa` can read the table.
+### Grant `SELECT` permission on a table so role `qa` can read the table
 
 ```sql
 ycqlsh:example> GRANT SELECT ON performance_tests.metrics TO qa;
 ```
 
-### Grant `CREATE` permission on `ALL KEYSPACES` so role `tests` can create new keyspaces.
+### Grant `CREATE` permission on `ALL KEYSPACES` so role `tests` can create new keyspaces
 
 ```sql
 ycqlsh:example> GRANT CREATE ON ALL KEYSPACES TO tests;

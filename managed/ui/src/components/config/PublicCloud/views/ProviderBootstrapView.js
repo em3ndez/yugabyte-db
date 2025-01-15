@@ -1,6 +1,6 @@
 // Copyright (c) YugaByte, Inc.
 
-import React, { Component } from 'react';
+import { Component } from 'react';
 import { reduxForm } from 'redux-form';
 import { Row, Col } from 'react-bootstrap';
 import { YBButton } from '../../../common/forms/fields';
@@ -76,5 +76,6 @@ class ProviderBootstrapView extends Component {
 }
 
 export default reduxForm({
-  form: 'deleteProvider'
+  form: 'deleteProvider',
+  touchOnChange: true
 })(ProviderBootstrapView);

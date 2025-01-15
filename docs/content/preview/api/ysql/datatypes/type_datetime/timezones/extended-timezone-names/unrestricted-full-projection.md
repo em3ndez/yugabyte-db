@@ -2,14 +2,13 @@
 title: extended_timezone_names — unrestricted full projection [YSQL]
 headerTitle: extended_timezone_names — unrestricted full projection
 linkTitle: Unrestricted full projection
-description: Table. [YSQL]
+description: extended_timezone_names Table. [YSQL]
 menu:
-  preview:
+  preview_api:
     identifier: unrestricted-full-projection
     parent: extended-timezone-names
     weight: 10
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 This table selects every column of the _extended_timezone_names_ view with no restriction. The results are ordered by the _utc_offset_ column and then by the _name_ column. Trivial code adds the Markdown table notation.

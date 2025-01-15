@@ -4,12 +4,11 @@ headerTitle: Computing Bacon Numbers for a small set of synthetic actors and mov
 linkTitle: Bacon numbers for synthetic data
 description: This section shows how to compute Bacon Numbers using the same representation and code that you use for real IMDb data populated with synthetic data.
 menu:
-  preview:
+  preview_api:
     identifier: synthetic-data
     parent: bacon-numbers
     weight: 10
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 Before trying the code in this section, make sure that you have created the supporting infrastructure:

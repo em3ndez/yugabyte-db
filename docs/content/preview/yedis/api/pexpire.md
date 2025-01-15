@@ -9,13 +9,13 @@ menu:
 aliases:
   - /preview/api/redis/pexpire
   - /preview/api/yedis/pexpire
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 ## Synopsis
 
-<b>`PEXPIRE key timeout`</b><br>
+**`PEXPIRE key timeout`**
+
 This command works exactly like EXPIRE but the time to live of the key is specified in milliseconds instead of seconds.
 
 ## Return value

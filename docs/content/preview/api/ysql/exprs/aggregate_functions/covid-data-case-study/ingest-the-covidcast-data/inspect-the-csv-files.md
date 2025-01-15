@@ -3,12 +3,11 @@ title: Inspect the COVIDcast .csv files
 linkTitle: Inspect the COVIDcast data
 headerTitle: Inspect the COVIDcast .csv files
 menu:
-  preview:
+  preview_api:
     identifier: inspect-the-csv-files
     parent: ingest-the-covidcast-data
     weight: 10
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 ## What the columns in the .csv files mean

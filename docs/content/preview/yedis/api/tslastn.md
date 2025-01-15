@@ -9,18 +9,18 @@ menu:
 aliases:
   - /preview/api/redis/tslastn
   - /preview/api/yedis/tslastn
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 ## Synopsis
 
-<b>`TSLASTN key N`</b><br>
+**`TSLASTN key N`**
+
 This command fetches the latest N entries in the time series that is specified by the given `key`.
 The elements are returned in ascending order of timestamps.
 
-<li>If the given `key` is associated with non-timeseries data, an error is raised.</li>
-<li>If the given `N` is not a positive 32 bit integer, an error is raised.</li>
+- If the given `key` is associated with non-time series data, an error is raised.
+- If the given `N` is not a positive 32 bit integer, an error is raised.
 
 ## Return value
 

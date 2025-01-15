@@ -1,31 +1,19 @@
 // Copyright (c) YugaByte, Inc.
 
-import React, { Component, Fragment } from 'react';
+import { Component, Fragment } from 'react';
 import PropTypes from 'prop-types';
-import moment from 'moment';
-import MomentLocaleUtils, { formatDate, parseDate } from 'react-day-picker/moment';
 import { Field } from 'formik';
 import { Alert, Tabs, Tab, Row, Col } from 'react-bootstrap';
-import { YBFormInput, YBFormDatePicker, YBFormDropZone } from '../../../common/forms/fields';
+import { Box } from '@material-ui/core';
+
+import { YBFormInput, YBFormDropZone } from '../../../common/forms/fields';
 import { getPromiseState } from '../../../../utils/PromiseUtils';
 import { YBModalForm } from '../../../common/forms';
 import { isDefinedNotNull, isNonEmptyObject } from '../../../../utils/ObjectUtils';
 import YBInfoTip from '../../../common/descriptors/YBInfoTip';
-import { YBTag } from '../../../common/YBTag';
 import { MODES } from './Certificates';
-import './AddCertificateForm.scss';
 
-// react-day-picker lib requires this to be class component
-class DatePickerInput extends Component {
-  render() {
-    return (
-      <div className="date-picker-input" onClick={this.props.onClick}>
-        <input {...this.props} />
-        <i className="fa fa-calendar" />
-      </div>
-    );
-  }
-}
+import './AddCertificateForm.scss';
 
 export default class AddCertificateForm extends Component {
   static propTypes = {
@@ -54,7 +42,7 @@ export default class AddCertificateForm extends Component {
 
   readUploadedFileAsText = (inputFile, isRequired) => {
     const fileReader = new FileReader();
-    return new Promise((resolve, reject) => {
+    return new Promise((resolve) => {
       fileReader.onloadend = () => {
         resolve(fileReader.result);
       };
@@ -75,8 +63,6 @@ export default class AddCertificateForm extends Component {
       const keyFile = vals.keyContent;
       const formValues = {
         label: vals.certName,
-        certStart: Date.now(),
-        certExpiry: vals.certExpiry.valueOf(),
         certType: 'SelfSigned'
       };
       const fileArray = [
@@ -107,6 +93,21 @@ export default class AddCertificateForm extends Component {
           clientCertPath: vals.clientCertPath,
           clientKeyPath: vals.clientKeyPath
         }
+      };
+
+      this.readUploadedFileAsText(certificateFile, false)
+        .then((content) => {
+          formValues.certContent = content;
+          self.props.addCertificate(formValues, setSubmitting);
+        })
+        .catch((err) => {
+          console.warn(`File Upload gone wrong. ${err}`);
+          setSubmitting(false);
+        });
+    } else if (this.state.tab === 'k8s') {
+      const formValues = {
+        label: vals.certName,
+        certType: 'K8SCertManager'
       };
 
       this.readUploadedFileAsText(certificateFile, false)
@@ -156,21 +157,8 @@ export default class AddCertificateForm extends Component {
       errors.certName = 'Certificate name is required';
     }
 
-    if (this.state.tab !== 'hashicorp') {
-      if (!values.certExpiry) {
-        if (this.state.tab !== 'caSigned') {
-          errors.certExpiry = 'Expiration date is required';
-        }
-      } else {
-        const timestamp = Date.parse(values.certExpiry);
-        if (isNaN(timestamp) || timestamp < Date.now()) {
-          errors.certExpiry = 'Set a valid expiration date';
-        }
-      }
-
-      if (!values.certContent) {
-        errors.certContent = 'Certificate file is required';
-      }
+    if (this.state.tab !== 'hashicorp' && !values.certContent) {
+      errors.certContent = 'Certificate file is required';
     }
 
     if (this.state.tab === 'selfSigned') {
@@ -199,7 +187,7 @@ export default class AddCertificateForm extends Component {
       if (!values.vaultAddr) {
         errors.vaultAddr = 'Vault Address is Required';
       } else {
-        const exp = new RegExp(/^(?:http(s)?:\/\/)?[\w.-]+(?:[\w-]+)+:\d{1,5}$/);
+        const exp = new RegExp(/^(?:http(s)?:\/\/)?[\w.-]+:\d{1,5}(\/)?$/);
         if (!exp.test(values.vaultAddr))
           errors.vaultAddr = 'Vault Address must be a valid URL with port number';
       }
@@ -213,7 +201,7 @@ export default class AddCertificateForm extends Component {
   };
 
   tabSelect = (newTabKey, formikProps) => {
-    const { setFieldTouched, setFieldValue, setErrors, errors, values } = formikProps;
+    const { setFieldTouched, setFieldValue, setErrors, errors } = formikProps;
     const newErrors = { ...errors };
     if (this.state.tab !== newTabKey && newTabKey === 'selfSigned') {
       setFieldValue('rootCACert', '');
@@ -221,26 +209,12 @@ export default class AddCertificateForm extends Component {
       setFieldValue('nodeCertPrivate', '');
       setFieldValue('clientCertPath', '');
       setFieldValue('clientKeyPath', '', false);
-      if (values.certExpiry instanceof Date) {
-        setFieldValue(
-          'certExpiry',
-          new Date(
-            values.certExpiry.toLocaleDateString('default', {
-              month: 'long',
-              day: 'numeric',
-              year: 'numeric'
-            })
-          ),
-          false
-        );
-      }
+
       delete newErrors.rootCACert;
       delete newErrors.nodeCertPath;
       delete newErrors.nodeCertPrivate;
     } else if (this.state.tab !== newTabKey && newTabKey === 'caSigned') {
       setFieldValue('keyContent', null, false);
-      setFieldValue('certStart', null, false);
-      setFieldValue('certExpiry', null, false);
       delete newErrors.keyContent;
     }
     setFieldTouched('keyContent', false);
@@ -383,7 +357,6 @@ export default class AddCertificateForm extends Component {
     const isEditMode = mode === MODES.EDIT;
     const initialValues = {
       certName: '',
-      certExpiry: null,
       certContent: null,
       keyContent: null,
       rootCACert: '',
@@ -404,7 +377,7 @@ export default class AddCertificateForm extends Component {
     return initialValues;
   };
 
-  componentWillReceiveProps() {
+  UNSAFE_componentWillReceiveProps() {
     const { certificate, mode } = this.props;
     const isEditMode = mode === MODES.EDIT;
     if (isEditMode && certificate.type === 'HashicorpVault') this.setState({ tab: 'hashicorp' });
@@ -456,39 +429,21 @@ export default class AddCertificateForm extends Component {
                       label="Certificate Name"
                       required
                     />
-                    <Field
-                      name="certExpiry"
-                      component={YBFormDatePicker}
-                      label="Expiration Date"
-                      formatDate={formatDate}
-                      parseDate={parseDate}
-                      format="LL"
-                      placeholder="Select Date"
-                      dayPickerProps={{
-                        localeUtils: MomentLocaleUtils,
-                        initialMonth: moment().add(1, 'y').toDate(),
-                        disabledDays: {
-                          before: new Date()
-                        }
-                      }}
-                      required
-                      onDayChange={(val) => props.setFieldValue('certExpiry', val)}
-                      pickerComponent={DatePickerInput}
-                    />
-                    <Field
-                      name="certContent"
-                      component={YBFormDropZone}
-                      className="upload-file-button"
-                      title="Upload Root Certificate"
-                      required
-                    />
-                    <Field
-                      name="keyContent"
-                      component={YBFormDropZone}
-                      className="upload-file-button"
-                      title="Upload Key"
-                      required
-                    />
+                    <Box display="flex" flexDirection="column" gridGap="10px">
+                      <Field
+                        name="certContent"
+                        component={YBFormDropZone}
+                        title="Upload Root Certificate"
+                        required
+                      />
+                      <Field
+                        name="keyContent"
+                        component={YBFormDropZone}
+                        title="Upload Key"
+                        required
+                      />
+                    </Box>
+
                     {getPromiseState(addCertificate).isError() &&
                       isNonEmptyObject(addCertificate.error) && (
                         <Alert bsStyle="danger" variant="danger">
@@ -511,7 +466,6 @@ export default class AddCertificateForm extends Component {
                     <Field
                       name="certContent"
                       component={YBFormDropZone}
-                      className="upload-file-button"
                       title="Upload Root Certificate"
                       required
                     />
@@ -594,15 +548,36 @@ export default class AddCertificateForm extends Component {
                 )}
 
                 {isHCVaultEnabled && (
-                  <Tab
-                    eventKey="hashicorp"
-                    title={
-                      <>
-                        Hashicorp<YBTag>Beta</YBTag>
-                      </>
-                    }
-                  >
+                  <Tab eventKey="hashicorp" title="Hashicorp">
                     {this.getHCVaultForm()}
+                  </Tab>
+                )}
+
+                {!isEditMode && (
+                  <Tab eventKey="k8s" title="K8S cert-manager">
+                    <Field
+                      name="certName"
+                      component={YBFormInput}
+                      type="text"
+                      label="Certificate Name"
+                      required
+                    />
+
+                    <Field
+                      name="certContent"
+                      component={YBFormDropZone}
+                      title="Upload Root Certificate"
+                      required
+                    />
+
+                    {getPromiseState(addCertificate).isError() &&
+                      isNonEmptyObject(addCertificate.error) && (
+                        <Alert bsStyle="danger" variant="danger">
+                          Certificate adding has been failed:
+                          <br />
+                          {JSON.stringify(addCertificate.error)}
+                        </Alert>
+                      )}
                   </Tab>
                 )}
               </Tabs>

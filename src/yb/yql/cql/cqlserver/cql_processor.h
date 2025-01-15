@@ -19,8 +19,9 @@
 // different ExecContexts, so non-thread-safe fields should not be referenced there.
 //--------------------------------------------------------------------------------------------------
 
-#ifndef YB_YQL_CQL_CQLSERVER_CQL_PROCESSOR_H_
-#define YB_YQL_CQL_CQLSERVER_CQL_PROCESSOR_H_
+#pragma once
+
+#include <memory>
 
 #include "yb/rpc/service_if.h"
 
@@ -96,14 +97,15 @@ class CQLProcessor : public ql::QLProcessor {
   std::unique_ptr<ql::CQLResponse> ProcessRequest(const ql::RegisterRequest& req);
 
   // Get a prepared statement and adds it to the set of statements currently being executed.
-  std::shared_ptr<const CQLStatement> GetPreparedStatement(const ql::CQLMessage::QueryId& id);
+  Result<std::shared_ptr<const CQLStatement>> GetPreparedStatement(
+      const ql::CQLMessage::QueryId& id, SchemaVersion version);
 
   // Statement executed callback.
   void StatementExecuted(const Status& s, const ql::ExecutedResult::SharedPtr& result = nullptr);
 
   // Process statement execution result and error.
   std::unique_ptr<ql::CQLResponse> ProcessResult(const ql::ExecutedResult::SharedPtr& result);
-  std::unique_ptr<ql::CQLResponse> ProcessAuthResult(const string& saved_hash, bool can_login);
+  std::unique_ptr<ql::CQLResponse> ProcessAuthResult(const std::string& saved_hash, bool can_login);
   std::unique_ptr<ql::CQLResponse> ProcessError(
       const Status& s,
       boost::optional<ql::CQLMessage::QueryId> query_id = boost::none);
@@ -111,6 +113,19 @@ class CQLProcessor : public ql::QLProcessor {
   // Send response back to client.
   void PrepareAndSendResponse(const std::unique_ptr<ql::CQLResponse>& response);
   void SendResponse(const ql::CQLResponse& response);
+
+  void UpdateAshQueryId(const ql::CQLMessage::QueryId& query_id);
+
+  ql::CQLMessage::QueryId GetPrepQueryId() const {
+    return request_ && request_->opcode() == ql::CQLMessage::Opcode::EXECUTE
+        ? static_cast<const ql::ExecuteRequest&>(*request_).query_id() : "";
+  }
+
+  ql::CQLMessage::QueryId GetUnprepQueryId() const {
+    return request_ && request_->opcode() == ql::CQLMessage::Opcode::QUERY
+        ? CQLStatement::GetQueryId(ql_env_.CurrentKeyspace(),
+                                   static_cast<const ql::QueryRequest&>(*request_).query()) : "";
+  }
 
   const std::unordered_map<std::string, std::vector<std::string>> kSupportedOptions = {
       {ql::CQLMessage::kCQLVersionOption,
@@ -154,6 +169,8 @@ class CQLProcessor : public ql::QLProcessor {
    public:
     ProcessRequestTask& Bind(CQLProcessor* processor) {
       processor_ = processor;
+      wait_state_ = ash::WaitStateInfo::CurrentWaitState();
+      ASH_ENABLE_CONCURRENT_UPDATES();
       return *this;
     }
 
@@ -163,6 +180,9 @@ class CQLProcessor : public ql::QLProcessor {
     void Run() override {
       auto processor = processor_;
       processor_ = nullptr;
+      auto wait_state = wait_state_;
+      wait_state_ = nullptr;
+      ADOPT_WAIT_STATE(wait_state);
       std::unique_ptr<ql::CQLResponse> response(processor->ProcessRequest(*processor->request_));
       if (response != nullptr) {
         processor->SendResponse(*response);
@@ -172,6 +192,7 @@ class CQLProcessor : public ql::QLProcessor {
     void Done(const Status& status) override {}
 
     CQLProcessor* processor_ = nullptr;
+    ash::WaitStateInfoPtr wait_state_{nullptr};
   };
 
   friend class ProcessRequestTask;
@@ -181,5 +202,3 @@ class CQLProcessor : public ql::QLProcessor {
 
 }  // namespace cqlserver
 }  // namespace yb
-
-#endif  // YB_YQL_CQL_CQLSERVER_CQL_PROCESSOR_H_

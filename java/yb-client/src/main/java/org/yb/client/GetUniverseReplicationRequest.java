@@ -13,7 +13,7 @@
 package org.yb.client;
 
 import com.google.protobuf.Message;
-import org.jboss.netty.buffer.ChannelBuffer;
+import io.netty.buffer.ByteBuf;
 import org.yb.master.CatalogEntityInfo;
 import org.yb.master.MasterReplicationOuterClass;
 import org.yb.master.MasterTypes;
@@ -29,12 +29,12 @@ public class GetUniverseReplicationRequest extends YRpc<GetUniverseReplicationRe
   }
 
   @Override
-  ChannelBuffer serialize(Message header) {
+  ByteBuf serialize(Message header) {
     assert header.isInitialized();
 
     final MasterReplicationOuterClass.GetUniverseReplicationRequestPB.Builder builder =
-      MasterReplicationOuterClass.GetUniverseReplicationRequestPB.newBuilder().setProducerId(
-          replicationGroupName);
+        MasterReplicationOuterClass.GetUniverseReplicationRequestPB.newBuilder()
+            .setReplicationGroupId(replicationGroupName);
 
     return toChannelBuffer(header, builder.build());
   }

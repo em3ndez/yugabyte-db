@@ -11,11 +11,11 @@
 // under the License.
 //
 
-#ifndef YB_RPC_REFINED_STREAM_H
-#define YB_RPC_REFINED_STREAM_H
+#pragma once
 
 #include "yb/rpc/circular_read_buffer.h"
 #include "yb/rpc/stream.h"
+#include "yb/rpc/reactor_thread_role.h"
 
 #include "yb/util/mem_tracker.h"
 
@@ -29,9 +29,9 @@ YB_DEFINE_ENUM(LocalSide, (kClient)(kServer));
 class StreamRefiner {
  public:
   virtual void Start(RefinedStream* stream) = 0;
-  virtual CHECKED_STATUS ProcessHeader() = 0;
-  virtual CHECKED_STATUS Send(OutboundDataPtr data) = 0;
-  virtual CHECKED_STATUS Handshake() = 0;
+  virtual Status ProcessHeader() ON_REACTOR_THREAD = 0;
+  virtual Status Send(OutboundDataPtr data) = 0;
+  virtual Status Handshake() ON_REACTOR_THREAD = 0;
   virtual Result<ReadBufferFull> Read(StreamReadBuffer* out) = 0;
   virtual const Protocol* GetProtocol() = 0;
 
@@ -52,15 +52,15 @@ class RefinedStream : public Stream, public StreamContext {
 
   size_t GetPendingWriteBytes() override;
   void Close() override;
-  CHECKED_STATUS TryWrite() override;
+  Status TryWrite() override;
   void ParseReceived() override;
   bool Idle(std::string* reason) override;
   void DumpPB(const DumpRunningRpcsRequestPB& req, RpcConnectionPB* resp) override;
   const Endpoint& Remote() const override;
   const Endpoint& Local() const override;
-  CHECKED_STATUS Start(bool connect, ev::loop_ref* loop, StreamContext* context) override;
+  Status Start(bool connect, ev::loop_ref* loop, StreamContext* context) override;
   void Shutdown(const Status& status) override;
-  Result<size_t> Send(OutboundDataPtr data) override;
+  Result<size_t> Send(OutboundDataPtr data) ON_REACTOR_THREAD override;
   bool Cancelled(size_t handle) override;
   bool IsConnected() override;
   const Protocol* GetProtocol() override;
@@ -68,8 +68,8 @@ class RefinedStream : public Stream, public StreamContext {
   std::string ToString() const override;
 
   // Implementation StreamContext
-  Result<size_t> ProcessReceived(ReadBufferFull read_buffer_full) override;
-  void Connected() override;
+  Result<CallHandle> ProcessReceived(ReadBufferFull read_buffer_full) ON_REACTOR_THREAD override;
+  Status Connected() ON_REACTOR_THREAD override;
 
   void UpdateLastActivity() override;
   void UpdateLastRead() override;
@@ -77,9 +77,9 @@ class RefinedStream : public Stream, public StreamContext {
   void Transferred(const OutboundDataPtr& data, const Status& status) override;
   void Destroy(const Status& status) override;
 
-  CHECKED_STATUS Established(RefinedStreamState state);
-  CHECKED_STATUS SendToLower(OutboundDataPtr data);
-  CHECKED_STATUS StartHandshake();
+  Status Established(RefinedStreamState state) ON_REACTOR_THREAD;
+  Status SendToLower(OutboundDataPtr data) ON_REACTOR_THREAD;
+  Status StartHandshake();
 
   StreamContext& context() const {
     return *context_;
@@ -94,7 +94,7 @@ class RefinedStream : public Stream, public StreamContext {
   }
 
  private:
-  Result<size_t> Handshake();
+  Result<size_t> Handshake() ON_REACTOR_THREAD;
   Result<size_t> Read();
 
   std::unique_ptr<Stream> lower_stream_;
@@ -127,5 +127,3 @@ class RefinedStreamFactory : public StreamFactory {
 
 }  // namespace rpc
 }  // namespace yb
-
-#endif  // YB_RPC_REFINED_STREAM_H

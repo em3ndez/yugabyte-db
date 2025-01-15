@@ -4,12 +4,11 @@ linkTitle: Scatter-plot for 21-Oct-2020
 headerTitle: Average COVID-like symptoms vs average mask-wearing by state scatter plot for 21-Oct-2020
 description: Average COVID-like symptoms vs average mask-wearing by state scatter plot for 21-Oct-2020
 menu:
-  preview:
+  preview_api:
     identifier: scatter-plot-for-21-Oct-2020
     parent: analyze-the-covidcast-data
     weight: 30
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 ## Scatter-plot for 21-Oct-2020
@@ -91,7 +90,7 @@ as $body$
 
 This code, and the remaining code below, needed to make the scatter-plot for synthetic data is included in [`synthetic-data.sql`](../analysis-scripts/synthetic-data-sql/).
 
-It uses the function `normal_rand()`, brought by the [tablefunc](../../../../../../../explore/ysql-language-features/pg-extensions/#tablefunc-example) extension to add pseudorandomly generated normally distributed noise the y-axis values produced by the _"y = m*x + c"_ formula for the straight line.
+It uses the function `normal_rand()`, brought by the [tablefunc](../../../../../../../explore/ysql-language-features/pg-extensions/extension-tablefunc) extension to add pseudorandomly generated normally distributed noise the y-axis values produced by the _"y = m*x + c"_ formula for the straight line.
 
 It was then invoked like this:
 
@@ -150,4 +149,3 @@ Here is the resulting plot
 ![Scatter-plot for synthetic data](/images/api/ysql/exprs/aggregate_functions/covid-data-case-study/scatter-plot-synthetic-data.jpg):
 
 **Note:** The `normal_rand()` function produces a different set of pseudorandomly distributed values each time that  [`synthetic-data.sql`](../analysis-scripts/synthetic-data-sql/) is run. But the overall shape of the scatter-plot will remain the same.
-

@@ -47,7 +47,7 @@
 #include <functional>
 #include <set>
 
-#include <glog/logging.h>
+#include "yb/util/logging.h"
 #include <gtest/gtest.h>
 
 #include "yb/client/client-test-util.h"
@@ -80,19 +80,21 @@
 #include "yb/util/stopwatch.h"
 #include "yb/util/test_util.h"
 #include "yb/util/thread.h"
+#include "yb/util/flags.h"
 
 using namespace std::literals;
 
-DEFINE_int32(seconds_to_run, 5, "Number of seconds for which to run the test");
+DEFINE_NON_RUNTIME_int32(seconds_to_run, 5, "Number of seconds for which to run the test");
 
-DEFINE_int32(num_chains, 50, "Number of parallel chains to generate");
-DEFINE_int32(num_tablets, 3, "Number of tablets over which to split the data");
-DEFINE_bool(enable_mutation, true, "Enable periodic mutation of inserted rows");
-DEFINE_int32(num_snapshots, 3, "Number of snapshots to verify across replicas and reboots.");
+DEFINE_NON_RUNTIME_int32(num_chains, 50, "Number of parallel chains to generate");
+DEFINE_NON_RUNTIME_int32(num_tablets, 3, "Number of tablets over which to split the data");
+DEFINE_NON_RUNTIME_bool(enable_mutation, true, "Enable periodic mutation of inserted rows");
+DEFINE_NON_RUNTIME_int32(num_snapshots, 3,
+    "Number of snapshots to verify across replicas and reboots.");
 
-DEFINE_bool(stress_flush_compact, false,
+DEFINE_NON_RUNTIME_bool(stress_flush_compact, false,
             "Flush and compact way more aggressively to try to find bugs");
-DEFINE_bool(stress_wal_gc, false,
+DEFINE_NON_RUNTIME_bool(stress_wal_gc, false,
             "Set WAL segment size small so that logs will be GCed during the test");
 DECLARE_int32(replication_factor);
 DECLARE_string(ts_flags);
@@ -100,10 +102,11 @@ DECLARE_string(ts_flags);
 namespace yb {
 
 using yb::client::YBClient;
-using yb::client::YBClientBuilder;
-using yb::client::YBSchema;
-using yb::client::YBTableName;
 using std::shared_ptr;
+using std::string;
+using std::vector;
+using std::pair;
+using std::set;
 using yb::itest::TServerDetails;
 using yb::itest::MustBeCommitted;
 
@@ -137,27 +140,27 @@ class LinkedListTester {
         client_(client) {
     client::YBSchemaBuilder b;
 
-    b.AddColumn(kKeyColumnName)->Type(INT64)->NotNull()->HashPrimaryKey();
-    b.AddColumn(kLinkColumnName)->Type(INT64)->NotNull();
-    b.AddColumn(kInsertTsColumnName)->Type(INT64)->NotNull();
-    b.AddColumn(kUpdatedColumnName)->Type(BOOL)->NotNull();
+    b.AddColumn(kKeyColumnName)->Type(DataType::INT64)->NotNull()->HashPrimaryKey();
+    b.AddColumn(kLinkColumnName)->Type(DataType::INT64)->NotNull();
+    b.AddColumn(kInsertTsColumnName)->Type(DataType::INT64)->NotNull();
+    b.AddColumn(kUpdatedColumnName)->Type(DataType::BOOL)->NotNull();
     CHECK_OK(b.Build(&schema_));
   }
 
   // Create the table.
-  CHECKED_STATUS CreateLinkedListTable();
+  Status CreateLinkedListTable();
 
   // Load the table with the linked list test pattern.
   //
   // Runs for the amount of time designated by 'run_for'.
   // Sets *written_count to the number of rows inserted.
-  CHECKED_STATUS LoadLinkedList(
+  Status LoadLinkedList(
       const MonoDelta& run_for,
       int num_samples,
       int64_t* written_count);
 
   // Variant of VerifyLinkedListRemote that verifies at the specified snapshot hybrid_time.
-  CHECKED_STATUS VerifyLinkedListAtSnapshotRemote(
+  Status VerifyLinkedListAtSnapshotRemote(
       HybridTime snapshot_hybrid_time, const int64_t expected, const bool log_errors,
       const bool latest_at_leader, const std::function<Status(const std::string&)>& cb,
       int64_t* verified_count) {
@@ -175,10 +178,10 @@ class LinkedListTester {
   }
 
   // Variant of VerifyLinkedListRemote that verifies without specifying a snapshot hybrid_time.
-  CHECKED_STATUS VerifyLinkedListNoSnapshotRemote(const int64_t expected,
-                                                  const bool log_errors,
-                                                  const bool latest_at_leader,
-                                                  int64_t* verified_count) {
+  Status VerifyLinkedListNoSnapshotRemote(const int64_t expected,
+                                          const bool log_errors,
+                                          const bool latest_at_leader,
+                                          int64_t* verified_count) {
     LOG(INFO) << __func__ << ": expected=" << expected
               << ", log_errors=" << log_errors
               << ", latest_at_leader=" << latest_at_leader;
@@ -189,16 +192,16 @@ class LinkedListTester {
 
   // Run the verify step on a table with RPCs. Calls the provided callback 'cb' once during
   // verification to test scanner fault tolerance.
-  CHECKED_STATUS VerifyLinkedListRemote(
+  Status VerifyLinkedListRemote(
       HybridTime snapshot_hybrid_time, const int64_t expected, const bool log_errors,
       bool latest_at_leader, const std::function<Status(const std::string&)>& cb,
       int64_t* verified_count);
 
   // A variant of VerifyLinkedListRemote that is more robust towards ongoing
   // bootstrapping and replication.
-  CHECKED_STATUS WaitAndVerify(const int seconds_to_run,
-                               const int64_t expected,
-                               const bool latest_at_leader) {
+  Status WaitAndVerify(const int seconds_to_run,
+                       const int64_t expected,
+                       const bool latest_at_leader) {
     LOG(INFO) << __func__ << ": seconds_to_run=" << seconds_to_run
               << ", expected=" << expected
               << ", latest_at_leader=" << latest_at_leader;
@@ -207,7 +210,7 @@ class LinkedListTester {
   }
 
   // A variant of WaitAndVerify that also takes a callback to be run once during verification.
-  CHECKED_STATUS WaitAndVerify(
+  Status WaitAndVerify(
       int seconds_to_run, int64_t expected, bool latest_at_leader,
       const std::function<Status(const std::string&)>& cb);
 
@@ -229,7 +232,7 @@ class LinkedListTester {
   SnapsAndCounts sampled_hybrid_times_and_counts_;
 
  private:
-  CHECKED_STATUS ReturnOk(const std::string& str) { return Status::OK(); }
+  Status ReturnOk(const std::string& str) { return Status::OK(); }
 };
 
 } // namespace
@@ -321,7 +324,7 @@ class LinkedListChainGenerator {
     return (implicit_cast<uint64_t>(rand_.Next()) << 32) | rand_.Next();
   }
 
-  CHECKED_STATUS GenerateNextInsert(const client::TableHandle& table, client::YBSession* session) {
+  Status GenerateNextInsert(const client::TableHandle& table, client::YBSession* session) {
     // Encode the chain index in the lowest 8 bits so that different chains never
     // intersect.
     int64_t this_key = (Rand64() << 8) | chain_idx_;
@@ -376,8 +379,7 @@ class ScopedRowUpdater {
 
  private:
   void RowUpdaterThread() {
-    std::shared_ptr<client::YBSession> session(table_.client()->NewSession());
-    session->SetTimeout(15s);
+    auto session = table_.client()->NewSession(15s);
 
     int64_t next_key;
     std::vector<client::YBqlOpPtr> ops;
@@ -417,10 +419,12 @@ class PeriodicWebUIChecker {
     master_pages.push_back("/tables");
     master_pages.push_back("/dump-entities");
     master_pages.push_back("/tablet-servers");
+    master_pages.push_back("/api/v1/meta-cache");
 
     ts_pages.push_back("/metrics");
     ts_pages.push_back("/tablets");
     ts_pages.push_back(strings::Substitute("/transactions?tablet_id=$0", tablet_id));
+    ts_pages.push_back("/api/v1/meta-cache");
 
     // Generate list of urls for each master and tablet server
     for (size_t i = 0; i < cluster.num_masters(); i++) {
@@ -500,7 +504,7 @@ class LinkedListVerifier {
   void RegisterResult(int64_t key, int64_t link, bool updated);
 
   // Run the common verify step once the scanned data is stored.
-  CHECKED_STATUS VerifyData(int64_t* verified_count, bool log_errors);
+  Status VerifyData(int64_t* verified_count, bool log_errors);
 
  private:
   // Print a summary of the broken links to the log.
@@ -565,8 +569,7 @@ Status LinkedListTester::LoadLinkedList(
   auto start = CoarseMonoClock::Now();
   auto deadline = start + run_for.ToSteadyDuration();
 
-  std::shared_ptr<client::YBSession> session = client_->NewSession();
-  session->SetTimeout(30s);
+  auto session = client_->NewSession(30s);
 
   ScopedRowUpdater updater(table);
   std::vector<std::unique_ptr<LinkedListChainGenerator>> chains;
@@ -1060,8 +1063,8 @@ TEST_F(LinkedListTest, TestLoadWhileOneServerDownAndVerify) {
   FLAGS_ts_flags += "--log_cache_size_limit_mb=2";
   FLAGS_ts_flags += " --global_log_cache_size_limit_mb=4";
 
-  FLAGS_num_tablet_servers = 3;
-  FLAGS_num_tablets = 1;
+  ANNOTATE_UNPROTECTED_WRITE(FLAGS_num_tablet_servers) = 3;
+  ANNOTATE_UNPROTECTED_WRITE(FLAGS_num_tablets) = 1;
   ASSERT_NO_FATALS(BuildAndStart());
 
   LOG(INFO) << "Load the data with one of the three servers down.";

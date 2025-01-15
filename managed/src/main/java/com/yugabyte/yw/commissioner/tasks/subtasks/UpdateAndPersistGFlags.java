@@ -12,13 +12,17 @@ package com.yugabyte.yw.commissioner.tasks.subtasks;
 
 import com.yugabyte.yw.commissioner.BaseTaskDependencies;
 import com.yugabyte.yw.commissioner.tasks.UniverseTaskBase;
+import com.yugabyte.yw.common.gflags.GFlagsUtil;
+import com.yugabyte.yw.common.gflags.SpecificGFlags;
 import com.yugabyte.yw.forms.UniverseDefinitionTaskParams;
 import com.yugabyte.yw.forms.UniverseDefinitionTaskParams.Cluster;
-import com.yugabyte.yw.forms.UniverseDefinitionTaskParams.UserIntent;
 import com.yugabyte.yw.forms.UniverseTaskParams;
 import com.yugabyte.yw.models.Universe;
 import com.yugabyte.yw.models.Universe.UniverseUpdater;
+import java.util.List;
 import java.util.Map;
+import java.util.UUID;
+import java.util.stream.Collectors;
 import javax.inject.Inject;
 import lombok.extern.slf4j.Slf4j;
 
@@ -34,6 +38,8 @@ public class UpdateAndPersistGFlags extends UniverseTaskBase {
   public static class Params extends UniverseTaskParams {
     public Map<String, String> masterGFlags;
     public Map<String, String> tserverGFlags;
+    public List<UUID> clusterUUIDs;
+    public SpecificGFlags specificGFlags;
   }
 
   protected Params taskParams() {
@@ -42,7 +48,14 @@ public class UpdateAndPersistGFlags extends UniverseTaskBase {
 
   @Override
   public String getName() {
-    return super.getName() + "(" + taskParams().universeUUID + ")";
+    return super.getName()
+        + "(master: "
+        + taskParams().masterGFlags
+        + ", tserver:"
+        + taskParams().tserverGFlags
+        + ", specific:"
+        + taskParams().specificGFlags
+        + ")";
   }
 
   @Override
@@ -58,52 +71,57 @@ public class UpdateAndPersistGFlags extends UniverseTaskBase {
               UniverseDefinitionTaskParams universeDetails = universe.getUniverseDetails();
               // If this universe is not being updated, fail the request.
               if (!universeDetails.updateInProgress) {
-                String msg = "UserUniverse " + taskParams().universeUUID + " is not being updated.";
+                String msg =
+                    "UserUniverse " + taskParams().getUniverseUUID() + " is not being updated.";
                 log.error(msg);
                 throw new RuntimeException(msg);
               }
 
+              List<Cluster> clusterList;
+              if (taskParams().clusterUUIDs != null && taskParams().clusterUUIDs.size() > 0) {
+                clusterList =
+                    universeDetails.clusters.stream()
+                        .filter(c -> taskParams().clusterUUIDs.contains(c.uuid))
+                        .collect(Collectors.toList());
+              } else {
+                clusterList = universeDetails.clusters;
+              }
+              boolean usingSpecificGFlags = false;
               // Update the gflags.
-              UserIntent userIntent = universeDetails.getPrimaryCluster().userIntent;
-              userIntent.masterGFlags = taskParams().masterGFlags;
-              userIntent.tserverGFlags = taskParams().tserverGFlags;
-              if (userIntent.tserverGFlags.containsKey("ysql_enable_auth")) {
-                if (userIntent.tserverGFlags.get("ysql_enable_auth").equals("true")) {
-                  userIntent.enableYSQLAuth = true;
-                } else {
-                  userIntent.enableYSQLAuth = false;
-                }
-              }
-              if (userIntent.tserverGFlags.containsKey("use_cassandra_authentication")) {
-                if (userIntent.tserverGFlags.get("use_cassandra_authentication").equals("true")) {
-                  userIntent.enableYCQLAuth = true;
-                } else {
-                  userIntent.enableYCQLAuth = false;
-                }
-              }
-              for (Cluster cluster : universeDetails.getReadOnlyClusters()) {
+              for (Cluster cluster : clusterList) {
+                cluster.userIntent.specificGFlags = taskParams().specificGFlags;
                 cluster.userIntent.masterGFlags = taskParams().masterGFlags;
                 cluster.userIntent.tserverGFlags = taskParams().tserverGFlags;
-                if (cluster.userIntent.tserverGFlags.containsKey("ysql_enable_auth")) {
-                  if (cluster.userIntent.tserverGFlags.get("ysql_enable_auth").equals("true")) {
-                    cluster.userIntent.enableYSQLAuth = true;
-                  } else {
-                    cluster.userIntent.enableYSQLAuth = false;
-                  }
-                }
-                if (cluster.userIntent.tserverGFlags.containsKey("use_cassandra_authentication")) {
-                  if (cluster
-                      .userIntent
-                      .tserverGFlags
-                      .get("use_cassandra_authentication")
-                      .equals("true")) {
-                    cluster.userIntent.enableYCQLAuth = true;
-                  } else {
-                    cluster.userIntent.enableYCQLAuth = false;
-                  }
-                }
+                usingSpecificGFlags =
+                    usingSpecificGFlags || cluster.userIntent.specificGFlags != null;
               }
-
+              // Sync gflags to userIntent
+              for (Cluster cluster : universeDetails.clusters) {
+                Map<String, String> masterGFlags =
+                    GFlagsUtil.getBaseGFlags(ServerType.MASTER, cluster, universeDetails.clusters);
+                Map<String, String> tserverGFlags =
+                    GFlagsUtil.getBaseGFlags(ServerType.TSERVER, cluster, universeDetails.clusters);
+                if (usingSpecificGFlags) {
+                  // Updating old maps accordingly
+                  cluster.userIntent.masterGFlags = masterGFlags;
+                  cluster.userIntent.tserverGFlags = tserverGFlags;
+                  if (cluster.userIntent.specificGFlags != null) {
+                    SpecificGFlags primaryGFlags =
+                        universeDetails.getPrimaryCluster().userIntent.specificGFlags;
+                    if (primaryGFlags != null) {
+                      if (cluster.userIntent.specificGFlags.isInheritFromPrimary()) {
+                        cluster.userIntent.specificGFlags.setPerProcessFlags(
+                            primaryGFlags.getPerProcessFlags());
+                        cluster.userIntent.specificGFlags.setPerAZ(primaryGFlags.getPerAZ());
+                      }
+                      cluster.userIntent.specificGFlags.setGflagGroups(
+                          primaryGFlags.getGflagGroups());
+                    }
+                  }
+                }
+                GFlagsUtil.syncGflagsToIntent(masterGFlags, cluster.userIntent);
+                GFlagsUtil.syncGflagsToIntent(tserverGFlags, cluster.userIntent);
+              }
               universe.setUniverseDetails(universeDetails);
             }
           };

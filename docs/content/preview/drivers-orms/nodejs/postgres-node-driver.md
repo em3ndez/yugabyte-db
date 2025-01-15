@@ -1,23 +1,38 @@
 ---
-title: NodeJS drivers
-linkTitle: NodeJS drivers
-description: NodeJS drivers for YSQL
-headcontent: NodeJS drivers for YSQL
-image: /images/section_icons/sample-data/s_s1-sampledata-3x.png
+title: node-postgres Driver for YSQL
+headerTitle: Connect an application
+linkTitle: Connect an app
+description: Connect a node.js application using node-postgres Driver
 menu:
   preview:
-    name: NodeJS drivers
-    identifier: postgres-node-driver
+    identifier: node-driver-2-postgres
     parent: nodejs-drivers
     weight: 500
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 <ul class="nav nav-tabs-alt nav-tabs-yb">
+  <li class="active">
+    <a href="../yugabyte-node-driver/" class="nav-link">
+      YSQL
+    </a>
+  </li>
+  <li>
+    <a href="../ycql/" class="nav-link">
+      YCQL
+    </a>
+  </li>
+</ul>
 
+<ul class="nav nav-tabs-alt nav-tabs-yb">
+   <li >
+    <a href="../yugabyte-node-driver/" class="nav-link">
+      <i class="icon-postgres" aria-hidden="true"></i>
+      YugabyteDB node-postgres Smart Driver
+    </a>
+  </li>
   <li >
-    <a href="/preview/drivers-orms/nodejs/postgres-node-driver/" class="nav-link active">
+    <a href="../postgres-node-driver/" class="nav-link active">
       <i class="icon-postgres" aria-hidden="true"></i>
       PostgreSQL node-postgres Driver
     </a>
@@ -25,30 +40,46 @@ showAsideToc: true
 
 </ul>
 
-node-postgres is a collection of node.js modules for interfacing with your PostgreSQL database. It has support for callbacks, promises, async/await, connection pooling, prepared statements, cursors, streaming results, C/C++ bindings, rich type parsing, and more. YugabyteDB has full support for [node-postgres](https://node-postgres.com/).
+The [PostgreSQL node-postgres driver](https://node-postgres.com/) is the official Node.js driver for PostgreSQL which can be used to connect with YugabyteDB YSQL API. Because YugabyteDB YSQL API is fully compatible with PostgreSQL node-postgres (pg) driver, it allows Node.js programmers to connect to the YugabyteDB database to execute DMLs and DDLs using the node-postgres APIs.
 
-## CRUD operations with node-postgres driver
+## CRUD operations
 
-Learn how to establish a connection to YugabyteDB database and begin basic CRUD operations using the steps in [Build an Application](/preview/quick-start/build-apps/nodejs/ysql-pg/) in the Quick Start section.
+The following sections demonstrate how to perform common tasks required for Node.js application development using the PostgreSQL node-postgres driver.
 
-The following sections break down the quick start example to demonstrate how to perform common tasks required for Node.js application development using the PostgreSQL node-postgres driver.
+To start building your application, make sure you have met the [prerequisites](../#prerequisites).
 
-### Step 1: Download the driver dependency
+### Step 1: Install the driver dependency and async utility
 
-Download and install the node-postgres driver using the following command (you need to have Node.JS installed on your system):
+Download and install the node-postgres driver using the following command (you need to have Node.js installed on your system):
 
 ```sh
 npm install pg
 ```
 
-After this, you can start using the driver in your code.
+To install the async utility, run the following command:
 
-### Step 2: Connect to your cluster
+```sh
+$ npm install --save async
+```
 
-Before connecting to the YugabyteDB cluster, first import the `pg` package.
+You can start using the driver in your code.
 
-``` js
-  const pg = require('pg');
+### Step 2:  Set up the database connection
+
+The following table describes the connection parameters required to connect.
+
+| Parameter | Description | Default |
+| :-------- | :---------- | :------ |
+| host | Hostname of the YugabyteDB instance | localhost |
+| port | Listen port for YSQL | 5433 |
+| database | Database user | yugabyte |
+| user | User connecting to the database | yugabyte |
+| password | User password | yugabyte |
+
+Before connecting to the YugabyteDB cluster, import the `pg` package.
+
+```js
+const pg = require('pg');
 ```
 
 Create a client to connect to the cluster using a connection string.
@@ -59,110 +90,189 @@ const client = new Client(connectionString);
 client.connect()
 ```
 
-| Parameter | Description | Default |
-| :---------- | :---------- | :------ |
-| host  | Hostname of the YugabyteDB instance | localhost
-| port |  Listen port for YSQL | 5433
-| database | Database name | yugabyte
-| user | User connecting to the database | yugabyte
-| password | User password | yugabyte
-
 #### Use SSL
 
-The following is an example connection string for connecting to a YugabyteDB cluster with SSL enabled.
+The following table describes the connection parameters required to connect using TLS/SSL.
 
-```javascript
-const connectionString = "postgresql://user:password@localhost:port/database?ssl=true&sslmode=verify-full&sslrootcert=~/.postgresql/root.crt"
-const client = new Client(connectionString);
-client.connect()
+| Parameter | Description |
+| :-------- | :---------- |
+| sslmode | SSL mode |
+| sslrootcert | path to the root certificate on your computer |
+
+By default, the driver supports the `require` SSL mode, in which a root CA certificate isn't required to be configured. This enables SSL communication between the Node.js client and YugabyteDB servers.
+
+```js
+const config = {
+  user: ' ',
+  database: ' ',
+  host: ' ',
+  password: ' ',
+  port: 5433,
+  // this object will be passed to the TLSSocket constructor
+  ssl: {
+    rejectUnauthorized: false,
+  },
+}
 ```
 
-For other ways to provide connection and SSL-related details, refer to the [node-postgres](https://node-postgres.com/) documentation.
+If you created a cluster on YugabyteDB Aeon, use the cluster credentials and [download the SSL Root certificate](/preview/yugabyte-cloud/cloud-secure-clusters/cloud-authentication/#download-your-cluster-certificate).
 
-| JDBC Parameter | Description | Default |
-| :---------- | :---------- | :------ |
-| sslmode | SSL mode  | require
-| sslrootcert | path to the root certificate on your computer | ~/.postgresql/
+Refer to [Configure SSL/TLS](../postgres-pg-reference/#configure-ssl-tls) for more information on node-postgresql default and supported SSL modes, and other examples for setting up your connection strings when using SSL.
 
-If you have created a cluster on [YugabyteDB Managed](https://www.yugabyte.com/cloud/), [follow the steps](/preview/yugabyte-cloud/cloud-connect/connect-applications/) to obtain the cluster connection parameters and SSL Root certificate.
+### Step 3: Write your application
 
-### Step 3: Query the YugabyteDB cluster from your application
+Create a new JavaScript file called `QuickStartApp.js` in your project directory.
 
-Create a new JavaScript file called `QuickStartApp.js` in your project directory. Copy the following sample code, which sets up tables and queries the table contents. Replace the connection string `yburl` parameters with the cluster credentials and SSL certificate if required.
+Copy the following sample code to set up tables and query the table contents. Replace the connection string parameters with the cluster credentials if required.
 
-```javascript
-const pg = require('pg');
+```js
+var pg = require('pg');
+const async = require('async');
+const assert = require('assert');
 
-function createConnection(){
-    const yburl = "postgresql://yugabyte:yugabyte@localhost:5433/yugabyte";
-    const client = new pg.Client(yburl);
-    client.connect();
-    return client;
-}
+var connectionString = "postgres://postgres@localhost:5433/postgres";
+var client = new pg.Client(connectionString);
 
-async function createTableAndInsertData(client){
-    console.log("Connected to the YugabyteDB Cluster successfully.")
-    await client.query("DROP TABLE IF EXISTS employee").catch((err)=>{
-        console.log(err.stack);
-    })
-    await client.query("CREATE TABLE IF NOT EXISTS employee" +
-                "  (id int primary key, name varchar, age int, language text)").then(() => {
-                    console.log("Created table employee");
-                }).catch((err) => {
-                    console.log(err.stack);
-                })
-    
-    var insert_emp1 = "INSERT INTO employee VALUES (1, 'John', 35, 'Java')"
-    await client.query(insert_emp1).then(() => {
-        console.log("Inserted Employee 1");
-    }).catch((err)=>{
-        console.log(err.stack);
-    })
-    var insert_emp2 = "INSERT INTO employee VALUES (2, 'Sam', 37, 'JavaScript')"
-    await client.query(insert_emp2).then(() => {
-        console.log("Inserted Employee 2");
-    }).catch((err)=>{
-        console.log(err.stack);
-    })
-}
-
-async function fetchData(client){
-    try {
-        const res = await client.query("select * from employee")
-        console.log("Employees Information:")
-        for (let i = 0; i<res.rows.length; i++) {
-          console.log(`${i+1}. name = ${res.rows[i].name}, age = ${res.rows[i].age}, language = ${res.rows[i].language}`)
-        }
-      } catch (err) {
-        console.log(err.stack)
-      }
-}
-
-(async () => {
-    const client = createConnection();
-    if(client){
-        await createTableAndInsertData(client);
-        await fetchData(client);
-    }
-})();
+async.series([
+  function connect(next) {
+    client.connect(next);
+  },
+  function createTable(next) {
+    // The create table statement.
+    const create_table = 'CREATE TABLE employee (id int PRIMARY KEY, ' +
+                                                 'name varchar, ' +
+                                                 'age int, ' +
+                                                 'language varchar);';
+    // Create the table.
+    console.log('Creating table employee');
+    client.query(create_table, next);
+  },
+  function insert(next) {
+    // Create a variable with the insert statement.
+    const insert = "INSERT INTO employee (id, name, age, language) " +
+                                        "VALUES (1, 'John', 35, 'NodeJS');";
+    // Insert a row with the employee data.
+    console.log('Inserting row with: %s', insert)
+    client.query(insert, next);
+  },
+  function select(next) {
+    // Query the row for employee id 1 and print the results to the console.
+    const select = 'SELECT name, age, language FROM employee WHERE id = 1;';
+    client.query(select, function (err, result) {
+      if (err) return next(err);
+      var row = result.rows[0];
+      console.log('Query for id=1 returned: name=%s, age=%d, language=%s',
+                                            row.name, row.age, row.language);
+      next();
+    });
+  }
+], function (err) {
+  if (err) {
+    console.error('There was an error', err.message, err.stack);
+  }
+  console.log('Shutting down');
+  client.end();
+});
 ```
 
-When you run the application using the command `node QuickStartApp.js`, you should see output similar to the following:
+Run the application `QuickStartApp.js` using the following command:
+
+```js
+node QuickStartApp.js
+```
+
+You should see output similar to the following:
 
 ```output
-Connected to the YugabyteDB Cluster successfully.
-Created table employee
-Inserted Employee 1
-Inserted Employee 2
-Employees Information:
-1. name = John, age = 35, language = Java
-2. name = Sam, age = 37, language = JavaScript
+Creating table employee
+Inserting row with: INSERT INTO employee (id, name, age, language) VALUES (1, 'John', 35, 'NodeJS');
+Query for id=1 returned: name=John, age=35, language=NodeJS
+Shutting down
 ```
 
-If there is no output or you get an error, verify the parameters included in the connection string.
+### Step 4: Write your application with SSL (Optional)
 
-After completing these steps, you should have a working Node.JS app that uses the PostgreSQL node.js driver to connect to your cluster, set up tables, run queries, and print out results.
+Copy the following sample code to QuickStartApp.js and replace the values for the `config` object as appropriate for your cluster if you're using SSL.
 
-## Next steps
+```js
+var pg = require('pg');
+const async = require('async');
+const assert = require('assert');
+const fs = require('fs');
+const config = {
+  user: 'admin',
+  database: 'yugabyte',
+  host: '22420e3a-768b-43da-8dcb-xxxxxx.aws.yugabyte.cloud',
+  password: 'xxxxxx',
+  port: 5433,
+  // this object will be passed to the TLSSocket constructor
+  ssl: {
+    rejectUnauthorized: false,
+  },
+}
 
-- Learn how to build Node.js applications using [Sequelize ORM](../sequelize).
+var client = new pg.Client(config);
+
+async.series([
+  function connect(next) {
+    client.connect(next);
+  },
+  function createTable(next) {
+    // The create table statement.
+    const create_table = 'CREATE TABLE IF NOT EXISTS employee (id int PRIMARY KEY, ' +
+                                                               'name varchar, ' +
+                                                               'age int, ' +
+                                                               'language varchar);';
+    // Create the table.
+    console.log('Creating table employee');
+    client.query(create_table, next);
+  },
+  function insert(next) {
+    // Create a variable with the insert statement.
+    const insert = "INSERT INTO employee (id, name, age, language) " +
+                                         "VALUES (2, 'John', 35, 'NodeJS + SSL');";
+    // Insert a row with the employee data.
+    console.log('Inserting row with: %s', insert)
+    client.query(insert, next);
+  },
+  function select(next) {
+    // Query the row for employee id 2 and print the results to the console.
+    const select = 'SELECT name, age, language FROM employee WHERE id = 2;';
+    client.query(select, function (err, result) {
+      if (err) return next(err);
+      var row = result.rows[0];
+      console.log('Query for id=2 returned: name=%s, age=%d, language=%s',
+                                            row.name, row.age, row.language);
+      next();
+    });
+  }
+], function (err) {
+  if (err) {
+    console.error('There was an error', err.message, err.stack);
+  }
+  console.log('Shutting down');
+  client.end();
+});
+
+```
+
+Run the application `QuickStartApp.js` using the following command:
+
+```js
+node QuickStartApp.js
+```
+
+You should see output similar to the following if you're using SSL:
+
+```output
+Creating table employee
+Inserting row with: INSERT INTO employee (id, name, age, language) VALUES (2, 'John', 35, 'NodeJS + SSL');
+Query for id=2 returned: name=John, age=35, language=NodeJS + SSL
+Shutting down
+```
+
+If there is no output or you get an error, verify the parameters included in the `config` object.
+
+## Learn more
+
+[YugabyteDB smart drivers for YSQL](../../smart-drivers/)

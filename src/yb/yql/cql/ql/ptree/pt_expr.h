@@ -15,14 +15,13 @@
 // Tree node definitions for expression.
 //--------------------------------------------------------------------------------------------------
 
-#ifndef YB_YQL_CQL_QL_PTREE_PT_EXPR_H_
-#define YB_YQL_CQL_QL_PTREE_PT_EXPR_H_
+#pragma once
 
 #include <boost/optional.hpp>
 
 #include "yb/common/common_fwd.h"
 #include "yb/common/ql_datatype.h"
-#include "yb/common/ql_name.h"
+#include "yb/qlexpr/ql_name.h"
 
 #include "yb/util/net/net_fwd.h"
 
@@ -31,6 +30,7 @@
 #include "yb/yql/cql/ql/ptree/pt_expr_types.h"
 #include "yb/yql/cql/ql/ptree/sem_state.h"
 #include "yb/yql/cql/ql/ptree/tree_node.h"
+#include "yb/yql/cql/ql/ql_processor.h"
 
 namespace yb {
 
@@ -202,7 +202,8 @@ class PTExpr : public TreeNode {
   //     When loading column descriptor from Catalog::Table and Catalog::IndexTable, we might want
   //     to read the name that is kept in the Catalog. Unmangled name for regular column, and
   //     mangled name for index-expression column.
-  virtual std::string QLName(QLNameOption option = QLNameOption::kUserOriginalName) const {
+  virtual std::string QLName(
+      qlexpr::QLNameOption option = qlexpr::QLNameOption::kUserOriginalName) const {
     LOG(INFO) << "Missing QLName for expression("
               << static_cast<int>(expr_op())
               << ") that is being selected";
@@ -210,7 +211,7 @@ class PTExpr : public TreeNode {
   }
 
   virtual std::string MangledName() const {
-    return QLName(QLNameOption::kMangledName);
+    return QLName(qlexpr::QLNameOption::kMangledName);
   }
 
   virtual std::string MetadataName() const;
@@ -290,7 +291,7 @@ class PTExpr : public TreeNode {
                                        PTBaseTypePtr data_type);
 
   // Predicate for updating counter.  Only '+' and '-' expression support counter update.
-  virtual CHECKED_STATUS CheckCounterUpdateSupport(SemContext *sem_context) const;
+  virtual Status CheckCounterUpdateSupport(SemContext *sem_context) const;
 
   // All expressions must define this Analyze() function, which does the following steps.
   // - Call Analyze() on child treenodes to run semantic analysis on the child nodes. The child
@@ -299,48 +300,48 @@ class PTExpr : public TreeNode {
   // - Run semantic analysis on this node.
   // - The main job of semantics analysis is to run type resolution to find the correct values for
   //   ql_type and internal_type_ for expressions.
-  virtual CHECKED_STATUS Analyze(SemContext *sem_context) override = 0;
+  virtual Status Analyze(SemContext *sem_context) override = 0;
 
   // Check if this expression represents a column in an INDEX table.
   bool CheckIndexColumn(SemContext *sem_context);
 
   // Check if an operator is allowed in the current context before analyzing it.
-  virtual CHECKED_STATUS CheckOperator(SemContext *sem_context);
+  virtual Status CheckOperator(SemContext *sem_context);
 
   // The following functions are called to setup the states before analyzing an operand.
-  virtual CHECKED_STATUS SetupSemStateForOp1(SemState *sem_state);
-  virtual CHECKED_STATUS SetupSemStateForOp2(SemState *sem_state);
-  virtual CHECKED_STATUS SetupSemStateForOp3(SemState *sem_state);
+  virtual Status SetupSemStateForOp1(SemState *sem_state);
+  virtual Status SetupSemStateForOp2(SemState *sem_state);
+  virtual Status SetupSemStateForOp3(SemState *sem_state);
 
   // These functions are called by analyze to run type resolution on this expression.
-  virtual CHECKED_STATUS AnalyzeOperator(SemContext *sem_context);
-  virtual CHECKED_STATUS AnalyzeOperator(SemContext *sem_context,
+  virtual Status AnalyzeOperator(SemContext *sem_context);
+  virtual Status AnalyzeOperator(SemContext *sem_context,
                                          PTExprPtr op1);
-  virtual CHECKED_STATUS AnalyzeOperator(SemContext *sem_context,
+  virtual Status AnalyzeOperator(SemContext *sem_context,
                                          PTExprPtr op1,
                                          PTExprPtr op2);
-  virtual CHECKED_STATUS AnalyzeOperator(SemContext *sem_context,
+  virtual Status AnalyzeOperator(SemContext *sem_context,
                                          PTExprPtr op1,
                                          PTExprPtr op2,
                                          PTExprPtr op3);
 
   // Analyze LHS expression.
-  virtual CHECKED_STATUS CheckLhsExpr(SemContext *sem_context);
+  virtual Status CheckLhsExpr(SemContext *sem_context);
 
   // Analyze RHS expression.
-  virtual CHECKED_STATUS CheckRhsExpr(SemContext *sem_context);
+  virtual Status CheckRhsExpr(SemContext *sem_context);
 
   // Check if left and right values are compatible.
-  virtual CHECKED_STATUS CheckInequalityOperands(SemContext *sem_context,
+  virtual Status CheckInequalityOperands(SemContext *sem_context,
                                                  PTExprPtr lhs,
                                                  PTExprPtr rhs);
   // Check if left and right values are compatible.
-  virtual CHECKED_STATUS CheckEqualityOperands(SemContext *sem_context,
+  virtual Status CheckEqualityOperands(SemContext *sem_context,
                                                PTExprPtr lhs,
                                                PTExprPtr rhs);
 
   // Compare this node datatype with the expected type from the parent treenode.
-  virtual CHECKED_STATUS CheckExpectedTypeCompatibility(SemContext *sem_context);
+  virtual Status CheckExpectedTypeCompatibility(SemContext *sem_context);
 
   // Access function for descriptor.
   const ColumnDesc *index_desc() const {
@@ -408,8 +409,8 @@ class PTCollectionExpr : public PTExpr {
   }
 
   // Fill in udtype_field_values collection, copying values in accordance to UDT field order
-  CHECKED_STATUS InitializeUDTValues(const QLTypePtr& expected_type,
-                                     ProcessContextBase* process_context);
+  Status InitializeUDTValues(const QLTypePtr& expected_type,
+                             ProcessContextBase* process_context);
 
   int size() const {
     return static_cast<int>(values_.size());
@@ -427,7 +428,7 @@ class PTCollectionExpr : public PTExpr {
     return udtype_field_values_;
   }
 
-  virtual CHECKED_STATUS Analyze(SemContext *sem_context) override;
+  virtual Status Analyze(SemContext *sem_context) override;
 
   // Support for shared_ptr.
   template<typename... TypeArgs>
@@ -471,7 +472,7 @@ class PTExpr0 : public expr_class {
     return MCMakeShared<PTExpr0>(memctx, std::forward<TypeArgs>(args)...);
   }
 
-  virtual CHECKED_STATUS Analyze(SemContext *sem_context) override {
+  virtual Status Analyze(SemContext *sem_context) override {
     // Before traversing the expression, check if this whole expression is actually a column.
     if (this->CheckIndexColumn(sem_context)) {
       return Status::OK();
@@ -520,7 +521,7 @@ class PTExpr1 : public expr_class {
     return op1_;
   }
 
-  virtual CHECKED_STATUS Analyze(SemContext *sem_context) override {
+  virtual Status Analyze(SemContext *sem_context) override {
     // Before traversing the expression, check if this whole expression is actually a column.
     if (this->CheckIndexColumn(sem_context)) {
       return Status::OK();
@@ -586,7 +587,7 @@ class PTExpr2 : public expr_class {
     return op2_;
   }
 
-  virtual CHECKED_STATUS Analyze(SemContext *sem_context) override {
+  virtual Status Analyze(SemContext *sem_context) override {
     // Before traversing the expression, check if this whole expression is actually a column.
     if (this->CheckIndexColumn(sem_context)) {
       return Status::OK();
@@ -662,7 +663,7 @@ class PTExpr3 : public expr_class {
     return op3_;
   }
 
-  virtual CHECKED_STATUS Analyze(SemContext *sem_context) override {
+  virtual Status Analyze(SemContext *sem_context) override {
     // Before traversing the expression, check if this whole expression is actually a column.
     if (this->CheckIndexColumn(sem_context)) {
       return Status::OK();
@@ -783,12 +784,12 @@ class PTExprConst : public PTExpr0<itype, ytype>,
   }
 
   using PTExpr0<itype, ytype>::AnalyzeOperator;
-  virtual CHECKED_STATUS AnalyzeOperator(SemContext *sem_context) override {
+  virtual Status AnalyzeOperator(SemContext *sem_context) override {
     // Nothing to do: constant expressions should be initialized with valid data type already
     return Status::OK();
   };
 
-  virtual std::string QLName(QLNameOption option = QLNameOption::kUserOriginalName)
+  virtual std::string QLName(qlexpr::QLNameOption option = qlexpr::QLNameOption::kUserOriginalName)
       const override {
     return LiteralType::ToQLName(LiteralType::value());
   }
@@ -825,7 +826,8 @@ class PTStar : public PTNull {
     return MCMakeShared<PTStar>(memctx, std::forward<TypeArgs>(args)...);
   }
 
-  virtual std::string QLName(QLNameOption option = QLNameOption::kUserOriginalName) const override {
+  virtual std::string QLName(
+      qlexpr::QLNameOption option = qlexpr::QLNameOption::kUserOriginalName) const override {
     return "";
   }
 
@@ -844,20 +846,20 @@ class PTLiteralString : public PTLiteral<MCSharedPtr<MCString>> {
   explicit PTLiteralString(MCSharedPtr<MCString> value);
   virtual ~PTLiteralString();
 
-  CHECKED_STATUS ToInt64(int64_t *value, bool negate) const;
-  CHECKED_STATUS ToDouble(long double *value, bool negate) const;
-  CHECKED_STATUS ToDecimal(util::Decimal *value, bool negate) const;
-  CHECKED_STATUS ToDecimal(std::string *value, bool negate) const;
-  CHECKED_STATUS ToVarInt(std::string *value, bool negate) const;
+  Status ToInt64(int64_t *value, bool negate) const;
+  Status ToDouble(long double *value, bool negate) const;
+  Status ToDecimal(util::Decimal *value, bool negate) const;
+  Status ToDecimal(std::string *value, bool negate) const;
+  Status ToVarInt(std::string *value, bool negate) const;
 
   std::string ToString() const;
 
-  CHECKED_STATUS ToString(std::string *value) const;
-  CHECKED_STATUS ToTimestamp(int64_t *value) const;
-  CHECKED_STATUS ToDate(uint32_t *value) const;
-  CHECKED_STATUS ToTime(int64_t *value) const;
+  Status ToString(std::string *value) const;
+  Status ToTimestamp(int64_t *value, const QLMetrics *ql_metrics) const;
+  Status ToDate(uint32_t *value) const;
+  Status ToTime(int64_t *value) const;
 
-  CHECKED_STATUS ToInetaddress(InetAddress *value) const;
+  Status ToInetaddress(InetAddress *value) const;
 };
 
 // Class representing a json operator.
@@ -884,7 +886,7 @@ class PTJsonOperator : public PTExpr {
   }
 
   // Node semantics analysis.
-  virtual CHECKED_STATUS Analyze(SemContext *sem_context) override;
+  virtual Status Analyze(SemContext *sem_context) override;
 
   const PTExprPtr& arg() const {
     return arg_;
@@ -895,12 +897,13 @@ class PTJsonOperator : public PTExpr {
   }
 
   // Selected name.
-  std::string QLName(QLNameOption option = QLNameOption::kUserOriginalName) const override {
+  std::string QLName(
+      qlexpr::QLNameOption option = qlexpr::QLNameOption::kUserOriginalName) const override {
     std::string jquote = "'";
     std::string op_name = json_operator_ == JsonOperator::JSON_OBJECT ? "->" : "->>";
     std::string jattr = arg_->QLName(option);
-    if (option == QLNameOption::kMangledName) {
-      jattr = YcqlName::MangleJsonAttrName(jattr);
+    if (option == qlexpr::QLNameOption::kMangledName) {
+      jattr = qlexpr::YcqlName::MangleJsonAttrName(jattr);
     }
 
     return op_name + jquote + jattr + jquote;
@@ -929,14 +932,14 @@ class PTLogicExpr : public PTExpr {
   }
 
   // Setup states before analyzing operand.
-  virtual CHECKED_STATUS SetupSemStateForOp1(SemState *sem_state) override;
-  virtual CHECKED_STATUS SetupSemStateForOp2(SemState *sem_state) override;
+  virtual Status SetupSemStateForOp1(SemState *sem_state) override;
+  virtual Status SetupSemStateForOp2(SemState *sem_state) override;
 
   // Analyze this operator.
   using PTExpr::AnalyzeOperator;
-  virtual CHECKED_STATUS AnalyzeOperator(SemContext *sem_context,
+  virtual Status AnalyzeOperator(SemContext *sem_context,
                                          PTExprPtr op1) override;
-  virtual CHECKED_STATUS AnalyzeOperator(SemContext *sem_context,
+  virtual Status AnalyzeOperator(SemContext *sem_context,
                                          PTExprPtr op1,
                                          PTExprPtr op2) override;
 };
@@ -957,22 +960,23 @@ class PTRelationExpr : public PTExpr {
   }
 
   // Setup states before analyzing operands.
-  virtual CHECKED_STATUS SetupSemStateForOp1(SemState *sem_state) override;
-  virtual CHECKED_STATUS SetupSemStateForOp2(SemState *sem_state) override;
-  virtual CHECKED_STATUS SetupSemStateForOp3(SemState *sem_state) override;
+  virtual Status SetupSemStateForOp1(SemState *sem_state) override;
+  virtual Status SetupSemStateForOp2(SemState *sem_state) override;
+  virtual Status SetupSemStateForOp3(SemState *sem_state) override;
 
   // Analyze this operator after all operands were analyzed.
-  virtual CHECKED_STATUS AnalyzeOperator(SemContext *sem_context) override;
-  virtual CHECKED_STATUS AnalyzeOperator(SemContext *sem_context,
+  virtual Status AnalyzeOperator(SemContext *sem_context) override;
+  virtual Status AnalyzeOperator(SemContext *sem_context,
                                          PTExprPtr op1) override;
-  virtual CHECKED_STATUS AnalyzeOperator(SemContext *sem_context,
+  virtual Status AnalyzeOperator(SemContext *sem_context,
                                          PTExprPtr op1,
                                          PTExprPtr op2) override;
-  virtual CHECKED_STATUS AnalyzeOperator(SemContext *sem_context,
+  virtual Status AnalyzeOperator(SemContext *sem_context,
                                          PTExprPtr op1,
                                          PTExprPtr op2,
                                          PTExprPtr op3) override;
-  std::string QLName(QLNameOption option = QLNameOption::kUserOriginalName) const override;
+  std::string QLName(
+      qlexpr::QLNameOption option = qlexpr::QLNameOption::kUserOriginalName) const override;
 };
 
 //--------------------------------------------------------------------------------------------------
@@ -994,11 +998,11 @@ class PTOperatorExpr : public PTExpr {
   }
 
   // Setup states before analyzing operands.
-  virtual CHECKED_STATUS SetupSemStateForOp1(SemState *sem_state) override;
+  virtual Status SetupSemStateForOp1(SemState *sem_state) override;
 
   // Analyze this operator after all operands were analyzed.
   using PTExpr::AnalyzeOperator;
-  virtual CHECKED_STATUS AnalyzeOperator(SemContext *sem_context, PTExprPtr op1) override;
+  virtual Status AnalyzeOperator(SemContext *sem_context, PTExprPtr op1) override;
 };
 
 //--------------------------------------------------------------------------------------------------
@@ -1027,15 +1031,16 @@ class PTRef : public PTOperator0 {
   void PrintSemanticAnalysisResult(SemContext *sem_context);
 
   using PTOperatorExpr::AnalyzeOperator;
-  virtual CHECKED_STATUS AnalyzeOperator(SemContext *sem_context) override;
+  virtual Status AnalyzeOperator(SemContext *sem_context) override;
 
   // Add the name of column that is being referenced to output parameter.
   void CollectReferencedIndexColnames(MCSet<std::string> *col_names) const override {
-    col_names->insert(QLName(QLNameOption::kMangledName));
+    col_names->insert(QLName(qlexpr::QLNameOption::kMangledName));
   }
 
   // Selected name.
-  std::string QLName(QLNameOption option = QLNameOption::kUserOriginalName) const override;
+  std::string QLName(
+      qlexpr::QLNameOption option = qlexpr::QLNameOption::kUserOriginalName) const override;
 
   // Access function for name.
   const PTQualifiedNamePtr& name() const {
@@ -1056,7 +1061,7 @@ class PTRef : public PTOperator0 {
   }
 
   // Analyze LHS expression.
-  virtual CHECKED_STATUS CheckLhsExpr(SemContext *sem_context) override;
+  virtual Status CheckLhsExpr(SemContext *sem_context) override;
 
  private:
   PTQualifiedNamePtr name_;
@@ -1089,7 +1094,7 @@ class PTJsonColumnWithOperators : public PTOperator0 {
   }
 
   using PTOperatorExpr::AnalyzeOperator;
-  virtual CHECKED_STATUS AnalyzeOperator(SemContext *sem_context) override;
+  virtual Status AnalyzeOperator(SemContext *sem_context) override;
 
   // Access function for name.
   const PTQualifiedNamePtr& name() const {
@@ -1098,11 +1103,12 @@ class PTJsonColumnWithOperators : public PTOperator0 {
 
   // Add the name of this JSONB expression to output parameter.
   void CollectReferencedIndexColnames(MCSet<std::string> *col_names) const override {
-    col_names->insert(QLName(QLNameOption::kMangledName));
+    col_names->insert(QLName(qlexpr::QLNameOption::kMangledName));
   }
 
   // Selected name.
-  std::string QLName(QLNameOption option = QLNameOption::kUserOriginalName) const override;
+  std::string QLName(
+      qlexpr::QLNameOption option = qlexpr::QLNameOption::kUserOriginalName) const override;
 
   const PTExprListNode::SharedPtr& operators() const {
     return operators_;
@@ -1119,7 +1125,7 @@ class PTJsonColumnWithOperators : public PTOperator0 {
   }
 
   // Analyze LHS expression.
-  CHECKED_STATUS CheckLhsExpr(SemContext *sem_context) override;
+  Status CheckLhsExpr(SemContext *sem_context) override;
 
  private:
   PTQualifiedNamePtr name_;
@@ -1156,14 +1162,14 @@ class PTSubscriptedColumn : public PTOperator0 {
   void PrintSemanticAnalysisResult(SemContext *sem_context);
 
   using PTOperatorExpr::AnalyzeOperator;
-  virtual CHECKED_STATUS AnalyzeOperator(SemContext *sem_context) override;
+  virtual Status AnalyzeOperator(SemContext *sem_context) override;
 
   // Access function for name.
   const PTQualifiedNamePtr& name() const {
     return name_;
   }
 
-  // Access function for name.
+  // Access function for args.
   const PTExprListNode::SharedPtr& args() const {
     return args_;
   }
@@ -1182,7 +1188,10 @@ class PTSubscriptedColumn : public PTOperator0 {
   }
 
   // Analyze LHS expression.
-  virtual CHECKED_STATUS CheckLhsExpr(SemContext *sem_context) override;
+  virtual Status CheckLhsExpr(SemContext *sem_context) override;
+
+  virtual std::string QLName(
+      qlexpr::QLNameOption option = qlexpr::QLNameOption::kUserOriginalName) const override;
 
  private:
   PTQualifiedNamePtr name_;
@@ -1213,14 +1222,15 @@ class PTAllColumns : public PTOperator0 {
   }
 
   using PTOperatorExpr::AnalyzeOperator;
-  virtual CHECKED_STATUS AnalyzeOperator(SemContext *sem_context) override;
+  virtual Status AnalyzeOperator(SemContext *sem_context) override;
 
   // Node type.
   virtual TreeNodeOpcode opcode() const override {
     return TreeNodeOpcode::kPTAllColumns;
   }
 
-  std::string QLName(QLNameOption option = QLNameOption::kUserOriginalName) const override {
+  std::string QLName(
+      qlexpr::QLNameOption option = qlexpr::QLNameOption::kUserOriginalName) const override {
     // We should not get here as '*' should have been converted into a list of column name before
     // the selected tuple is constructed and described.
     VLOG(3) << "Calling QLName for '*' is not expected";
@@ -1259,12 +1269,13 @@ class PTExprAlias : public PTOperator1 {
     return MCMakeShared<PTExprAlias>(memctx, std::forward<TypeArgs>(args)...);
   }
 
-  virtual CHECKED_STATUS SetupSemStateForOp1(SemState *sem_state) override;
+  virtual Status SetupSemStateForOp1(SemState *sem_state) override;
 
   using PTOperatorExpr::AnalyzeOperator;
-  virtual CHECKED_STATUS AnalyzeOperator(SemContext *sem_context, PTExprPtr op1) override;
+  virtual Status AnalyzeOperator(SemContext *sem_context, PTExprPtr op1) override;
 
-  std::string QLName(QLNameOption option = QLNameOption::kUserOriginalName) const override {
+  std::string QLName(
+      qlexpr::QLNameOption option = qlexpr::QLNameOption::kUserOriginalName) const override {
     return alias_->c_str();
   }
 
@@ -1312,7 +1323,7 @@ class PTBindVar : public PTExpr {
   }
 
   // Node semantics analysis.
-  virtual CHECKED_STATUS Analyze(SemContext *sem_context) override;
+  virtual Status Analyze(SemContext *sem_context) override;
   void PrintSemanticAnalysisResult(SemContext *sem_context);
 
   // Access functions for position.
@@ -1331,6 +1342,11 @@ class PTBindVar : public PTExpr {
     return name_;
   }
 
+  // Access functions for alternative names.
+  const MCSharedPtr<MCVector<MCSharedPtr<MCString>>> &alternative_names() const {
+    return alternative_names_;
+  }
+
   // Access function for hash column if available.
   const ColumnDesc *hash_col() const {
     return hash_col_;
@@ -1341,8 +1357,10 @@ class PTBindVar : public PTExpr {
     return TreeNodeOpcode::kPTBindVar;
   }
 
-  std::string QLName(QLNameOption option = QLNameOption::kUserOriginalName) const override {
-    std::string qlname = (user_pos_) ? user_pos_->ToString() : name()->c_str();
+  std::string QLName(
+      qlexpr::QLNameOption option = qlexpr::QLNameOption::kUserOriginalName) const override {
+    std::string qlname = (user_pos_) ? user_pos_->ToString()
+                                     : (name() ? name()->c_str() : default_bindvar_name().c_str());
     return ":" +  qlname;
   }
 
@@ -1391,8 +1409,14 @@ class PTBindVar : public PTExpr {
   static std::string bcall_arg_bindvar_name(
       const std::string& bcall_name, size_t arg_position);
 
-  // The name Cassandra uses for binding the collection elements.
-  static std::string coll_bindvar_name(const std::string& col_name);
+  // The name Cassandra uses for binding the map element keys.
+  static std::string coll_map_key_bindvar_name(const std::string& col_name);
+
+  // The name Cassandra uses for binding the list element indexes.
+  static std::string coll_list_index_bindvar_name(const std::string& col_name);
+
+  // The name Cassandra uses for binding the collection element values.
+  static std::string coll_value_bindvar_name(const std::string& col_name);
 
   // The name for binding the JSON attributes.
   static std::string json_bindvar_name(const std::string& col_name);
@@ -1409,11 +1433,10 @@ class PTBindVar : public PTExpr {
   boost::optional<int64_t> pos_; // pos after parsing is done.
   // Variable name.
   MCSharedPtr<MCString> name_;
+  MCSharedPtr<MCVector<MCSharedPtr<MCString>>> alternative_names_;
   // Hash column descriptor.
   const ColumnDesc *hash_col_ = nullptr;
 };
 
 }  // namespace ql
 }  // namespace yb
-
-#endif  // YB_YQL_CQL_QL_PTREE_PT_EXPR_H_

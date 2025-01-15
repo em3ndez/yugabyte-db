@@ -36,7 +36,7 @@
 
 #include <vector>
 
-#include <glog/logging.h>
+#include "yb/util/logging.h"
 
 #include "yb/gutil/casts.h"
 
@@ -68,6 +68,12 @@ size_t WriteCallback(void* buffer, size_t size, size_t nmemb, void* user_ptr) {
 
 } // anonymous namespace
 
+CurlGlobalInitializer::CurlGlobalInitializer() {
+  CHECK_EQ(curl_global_init(CURL_GLOBAL_ALL), CURLE_OK);
+}
+
+CurlGlobalInitializer::~CurlGlobalInitializer() { curl_global_cleanup(); }
+
 EasyCurl::EasyCurl() {
   curl_ = curl_easy_init();
   CHECK(curl_) << "Could not init curl";
@@ -86,7 +92,8 @@ Status EasyCurl::FetchURL(const string& url,
 
 Status EasyCurl::PostToURL(
     const string& url, const string& post_data, faststring* dst, int64_t timeout_sec) {
-  return DoRequest(url, post_data, string("application/x-www-form-urlencoded"), timeout_sec, dst);
+  return DoRequest(url, post_data, string("application/x-www-form-urlencoded"), timeout_sec, dst,
+                   {} /* headers */);
 }
 
 Status EasyCurl::PostToURL(
@@ -95,7 +102,7 @@ Status EasyCurl::PostToURL(
     const string& content_type,
     faststring* dst,
     int64_t timeout_sec) {
-  return DoRequest(url, post_data, content_type, timeout_sec, dst);
+  return DoRequest(url, post_data, content_type, timeout_sec, dst, {} /* headers */);
 }
 
 string EasyCurl::EscapeString(const string& data) {
@@ -135,6 +142,12 @@ Status EasyCurl::DoRequest(
   RETURN_NOT_OK(TranslateError(curl_easy_setopt(curl_, CURLOPT_WRITEFUNCTION, WriteCallback)));
   RETURN_NOT_OK(TranslateError(curl_easy_setopt(curl_, CURLOPT_WRITEDATA,
                                                 static_cast<void *>(dst))));
+  if (!ca_cert_.empty()) {
+    RETURN_NOT_OK(TranslateError(curl_easy_setopt(curl_, CURLOPT_CAINFO, ca_cert_.c_str())));
+  }
+  if (follow_redirects_) {
+    RETURN_NOT_OK(TranslateError(curl_easy_setopt(curl_, CURLOPT_FOLLOWLOCATION, 1)));
+  }
 
   typedef std::unique_ptr<curl_slist, std::function<void(curl_slist*)>> CurlSlistPtr;
   CurlSlistPtr http_header_list;

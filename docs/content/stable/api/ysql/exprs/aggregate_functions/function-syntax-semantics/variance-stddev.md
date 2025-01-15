@@ -4,12 +4,11 @@ linkTitle: variance(), var_pop(), var_samp(), stddev(), stddev_pop(), stddev_sam
 headerTitle: variance(), var_pop(), var_samp(), stddev(), stddev_pop(), stddev_samp()
 description: Describes the functionality of the variance(), var_pop(), var_samp(), stddev(), stddev_pop(), and stddev_samp() YSQL aggregate functions
 menu:
-  stable:
+  stable_api:
     identifier: variance-stddev
     parent: aggregate-function-syntax-semantics
     weight: 40
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 This section describes the [`variance()`](./#variance), [`var_pop()`](./#var-pop),  [`var_samp()`](./#var-samp), [`stddev()`](./#stddev), [`stddev_pop()`](./#stddev-pop), and [`stddev_samp()`](./#stddev-samp) aggregate functions. They provide a confidence measure for the computed arithmetic mean of a set of values.
@@ -182,7 +181,7 @@ real              double precision
 
 ## Example
 
-The example uses the function `normal_rand()`, brought by the [tablefunc](../../../../extensions/#tablefunc) extension, to populate the test table:
+The example uses the function `normal_rand()`, brought by the [tablefunc](../../../../../../explore/ysql-language-features/pg-extensions/extension-tablefunc) extension, to populate the test table:
 
 ```plpgsql
 drop table if exists t cascade;
@@ -228,6 +227,3 @@ Because of the pseudorandom nature of `normal_rand()`, the values produced will 
 --------+-------------+-------------+------------------------
   0.138 |   49.880052 |   49.879802 |   1.000005
 ```
-
-
-

@@ -53,9 +53,9 @@ AutoRollLogger::AutoRollLogger(Env* env, const std::string& dbname,
 
 // -- AutoRollLogger
 Status AutoRollLogger::ResetLogger() {
-  TEST_SYNC_POINT("AutoRollLogger::ResetLogger:BeforeNewLogger");
+  DEBUG_ONLY_TEST_SYNC_POINT("AutoRollLogger::ResetLogger:BeforeNewLogger");
   status_ = env_->NewLogger(log_fname_, &logger_);
-  TEST_SYNC_POINT("AutoRollLogger::ResetLogger:AfterNewLogger");
+  DEBUG_ONLY_TEST_SYNC_POINT("AutoRollLogger::ResetLogger:AfterNewLogger");
 
   if (!status_.ok()) {
     return status_;
@@ -177,7 +177,7 @@ bool AutoRollLogger::LogExpired() {
   return cached_now >= ctime_ + kLogFileTimeToRoll;
 }
 
-CHECKED_STATUS CreateDirs(Env* env, const std::string& dir) {
+Status CreateDirs(Env* env, const std::string& dir) {
   if (dir == "/" || env->DirExists(dir)) {
     return Status::OK();
   }

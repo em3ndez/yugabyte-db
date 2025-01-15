@@ -13,13 +13,13 @@
 //
 //
 
-#ifndef YB_UTIL_STATUS_FORMAT_H
-#define YB_UTIL_STATUS_FORMAT_H
+#pragma once
 
 #include "yb/gutil/strings/substitute.h"
 
 #include "yb/util/format.h"
 #include "yb/util/status.h"
+#include "yb/util/std_util.h"
 
 #define STATUS_SUBSTITUTE(status_type, ...) \
     (Status(Status::BOOST_PP_CAT(k, status_type), \
@@ -43,20 +43,38 @@
     if (PREDICT_FALSE(!(expr))) return STATUS_FORMAT(status_type, (msg), __VA_ARGS__); \
   } while (0)
 
+#define SCHECK_EC_FORMAT(expr, status_type, error_code, msg, ...) \
+  do { \
+    if (PREDICT_FALSE(!(expr))) \
+      return STATUS_EC_FORMAT(status_type, error_code, (msg), __VA_ARGS__); \
+  } while (0)
+
 #define SCHECK_OP(var1, op, var2, status_type, msg) \
   do { \
-    auto v1_tmp = (var1); \
-    auto v2_tmp = (var2); \
+    const auto& v1_tmp = (var1); \
+    const auto& v2_tmp = (var2); \
     if (PREDICT_FALSE(!(v1_tmp op v2_tmp))) { \
       return STATUS_FORMAT(status_type, "$0: $1 vs $2", (msg), v1_tmp, v2_tmp); \
     } \
   } while (0)
 
-#define SCHECK_EQ(var1, var2, status_type, msg) SCHECK_OP(var1, ==, var2, status_type, msg)
+#define SCHECK_OP_FUNC(var1, op_func, var2, status_type, msg) \
+  do { \
+    const auto& v1_tmp = (var1); \
+    const auto& v2_tmp = (var2); \
+    if (PREDICT_FALSE(!(op_func(v1_tmp, v2_tmp)))) { \
+      return STATUS_FORMAT(status_type, "$0: $1 vs $2", (msg), v1_tmp, v2_tmp); \
+    } \
+  } while (0)
+
+#define SCHECK_EQ(var1, var2, status_type, msg) \
+  SCHECK_OP_FUNC(var1, ::yb::cmp_equal, var2, status_type, msg)
 #define SCHECK_NE(var1, var2, status_type, msg) SCHECK_OP(var1, !=, var2, status_type, msg)
-#define SCHECK_GT(var1, var2, status_type, msg) SCHECK_OP(var1, >, var2, status_type, msg)
+#define SCHECK_GT(var1, var2, status_type, msg) \
+  SCHECK_OP_FUNC(var1, ::yb::cmp_greater, var2, status_type, msg)
 #define SCHECK_GE(var1, var2, status_type, msg) SCHECK_OP(var1, >=, var2, status_type, msg)
-#define SCHECK_LT(var1, var2, status_type, msg) SCHECK_OP(var1, <, var2, status_type, msg)
+#define SCHECK_LT(var1, var2, status_type, msg) \
+  SCHECK_OP_FUNC(var1, ::yb::cmp_less, var2, status_type, msg)
 #define SCHECK_LE(var1, var2, status_type, msg) SCHECK_OP(var1, <=, var2, status_type, msg)
 #define SCHECK_BOUNDS(var1, lbound, rbound, status_type, msg) \
     do { \
@@ -64,31 +82,42 @@
       SCHECK_LE(var1, rbound, status_type, msg); \
     } while(false)
 
+#define SCHECK_STR_CONTAINS(str, substr) \
+  SCHECK_NE( \
+      str.find((substr)), std::string::npos, NotFound, \
+      Format("'$0' does not contain '$1'", str, (substr)))
+
+#define SCHECK_STR_NOT_CONTAINS(str, substr) \
+  SCHECK_EQ( \
+      str.find(substr), std::string::npos, IllegalState, Format("'$0' contain '$1'", str, substr))
+
 #ifndef NDEBUG
 
 // Debug mode ("not defined NDEBUG (non-debug-mode)" means "debug mode").
 // In case the check condition is false, we will crash with a CHECK failure.
 
-#define RSTATUS_DCHECK(expr, type, msg) DCHECK(expr) << msg
+#define RSTATUS_DCHECK(expr, type, ...) DCHECK(expr) << ::yb::Format(__VA_ARGS__)
 #define RSTATUS_DCHECK_EQ(var1, var2, type, msg) DCHECK_EQ(var1, var2) << msg
 #define RSTATUS_DCHECK_NE(var1, var2, type, msg) DCHECK_NE(var1, var2) << msg
 #define RSTATUS_DCHECK_GT(var1, var2, type, msg) DCHECK_GT(var1, var2) << msg
 #define RSTATUS_DCHECK_GE(var1, var2, type, msg) DCHECK_GE(var1, var2) << msg
 #define RSTATUS_DCHECK_LT(var1, var2, type, msg) DCHECK_LT(var1, var2) << msg
 #define RSTATUS_DCHECK_LE(var1, var2, type, msg) DCHECK_LE(var1, var2) << msg
+#define RSTATUS_DCHECK_OK(expr) CHECK_OK(expr)
 
 #else
 
 // Release mode.
 // In case the check condition is false, we will return an error status.
 
-#define RSTATUS_DCHECK(expr, type, msg) SCHECK(expr, type, msg)
+#define RSTATUS_DCHECK(expr, type, ...) SCHECK(expr, type, __VA_ARGS__)
 #define RSTATUS_DCHECK_EQ(var1, var2, type, msg) SCHECK_EQ(var1, var2, type, msg)
 #define RSTATUS_DCHECK_NE(var1, var2, type, msg) SCHECK_NE(var1, var2, type, msg)
 #define RSTATUS_DCHECK_GT(var1, var2, type, msg) SCHECK_GT(var1, var2, type, msg)
 #define RSTATUS_DCHECK_GE(var1, var2, type, msg) SCHECK_GE(var1, var2, type, msg)
 #define RSTATUS_DCHECK_LT(var1, var2, type, msg) SCHECK_LT(var1, var2, type, msg)
 #define RSTATUS_DCHECK_LE(var1, var2, type, msg) SCHECK_LE(var1, var2, type, msg)
+#define RSTATUS_DCHECK_OK(expr) RETURN_NOT_OK(expr)
 
 #endif
 
@@ -101,4 +130,7 @@
     } \
   } while (0)
 
-#endif // YB_UTIL_STATUS_FORMAT_H
+#define RSTATUS_DCHECK_NOTNULL(expr) \
+    RSTATUS_DCHECK((expr) != nullptr, \
+                   RuntimeError, \
+                   "$0 is null in $1", BOOST_PP_STRINGIZE(expr), __PRETTY_FUNCTION__)

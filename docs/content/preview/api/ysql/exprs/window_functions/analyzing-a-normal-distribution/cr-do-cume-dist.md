@@ -4,12 +4,11 @@ linkTitle: cr_do_cume_dist.sql
 headerTitle: cr_do_cume_dist.sql
 description: cr_do_cume_dist.sql - Part of the code kit for the "Analyzing a normal distribution" section within the YSQL window functions documentation.
 menu:
-  preview:
+  preview_api:
     identifier: cr-do-cume-dist
     parent: analyzing-a-normal-distribution
     weight: 130
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 Save this script as `cr_do_cume_dist.sql`.
 ```plpgsql

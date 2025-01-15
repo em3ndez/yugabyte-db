@@ -17,6 +17,7 @@ import com.yugabyte.yw.commissioner.UserTaskDetails;
 import com.yugabyte.yw.common.KubernetesManagerFactory;
 import com.yugabyte.yw.forms.AbstractTaskParams;
 import com.yugabyte.yw.models.Provider;
+import com.yugabyte.yw.models.helpers.CloudInfoInterface;
 import io.fabric8.kubernetes.api.model.Pod;
 import java.time.Duration;
 import java.util.List;
@@ -56,9 +57,7 @@ public class KubernetesCheckNumPod extends AbstractTaskBase {
     public UUID providerUUID;
     public CommandType commandType;
     public UUID universeUUID;
-    // We use the nodePrefix as Helm Chart's release name,
-    // so we would need that for any sort helm operations.
-    public String nodePrefix;
+    public String helmReleaseName;
     public String namespace;
     public int podNum = 0;
     public Map<String, String> config = null;
@@ -94,12 +93,13 @@ public class KubernetesCheckNumPod extends AbstractTaskBase {
   private boolean waitForPods() {
     Map<String, String> config = taskParams().config;
     if (taskParams().config == null) {
-      config = Provider.get(taskParams().providerUUID).getUnmaskedConfig();
+      Provider provider = Provider.getOrBadRequest(taskParams().providerUUID);
+      config = CloudInfoInterface.fetchEnvVars(provider);
     }
     List<Pod> pods =
         kubernetesManagerFactory
             .getManager()
-            .getPodInfos(config, taskParams().nodePrefix, taskParams().namespace);
+            .getPodInfos(config, taskParams().helmReleaseName, taskParams().namespace);
     if (pods.size() == taskParams().podNum) {
       return true;
     } else {

@@ -4,14 +4,13 @@ headerTitle: USE
 linkTitle: USE
 description: Use the USE statement to specify a default keyspace for the current client session.
 menu:
-  preview:
+  preview_api:
     parent: api-cassandra
     weight: 1290
 aliases:
   - /preview/api/cassandra/ddl_use
   - /preview/api/ycql/ddl_use
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 ## Synopsis
@@ -26,7 +25,7 @@ Use the `USE` statement to specify a default keyspace for the current client ses
 
 ### Grammar
 
-```
+```ebnf
 use_keyspace ::= USE keyspace_name;
 ```
 
@@ -63,7 +62,7 @@ ycqlsh:example> INSERT INTO test(id) VALUES (1);
 ycqlsh:example> SELECT * FROM test;
 ```
 
-```
+```output
  id
 ----
   1
@@ -77,7 +76,7 @@ ycqlsh:example> INSERT INTO other_keyspace.test(id) VALUES (2);
 ycqlsh:example> SELECT * FROM other_keyspace.test;
 ```
 
-```
+```output
  id
 ----
   2

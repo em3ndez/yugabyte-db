@@ -11,14 +11,15 @@
 // under the License.
 //
 
-#ifndef YB_UTIL_NET_RATE_LIMITER_H
-#define YB_UTIL_NET_RATE_LIMITER_H
+#pragma once
 
+#include <deque>
 #include <functional>
 #include <vector>
 
 #include "yb/util/monotime.h"
 #include "yb/util/status_fwd.h"
+#include "yb/util/tostring.h"
 
 namespace yb {
 
@@ -43,8 +44,8 @@ class RateLimiter {
   // This function will be in charge of sending/receiving the data by calling send_rcv_func. This
   // function might sleep before returning to keep the transmission rate as close as possible to the
   // desired target.
-  CHECKED_STATUS SendOrReceiveData(std::function<Status()> send_rcv_func,
-                                   std::function<uint64_t()> reply_size_func);
+  Status SendOrReceiveData(std::function<Status()> send_rcv_func,
+                           std::function<uint64_t()> reply_size_func);
 
   // Calculates the size for the next transmission so that the transmission rate remains as close
   // as possible to the target rate.
@@ -68,9 +69,9 @@ class RateLimiter {
 
   void SetTargetRate(uint64_t target_rate);
 
-#if defined(OS_MACOSX)
   MonoDelta total_time_slept() { return total_time_slept_; }
 
+#if defined(OS_MACOSX)
   // Only used in MacOS. Instead of using the elapsed time for the calculation, we use the time
   // we spent sleeping. Used only for testing.
   // additional_time is passed by the test to include this time in the rate calculation.
@@ -86,9 +87,30 @@ class RateLimiter {
     return time_slot_ms_;
   }
 
+  uint64_t total_bytes() const {
+    return total_bytes_;
+  }
+
  private:
+  static constexpr uint8 kIterStatsSize = 10;
+
+  struct IterStats {
+    MonoTime start;
+    MonoTime end;
+    uint64_t data_size;
+    uint64_t target_rate;
+    uint64_t time_slot_ms;
+    uint64_t sleep_time_ms;
+
+    std::string ToString() const {
+      return YB_STRUCT_TO_STRING(start, end, data_size, target_rate, time_slot_ms, sleep_time_ms);
+    }
+  };
+  // Deque tracking the transmission stats for last kIterStatsSize of the rate limiter.
+  std::deque<IterStats> iteration_stats_;
+
   void UpdateRate();
-  void UpdateTimeSlotSizeAndMaybeSleep(uint64_t data_size, MonoDelta elapsed);
+  void UpdateTimeSlotSizeAndMaybeSleep(IterStats&& stats);
   uint64_t GetSizeForNextTimeSlot();
 
   bool init_ = false;
@@ -102,10 +124,8 @@ class RateLimiter {
   // Reset every time the rate changes
   MonoTime rate_start_time_;
 
-#if defined(OS_MACOSX)
   // Total amount of time this object has spent sleeping.
   MonoDelta total_time_slept_ = MonoDelta::FromMicroseconds(0);
-#endif
 
   // Total number of bytes sent or received by the user of this RateLimiter object.
   uint64_t total_bytes_ = 0;
@@ -129,5 +149,3 @@ class RateLimiter {
 };
 
 } // namespace yb
-
-#endif // YB_UTIL_NET_RATE_LIMITER_H

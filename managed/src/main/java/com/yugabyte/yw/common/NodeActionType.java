@@ -23,10 +23,19 @@ public enum NodeActionType {
   QUERY,
   // Release the instance to the IaaS/provider. Shown only for stopped/removed nodes.
   RELEASE,
+  // Reboot the node.
+  REBOOT,
   // Start the Master server on the node.
   START_MASTER,
   // Precheck for detached node.
-  PRECHECK_DETACHED(true);
+  PRECHECK_DETACHED(true),
+  // Hard reboot the node (stop + start).
+  HARD_REBOOT,
+  // Re-provision node with already stopped processes.
+  REPROVISION,
+  // REplace an node.
+  REPLACE,
+  DECOMMISSION;
 
   NodeActionType() {
     this(false);
@@ -58,10 +67,20 @@ public enum NodeActionType {
         return "Queries";
       case RELEASE:
         return completed ? "Released" : "Releasing";
+      case REBOOT:
+        return completed ? "Rebooted" : "Rebooting";
+      case HARD_REBOOT:
+        return completed ? "Hard rebooted" : "Hard rebooting";
       case START_MASTER:
         return completed ? "Started Master" : "Starting Master";
       case PRECHECK_DETACHED:
         return completed ? "Performed preflight check" : "Performing preflight check";
+      case REPROVISION:
+        return completed ? "Re-provisioned" : "Re-provisioning";
+      case REPLACE:
+        return completed ? "Replaced" : "Replacing";
+      case DECOMMISSION:
+        return completed ? "Decommissioned" : "Decommissioning";
       default:
         return null;
     }
@@ -69,6 +88,8 @@ public enum NodeActionType {
 
   public TaskType getCommissionerTask() {
     switch (this) {
+      case DECOMMISSION:
+        return TaskType.DecommissionNode;
       case ADD:
         return TaskType.AddNodeToUniverse;
       case REMOVE:
@@ -79,12 +100,19 @@ public enum NodeActionType {
         return TaskType.StopNodeInUniverse;
       case DELETE:
         return TaskType.DeleteNodeFromUniverse;
+      case REBOOT:
+      case HARD_REBOOT:
+        return TaskType.RebootNodeInUniverse;
       case RELEASE:
         return TaskType.ReleaseInstanceFromUniverse;
       case START_MASTER:
         return TaskType.StartMasterOnNode;
       case PRECHECK_DETACHED:
         return TaskType.PrecheckNodeDetached;
+      case REPROVISION:
+        return TaskType.ReprovisionNode;
+      case REPLACE:
+        return TaskType.ReplaceNodeInUniverse;
       default:
         return null;
     }
@@ -104,10 +132,20 @@ public enum NodeActionType {
         return CustomerTask.TaskType.Delete;
       case RELEASE:
         return CustomerTask.TaskType.Release;
+      case REBOOT:
+        return CustomerTask.TaskType.Reboot;
+      case HARD_REBOOT:
+        return CustomerTask.TaskType.HardReboot;
       case START_MASTER:
         return CustomerTask.TaskType.StartMaster;
       case PRECHECK_DETACHED:
         return CustomerTask.TaskType.PrecheckNode;
+      case REPROVISION:
+        return CustomerTask.TaskType.ReprovisionNode;
+      case REPLACE:
+        return CustomerTask.TaskType.Replace;
+      case DECOMMISSION:
+        return CustomerTask.TaskType.Decommission;
       default:
         return null;
     }

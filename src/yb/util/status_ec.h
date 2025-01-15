@@ -13,8 +13,7 @@
 //
 //
 
-#ifndef YB_UTIL_STATUS_EC_H
-#define YB_UTIL_STATUS_EC_H
+#pragma once
 
 #include <boost/optional.hpp>
 
@@ -54,6 +53,26 @@ class IntegralBackedErrorTag {
 
   static std::string DecodeToString(const uint8_t* source) {
     return Traits::ToString(Decode(source));
+  }
+};
+
+class StringBackedErrorTag {
+ public:
+  typedef typename std::string Value;
+  typedef uint64_t SizeType;
+
+  static Value Decode(const uint8_t* source);
+
+  static size_t DecodeSize(const uint8_t* source) {
+    return Load<SizeType, LittleEndian>(source) + sizeof(SizeType);
+  }
+
+  static size_t EncodedSize(const Value& value);
+
+  static uint8_t* Encode(const Value& value, uint8_t* out);
+
+  static std::string DecodeToString(const uint8_t* source) {
+    return Decode(source);
   }
 };
 
@@ -244,5 +263,3 @@ boost::optional<typename StatusErrorCodeImpl<Tag>::Value> StatusErrorCodeImpl<Ta
 }
 
 } // namespace yb
-
-#endif // YB_UTIL_STATUS_EC_H

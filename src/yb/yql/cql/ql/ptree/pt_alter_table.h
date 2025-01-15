@@ -15,8 +15,7 @@
 // Tree node definitions for ALTER TABLE statement.
 //--------------------------------------------------------------------------------------------------
 
-#ifndef YB_YQL_CQL_QL_PTREE_PT_ALTER_TABLE_H_
-#define YB_YQL_CQL_QL_PTREE_PT_ALTER_TABLE_H_
+#pragma once
 
 #include "yb/yql/cql/ql/ptree/list_node.h"
 #include "yb/yql/cql/ql/ptree/pt_name.h"
@@ -36,7 +35,7 @@ typedef enum AlterColumnType : int {
   ALTER_TYPE
 } ModColumnType;
 
-const string supported_properties[] = {"ttl"};
+const std::string supported_properties[] = {"ttl"};
 
 //--------------------------------------------------------------------------------------------------
 // Drop/rename/alter type column operation details
@@ -70,7 +69,7 @@ class PTAlterColumnDefinition : public TreeNode {
   }
 
   // Node semantics analysis.
-  virtual CHECKED_STATUS Analyze(SemContext *sem_context) override;
+  virtual Status Analyze(SemContext *sem_context) override;
 
   // Qualified name of column that's already present.
   PTQualifiedName::SharedPtr old_name() const {
@@ -151,15 +150,15 @@ class PTAlterTable : public TreeNode {
   }
 
   // Node semantics analysis.
-  virtual CHECKED_STATUS Analyze(SemContext *sem_context) override;
+  virtual Status Analyze(SemContext *sem_context) override;
 
   void PrintSemanticAnalysisResult(SemContext *sem_context);
 
-  CHECKED_STATUS AppendModColumn(SemContext *sem_context, PTAlterColumnDefinition *column);
+  Status AppendModColumn(SemContext *sem_context, PTAlterColumnDefinition *column);
 
-  CHECKED_STATUS AppendAlterProperty(SemContext *sem_context, PTTableProperty *prop);
+  Status AppendAlterProperty(SemContext *sem_context, PTTableProperty *prop);
 
-  CHECKED_STATUS ToTableProperties(TableProperties *table_properties) const;
+  Status ToTableProperties(TableProperties *table_properties) const;
 
  private:
   PTQualifiedName::SharedPtr name_;
@@ -173,5 +172,3 @@ class PTAlterTable : public TreeNode {
 
 }  // namespace ql
 }  // namespace yb
-
-#endif  // YB_YQL_CQL_QL_PTREE_PT_ALTER_TABLE_H_

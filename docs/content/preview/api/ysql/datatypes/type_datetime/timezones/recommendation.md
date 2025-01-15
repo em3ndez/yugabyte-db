@@ -4,12 +4,11 @@ headerTitle: Recommended practice for specifying the UTC offset
 linkTitle: Recommended practice
 description: Recommends a practice to for specifying the offset from the UTC Time Standard safely. [YSQL]
 menu:
-  preview:
+  preview_api:
     identifier: recommendation
     parent: timezones
     weight: 80
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 {{< tip title="Write user-defined functions to wrap 'set timezone' and the overloads of the built-in function 'timezone()'." >}}

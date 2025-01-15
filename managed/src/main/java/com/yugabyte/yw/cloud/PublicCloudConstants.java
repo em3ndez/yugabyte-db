@@ -11,6 +11,8 @@
 package com.yugabyte.yw.cloud;
 
 import com.yugabyte.yw.commissioner.Common;
+import com.yugabyte.yw.common.utils.Pair;
+import lombok.Getter;
 
 public class PublicCloudConstants {
 
@@ -42,18 +44,36 @@ public class PublicCloudConstants {
     Host
   }
 
+  public enum OsType {
+    CENTOS,
+    ALMALINUX,
+    DARWIN,
+    LINUX,
+    EL8
+  }
+
   public enum Architecture {
-    x86_64("glob:**yugabyte*{alma,centos}*x86_64.tar.gz"),
-    arm64("glob:**yugabyte*{alma,centos}*aarch64.tar.gz");
+    x86_64(
+        "glob:**yugabyte*{centos,alma,linux,el}*x86_64.tar.gz",
+        "glob:**ybc*{centos,alma,linux,el}*x86_64.tar.gz"),
+    aarch64(
+        "glob:**yugabyte*{centos,alma,linux,el}*aarch64.tar.gz",
+        "glob:**ybc*{centos,alma,linux,el}*aarch64.tar.gz");
 
-    private final String glob;
+    private final String dbGlob;
+    private final String ybcGlob;
 
-    Architecture(String glob) {
-      this.glob = glob;
+    Architecture(String dbGlob, String ybcGlob) {
+      this.dbGlob = dbGlob;
+      this.ybcGlob = ybcGlob;
     }
 
-    public String getGlob() {
-      return glob;
+    public String getDBGlob() {
+      return dbGlob;
+    }
+
+    public String getYbcGlob() {
+      return ybcGlob;
     }
   }
 
@@ -62,36 +82,44 @@ public class PublicCloudConstants {
    * alphabetically e.g. Persistent will be the default value for GCP, not Scratch
    */
   public enum StorageType {
-    IO1(Common.CloudType.aws, true, false),
-    GP2(Common.CloudType.aws, false, false),
-    GP3(Common.CloudType.aws, true, true),
-    Scratch(Common.CloudType.gcp, false, false),
-    Persistent(Common.CloudType.gcp, false, false),
-    StandardSSD_LRS(Common.CloudType.azu, false, false),
-    Premium_LRS(Common.CloudType.azu, false, false),
-    UltraSSD_LRS(Common.CloudType.azu, true, true);
+    IO1(Common.CloudType.aws, new Pair<>(100, 64000)),
+    GP2(Common.CloudType.aws),
+    GP3(Common.CloudType.aws, new Pair<>(3000, 16000), new Pair<>(125, 1000)),
+    Scratch(Common.CloudType.gcp),
+    Persistent(Common.CloudType.gcp),
+    StandardSSD_LRS(Common.CloudType.azu),
+    Premium_LRS(Common.CloudType.azu),
+    PremiumV2_LRS(Common.CloudType.azu, new Pair<>(3000, 80_000), new Pair<>(1, 1200)),
+    UltraSSD_LRS(Common.CloudType.azu, new Pair<>(100, 160_000), new Pair<>(1, 3814)),
+    Local(Common.CloudType.local);
 
-    private final Common.CloudType cloudType;
-    private final boolean iopsProvisioning;
-    private final boolean throughputProvisioning;
+    @Getter private final Common.CloudType cloudType;
+    @Getter private final Pair<Integer, Integer> iopsRange;
+    @Getter private final Pair<Integer, Integer> throughputRange;
 
-    StorageType(
-        Common.CloudType cloudType, boolean iopsProvisioning, boolean throughputProvisioning) {
-      this.cloudType = cloudType;
-      this.iopsProvisioning = iopsProvisioning;
-      this.throughputProvisioning = throughputProvisioning;
+    StorageType(Common.CloudType cloudType) {
+      this(cloudType, null /* iopsRange */);
     }
 
-    public Common.CloudType getCloudType() {
-      return cloudType;
+    StorageType(Common.CloudType cloudType, Pair<Integer, Integer> iopsRange) {
+      this(cloudType, iopsRange, null /* throughputRange */);
+    }
+
+    StorageType(
+        Common.CloudType cloudType,
+        Pair<Integer, Integer> iopsRange,
+        Pair<Integer, Integer> throughputRange) {
+      this.cloudType = cloudType;
+      this.iopsRange = iopsRange;
+      this.throughputRange = throughputRange;
     }
 
     public boolean isIopsProvisioning() {
-      return iopsProvisioning;
+      return iopsRange != null;
     }
 
     public boolean isThroughputProvisioning() {
-      return throughputProvisioning;
+      return throughputRange != null;
     }
   }
 }

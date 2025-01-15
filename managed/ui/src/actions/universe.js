@@ -39,6 +39,10 @@ export const PAUSE_UNIVERSE_RESPONSE = 'PAUSE_UNIVERSE_RESPONSE';
 export const RESTART_UNIVERSE = 'RESTART_UNIVERSE';
 export const RESTART_UNIVERSE_RESPONSE = 'RESTART_UNIVERSE_RESPONSE';
 
+// Get Universe load balancer state
+export const FETCH_UNIVERSE_LB_STATE = 'FETCH_UNIVERSE_LB_STATE';
+export const FETCH_UNIVERSE_LB_STATE_RESPONSE = 'FETCH_UNIVERSE_LB_STATE_RESPONSE';
+
 // Read replicas
 export const ADD_READ_REPLICA = 'ADD_READ_REPLICA';
 export const ADD_READ_REPLICA_RESPONSE = 'ADD_READ_REPLICA_RESPONSE';
@@ -48,6 +52,10 @@ export const DELETE_READ_REPLICA = 'DELETE_READ_REPLICA';
 export const DELETE_READ_REPLICA_RESPONSE = 'DELETE_READ_REPLICA_RESPONSE';
 
 // Get the Master Leader for a Universe
+export const GET_MASTER_INFO = 'GET_MASTER_INFO';
+export const GET_MASTER_INFO_RESPONSE = 'GET_MASTER_INFO_RESPONSE';
+
+// Get the Master Nodes Info for a Universe
 export const GET_MASTER_LEADER = 'GET_MASTER_LEADER';
 export const GET_MASTER_LEADER_RESPONSE = 'GET_MASTER_LEADER_RESPONSE';
 export const RESET_MASTER_LEADER = 'RESET_MASTER_LEADER';
@@ -80,6 +88,11 @@ export const GET_UNIVERSE_PER_NODE_STATUS_RESPONSE = 'GET_UNIVERSE_PER_NODE_STAT
 export const GET_UNIVERSE_PER_NODE_METRICS = 'GET_UNIVERSE_PER_NODE_METRICS';
 export const GET_UNIVERSE_PER_NODE_METRICS_RESPONSE = 'GET_UNIVERSE_PER_NODE_METRICS_RESPONSE';
 
+// Node Actions
+export const GET_NODE_DETAILS = 'GET_NODE_DETAILS';
+export const GET_NODE_DETAILS_RESPONSE = 'GET_NODE_DETAILS_RESPONSE';
+export const RESET_NODE_DETAILS = 'RESET_NODE_DETAILS';
+
 //Validation Tasks
 export const CHECK_IF_UNIVERSE_EXISTS = 'CHECK_IF_UNIVERSE_EXISTS';
 
@@ -111,16 +124,18 @@ export const GET_HEALTH_CHECK_RESPONSE = 'GET_HEALTH_CHECK_RESPONSE';
 export const SET_ENCRYPTION_KEY = 'SET_ENCRYPTION_KEY';
 export const SET_ENCRYPTION_KEY_RESPONSE = 'SET_ENCRYPTION_KEY_RESPONSE';
 
-export const IMPORT_UNIVERSE = 'IMPORT_UNIVERSE';
-export const IMPORT_UNIVERSE_INIT = 'IMPORT_UNIVERSE_INIT';
-export const IMPORT_UNIVERSE_RESPONSE = 'IMPORT_UNIVERSE_RESPONSE';
-export const IMPORT_UNIVERSE_RESET = 'IMPORT_UNIVERSE_RESET';
-
-export const SET_ALERTS_CONFIG = 'SET_ALERTS_CONFIG';
-export const SET_ALERTS_CONFIG_RESPONSE = 'SET_ALERTS_CONFIG_RESPONSE';
-
 export const UPDATE_BACKUP_STATE = 'UPDATE_BACKUP_STATE';
 export const UPDATE_BACKUP_STATE_RESPONSE = 'UPDATE_BACKUP_STATE_RESPONSE';
+
+export const FETCH_SUPPORTED_RELEASES = 'FETCH_SUPPORTED_RELEASES';
+export const FETCH_SUPPORTED_RELEASES_RESPONSE = 'FETCH_SUPPORTED_RELEASES_RESPONSE';
+
+/**
+ *  Mapping from taskType to api route
+ * */
+const UPGRADE_TASKS = {
+  VMImage: 'vm'
+};
 
 export function createUniverse(formValues) {
   const customerUUID = localStorage.getItem('customerId');
@@ -170,6 +185,40 @@ export function resetUniverseInfo() {
 export function fetchUniverseInfoResponse(response) {
   return {
     type: FETCH_UNIVERSE_INFO_RESPONSE,
+    payload: response
+  };
+}
+
+export function fetchUniverseLbState(universeUUID) {
+  const cUUID = localStorage.getItem('customerId');
+  const request = axios.get(
+    `${ROOT_URL}/customers/${cUUID}/universes/${universeUUID}/master_lb_state`
+  );
+  return {
+    type: FETCH_UNIVERSE_LB_STATE,
+    payload: request
+  };
+}
+
+export function fetchUniverseLbStateResponse(response) {
+  return {
+    type: FETCH_UNIVERSE_LB_STATE_RESPONSE,
+    payload: response
+  };
+}
+
+export function fetchReleasesByProvider(pUUID) {
+  const cUUID = localStorage.getItem('customerId');
+  const request = axios.get(`${ROOT_URL}/customers/${cUUID}/providers/${pUUID}/releases`);
+  return {
+    type: FETCH_SUPPORTED_RELEASES,
+    payload: request
+  };
+}
+
+export function fetchReleasesResponse(response) {
+  return {
+    type: FETCH_SUPPORTED_RELEASES_RESPONSE,
     payload: response
   };
 }
@@ -373,9 +422,9 @@ export function closeUniverseDialog() {
 export function rollingUpgrade(values, universeUUID) {
   const customerUUID = localStorage.getItem('customerId');
   const taskEndPoint = values.taskType.toLowerCase();
-  
+
   let request;
-  if (values.taskType === "Certs") {
+  if (values.taskType === 'Certs') {
     // This is to enable cert rotation for kubernetes universes
     // For kubernetes universes we fallback to old modal
     // But as we need to call the update_tls API we update the request accordingly
@@ -385,7 +434,9 @@ export function rollingUpgrade(values, universeUUID) {
     );
   } else {
     request = axios.post(
-      `${ROOT_URL}/customers/${customerUUID}/universes/${universeUUID}/upgrade/${taskEndPoint}`,
+      `${ROOT_URL}/customers/${customerUUID}/universes/${universeUUID}/upgrade/${
+        UPGRADE_TASKS[values.taskType] ?? taskEndPoint
+      }`,
       values
     );
   }
@@ -465,6 +516,29 @@ export function getUniversePerNodeStatusResponse(response) {
   };
 }
 
+export function getNodeDetails(universeUUID, nodeName) {
+  const customerUUID = localStorage.getItem('customerId');
+  const requestUrl = `${ROOT_URL}/customers/${customerUUID}/universes/${universeUUID}/nodes/${nodeName}/details`;
+  const request = axios.get(requestUrl);
+  return {
+    type: GET_NODE_DETAILS,
+    payload: request
+  };
+}
+
+export function getNodeDetailsResponse(response) {
+  return {
+    type: GET_NODE_DETAILS_RESPONSE,
+    payload: response
+  };
+}
+
+export function resetNodeDetails() {
+  return {
+    type: RESET_NODE_DETAILS
+  };
+}
+
 export function getUniversePerNodeMetrics(universeUUID) {
   const requestUrl = `${getCustomerEndpoint()}/universes/${universeUUID}/tablet-servers`;
   const request = axios.get(requestUrl);
@@ -508,6 +582,21 @@ export function getMasterLeader(universeUUID) {
 export function getMasterLeaderResponse(response) {
   return {
     type: GET_MASTER_LEADER_RESPONSE,
+    payload: response
+  };
+}
+
+export function getMasterInfos(universeUUID) {
+  const request = axios.get(`${getCustomerEndpoint()}/universes/${universeUUID}/master_infos`);
+  return {
+    type: GET_MASTER_INFO,
+    payload: request
+  };
+}
+
+export function getMasterInfosResponse(response) {
+  return {
+    type: GET_MASTER_INFO_RESPONSE,
     payload: response
   };
 }
@@ -636,51 +725,6 @@ export function setEncryptionKeyResponse(response) {
   };
 }
 
-export function importUniverseInit() {
-  return {
-    type: IMPORT_UNIVERSE_INIT
-  };
-}
-
-export function importUniverse(values) {
-  const customerUUID = localStorage.getItem('customerId');
-  const request = axios.post(`${ROOT_URL}/customers/${customerUUID}/universes/import`, values);
-  return {
-    type: IMPORT_UNIVERSE,
-    payload: request
-  };
-}
-
-export function importUniverseResponse(response) {
-  return {
-    type: IMPORT_UNIVERSE_RESPONSE,
-    payload: response
-  };
-}
-
-export function importUniverseReset() {
-  return {
-    type: IMPORT_UNIVERSE_RESET
-  };
-}
-
-export function setAlertsConfig(universeUUID, data) {
-  const customerUUID = localStorage.getItem('customerId');
-  const endpoint = `${ROOT_URL}/customers/${customerUUID}/universes/${universeUUID}/config_alerts`;
-  const request = axios.post(endpoint, data);
-  return {
-    type: SET_ALERTS_CONFIG,
-    payload: request
-  };
-}
-
-export function setAlertsConfigResponse(response) {
-  return {
-    type: SET_ALERTS_CONFIG_RESPONSE,
-    payload: response
-  };
-}
-
 export function updateBackupState(universeUUID, flag) {
   const customerUUID = localStorage.getItem('customerId');
   const endpoint = `${ROOT_URL}/customers/${customerUUID}/universes/${universeUUID}/update_backup_state?markActive=${flag}`;
@@ -782,7 +826,7 @@ export async function fetchParticularFlag(dbVersion, params) {
 
 export async function validateGFlags(dbVersion, payload) {
   try {
-    const apiToken = Cookies.get('apiToken') || localStorage.getItem('apiToken');
+    const apiToken = Cookies.get('apiToken') ?? localStorage.getItem('apiToken');
     if (apiToken && apiToken !== '') {
       axios.defaults.headers.common['X-AUTH-YW-API-TOKEN'] = apiToken;
     }
@@ -792,6 +836,34 @@ export async function validateGFlags(dbVersion, payload) {
       payload
     );
     return request;
+  } catch (e) {
+    throw e.response.data;
+  }
+}
+
+//Fetch releases by provider
+export async function fetchSupportedReleases(pUUID) {
+  const cUUID = localStorage.getItem('customerId');
+  try {
+    return await axios.get(`${ROOT_URL}/customers/${cUUID}/providers/${pUUID}/releases`);
+  } catch (e) {
+    throw e.response.data;
+  }
+}
+
+export function validateHelmYAML(UniverseConfigureTaskParams) {
+  const cUUID = localStorage.getItem('customerId');
+  return axios.post(`${ROOT_URL}/customers/${cUUID}/validate_kubernetes_overrides`, {
+    ...UniverseConfigureTaskParams
+  });
+}
+
+export async function fetchNodeDetails(universeUUID, nodeName) {
+  const customerUUID = localStorage.getItem('customerId');
+  try {
+    return await axios.get(
+      `${ROOT_URL}/customers/${customerUUID}/universes/${universeUUID}/nodes/${nodeName}/details`
+    );
   } catch (e) {
     throw e.response.data;
   }

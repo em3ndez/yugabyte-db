@@ -15,8 +15,7 @@
 // Tree node definitions for CREATE TABLE statement.
 //--------------------------------------------------------------------------------------------------
 
-#ifndef YB_YQL_CQL_QL_PTREE_PT_CREATE_TABLE_H_
-#define YB_YQL_CQL_QL_PTREE_PT_CREATE_TABLE_H_
+#pragma once
 
 #include "yb/client/client_fwd.h"
 
@@ -87,7 +86,7 @@ class PTPrimaryKey : public PTConstraint {
   }
 
   // Node semantics analysis.
-  virtual CHECKED_STATUS Analyze(SemContext *sem_context) override;
+  virtual Status Analyze(SemContext *sem_context) override;
 
   // Predicate whether this PTPrimary node is a column constraint or a table constraint.
   // - Besides the datatype, certain constraints can also be specified when defining a column in
@@ -138,7 +137,7 @@ class PTStatic : public TreeNode {
   }
 
   // Node semantics analysis.
-  virtual CHECKED_STATUS Analyze(SemContext *sem_context) override;
+  virtual Status Analyze(SemContext *sem_context) override;
 };
 
 //--------------------------------------------------------------------------------------------------
@@ -173,7 +172,7 @@ class PTCreateTable : public TreeNode {
   }
 
   // Node semantics analysis.
-  virtual CHECKED_STATUS Analyze(SemContext *sem_context) override;
+  virtual Status Analyze(SemContext *sem_context) override;
   void PrintSemanticAnalysisResult(SemContext *sem_context);
 
   // column lists.
@@ -193,19 +192,19 @@ class PTCreateTable : public TreeNode {
     return create_if_not_exists_;
   }
 
-  CHECKED_STATUS AppendColumn(SemContext *sem_context,
-                              PTColumnDefinition *column,
-                              bool check_duplicate = false);
+  Status AppendColumn(SemContext *sem_context,
+                      PTColumnDefinition *column,
+                      bool check_duplicate = false);
 
-  CHECKED_STATUS AppendPrimaryColumn(SemContext *sem_context,
-                                     PTColumnDefinition *column,
-                                     bool check_duplicate = false);
+  Status AppendPrimaryColumn(SemContext *sem_context,
+                             PTColumnDefinition *column,
+                             bool check_duplicate = false);
 
-  CHECKED_STATUS AppendHashColumn(SemContext *sem_context,
-                                  PTColumnDefinition *column,
-                                  bool check_duplicate = false);
+  Status AppendHashColumn(SemContext *sem_context,
+                          PTColumnDefinition *column,
+                          bool check_duplicate = false);
 
-  virtual CHECKED_STATUS CheckPrimaryType(SemContext *sem_context,
+  virtual Status CheckPrimaryType(SemContext *sem_context,
                                           const PTColumnDefinition *column) const;
 
   // Table name.
@@ -219,7 +218,7 @@ class PTCreateTable : public TreeNode {
     return table_properties_;
   }
 
-  virtual CHECKED_STATUS ToTableProperties(TableProperties *table_properties) const;
+  virtual Status ToTableProperties(TableProperties *table_properties) const;
 
   static bool ColumnExists(const MCList<PTColumnDefinition *>& columns,
                            const PTColumnDefinition* column);
@@ -239,5 +238,3 @@ class PTCreateTable : public TreeNode {
 
 }  // namespace ql
 }  // namespace yb
-
-#endif  // YB_YQL_CQL_QL_PTREE_PT_CREATE_TABLE_H_

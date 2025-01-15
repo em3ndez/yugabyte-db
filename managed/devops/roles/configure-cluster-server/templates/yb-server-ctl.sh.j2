@@ -17,6 +17,7 @@ readonly EXPECTED_USERNAME=({{ user_name }})
 readonly CORES_DIR=({{ yb_cores_dir }})
 {% raw %}
 readonly NUM_MOUNTS=${#MOUNT_PATHS[@]}
+readonly SYSTEMD_OPTION={{systemd_option}}
 {% endraw %}
 
 if ! [ -f /.dockerenv ] && [ "$(whoami)" != "$EXPECTED_USERNAME" ]; then
@@ -31,6 +32,8 @@ Usage: ${0##*/} <daemon> <command> OR
 Daemons:
   master
   tserver
+  controller
+  otel-collector
 Commands:
   create        - Start the YB process on this node in cluster creation node (only applicable for
                   master)
@@ -134,7 +137,18 @@ clean_data_paths() {
   for (( i=0; i<NUM_MOUNTS; ++i ))
   do
     rm -rf "${MOUNT_PATHS[i]}"/yb-data/$daemon
-    rm -rf "${MOUNT_PATHS[i]}"/pg_data
+    # Only the tserver creates and accesses the pg_data directory, so it
+    # should be cleaned only when the tserver files are cleaned.
+    if [ "$daemon" == "tserver" ]; then
+      rm -rf "${MOUNT_PATHS[i]}"/pg_data*
+    fi
+
+    if [ "$daemon" == "controller" ]; then
+      rm -rf "${MOUNT_PATHS[i]}"/ybc-data
+    fi
+    if [ "$daemon" == "otel-collector" ]; then
+      rm -rf "${MOUNT_PATHS[i]}"/otel-collector
+    fi
   done
 
   print_err_out "Cleaning core files on `hostname`"
@@ -152,6 +166,68 @@ clean_data_paths() {
   fi
 }
 
+# Collect the postmaster pids from the postmaster.pid file under pg_data dir to
+# the global array postmaster_pids.
+collect_postmaster_pids() {
+  postmaster_pids=()
+  for mnt in "${MOUNT_PATHS[@]}";
+  do
+    local postmaster_pid_file="${mnt}/pg_data/postmaster.pid"
+    if [[ -f "$postmaster_pid_file" ]]; then
+      read -r line < "${postmaster_pid_file}"
+      postmaster_pids+=("$line")
+    fi
+  done
+}
+
+# Given the collected postmaster_pids, send SIGKILL to all of the postgres processed
+# including postmaster and all of its child processes.
+hard_kill_postgres() {
+{% raw %}
+  [[ ${#postmaster_pids[@]} -eq 0 ]] && return
+{% endraw %}
+  for postmaster_pid in "${postmaster_pids[@]}";
+  do
+    if [[ ${postmaster_pid} =~ ^[0-9]+$ ]]; then
+      local pg_pids=()
+      # In case of the ps command returning nothing, it returns as an error.
+      # The output of the ps command is required to have no padding for easy parsing.
+      # To ensure this, the pid column is explicitly width controlled via "pid:1".
+      set +e
+      mapfile -t pg_pids < <(ps --no-headers -p "${postmaster_pid}" --ppid "${postmaster_pid}" \
+        -o pid:1)
+      set -e
+
+      if [[ -n ${pg_pids:-} ]]; then
+        for pg_pid in "${pg_pids[@]}";
+        do
+          if [[ ${pg_pid} =~ ^[0-9]+$ ]]; then
+            print_err_out "Killing postgres PID: ${pg_pid}..."
+            # set +e in case of the pg_pid is not alive, the kill returns as an error.
+            set +e
+            kill -KILL "${pg_pid}"
+            set -e
+          else
+            print_err_out "Found invalid Postgres PID: ${pg_pid}. Skipped."
+          fi
+        done
+      fi
+    else
+      print_err_out "Found invalid Postmaster PID: ${postmaster_pid}. Skipped."
+    fi
+  done
+}
+
+check_systemd_service_status() {
+  if [ "$SYSTEMD_OPTION" == "true" ]; then
+    return 1
+  else
+    return 0 
+  fi
+
+}
+
+
 command=""
 daemon=""
 case "$1" in
@@ -164,8 +240,12 @@ esac
 
 if [ "$1" == "clean-instance" ]; then
   print_err_out "Cleaning instance `hostname`"
-  rm -rf "{{ yb_home_dir }}"/*
-  rm -rf "{{ yb_home_dir }}"/.yugabytedb
+  pushd "{{ yb_home_dir }}"
+  # Delete all except hidden files and folders, current directory, bin and node-agent.
+  find . -maxdepth 1 -not -path "*/\.*" -not -name "." -not -name "bin" -not -name "node-agent" -exec rm -rf {} +
+  popd
+  # Delete the bin folder last.
+  rm -rf "{{ yb_home_dir }}/.yugabytedb" "{{ yb_home_dir }}/bin"
   exit 0
 fi
 
@@ -188,15 +268,46 @@ case "$daemon" in
       exit 1
     fi
   ;;
+  controller)
+    if [ "$command" == "create" ]; then
+      echo "create command is not valid for controller"
+      exit 1
+    fi
+  ;;
+  otel-collector)
+    if [ "$command" == "create" ]; then
+      echo "create command is not valid for otel-collector"
+      exit 1
+    fi
+    if [ "$command" == "start" || "$command" == "stop" ]; then
+      echo "stop and start command is not valid for otel-collector as is systemd only"
+      exit 1
+    fi
+  ;;
   *)
     echo "Invalid Daemon: $daemon"
     print_help
     exit 1
 esac
+case "$command" in
+  create|start|stop|status|cron-check)
+    # We just check if yb-master yb-tserver is enabled in systemd mode.
+    check_systemd_service_status()
+    if [ $? -eq 1 ]; then
+      echo "Systemd installation detected."
+      echo "This node uses systemd to manage the yugabyte services."
+      echo "Please use systemctl commands instead."
+      exit 1
+    fi
+esac
 
 daemon_home="{{ yb_home_dir }}/$daemon"
 daemon_logs_dir="$daemon_home/logs"
-daemon_binary="$daemon_home/bin/yb-$daemon"
+if [[ $daemon == controller ]]; then
+  daemon_binary="$daemon_home/bin/yb-$daemon-server"
+else
+  daemon_binary="$daemon_home/bin/yb-$daemon"
+fi
 daemon_conf="$daemon_home/conf/server.conf"
 daemon_pid_file="$daemon_logs_dir/yb-$daemon.pid"
 
@@ -210,6 +321,14 @@ case "$command" in
     fi
     exit_on_running
     print_err_out "Starting yb-$daemon on `hostname` $start_mode"
+
+    # Before starting the process, make sure clock is synchronized.
+    clock_sync_script="{{ yb_home_dir }}/bin/clock-sync.sh"
+    # Check if clock-sync.sh script exists and is executable before executing
+    if [[ -x "$clock_sync_script" ]]; then
+      "$clock_sync_script"
+    fi
+
     # We need all three file descriptors closed so SSH connections running this do not hang!
     nohup ${daemon_binary} $create_option --flagfile ${daemon_conf} \
       >>"$daemon_home/${daemon}.out" 2>>"$daemon_home/${daemon}.err" </dev/null &
@@ -241,14 +360,15 @@ case "$command" in
   ;;
   stop)
     print_err_out "Stopping yb-$daemon on `hostname`"
-    if [[ $(check_running) -ne 0 ]]; then
+    # Saving PID and deleting before KILL, to prevent race conditions with cron-check.
+    daemon_pid=$(cat ${daemon_pid_file} || true)
+    rm -f ${daemon_pid_file}
+
+    if [[ $(check_running "${daemon_pid}") -ne 0 ]]; then
       print_err_out "Process isn't running! Nothing to do"
       exit 0
     fi
 
-    # Saving PID and deleting before KILL, to prevent race conditions with cron-check.
-    daemon_pid=$(cat ${daemon_pid_file})
-    rm ${daemon_pid_file}
     kill -TERM "$daemon_pid"
     wait_pid "$daemon_pid"
 
@@ -256,6 +376,33 @@ case "$command" in
       print_err_out "yb-$daemon is still running, using SIGKILL"
       kill -KILL "$daemon_pid"
     fi
+
+    if [[ $daemon == "tserver" ]]; then
+      # Grace period for normal shutdown
+      sleep 1s
+
+      postmaster_pids=()
+      collect_postmaster_pids
+
+      # If PG exited normally, stop immediately.
+{% raw %}
+      if [[ ${#postmaster_pids[@]} -eq 0 ]]; then
+        echo "Postmaster exited. Stopped."
+        exit 0
+      fi
+{% endraw %}
+
+      print_err_out "Found postmaster PIDs: ${postmaster_pids[*]}"
+
+      # Grace period for a real hung PG process
+      wait_sec='30s'
+      echo "Wait for ${wait_sec}..."
+      sleep ${wait_sec}
+
+      collect_postmaster_pids
+      hard_kill_postgres
+    fi
+    echo "Stopped."
   ;;
   clean)
     print_err_out "Cleaning all mount paths for $daemon on `hostname`"

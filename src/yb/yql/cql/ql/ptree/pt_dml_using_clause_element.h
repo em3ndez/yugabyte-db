@@ -11,8 +11,7 @@
 // under the License.
 //
 
-#ifndef YB_YQL_CQL_QL_PTREE_PT_DML_USING_CLAUSE_ELEMENT_H
-#define YB_YQL_CQL_QL_PTREE_PT_DML_USING_CLAUSE_ELEMENT_H
+#pragma once
 
 #include "yb/yql/cql/ql/ptree/tree_node.h"
 
@@ -48,7 +47,7 @@ class PTDmlUsingClauseElement : public TreeNode {
   }
 
   // Node semantics analysis.
-  virtual CHECKED_STATUS Analyze(SemContext *sem_context) override;
+  virtual Status Analyze(SemContext *sem_context) override;
 
   const PTExprPtr value() {
     return value_;
@@ -65,5 +64,3 @@ class PTDmlUsingClauseElement : public TreeNode {
 
 } // namespace ql
 } // namespace yb
-
-#endif // YB_YQL_CQL_QL_PTREE_PT_DML_USING_CLAUSE_ELEMENT_H

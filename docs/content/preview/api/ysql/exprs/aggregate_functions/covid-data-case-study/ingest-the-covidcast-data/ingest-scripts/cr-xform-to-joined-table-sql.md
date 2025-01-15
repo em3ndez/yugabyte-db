@@ -4,12 +4,11 @@ linkTitle: Create xform_to_covidcast_fb_survey_results()
 headerTitle: Create the procedure xform_to_covidcast_fb_survey_results()
 description: Creates a procedure to project the data from the three staging tables into the final destination, joining on the primary keys.
 menu:
-  preview:
+  preview_api:
     identifier: cr-xform-to-joined-table-sql
     parent: ingest-scripts
     weight: 30
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 **Save this script as "cr-xform-to-covidcast-fb-survey-results.sql"**

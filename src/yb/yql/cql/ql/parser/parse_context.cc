@@ -22,10 +22,8 @@
 namespace yb {
 namespace ql {
 
-using std::endl;
 using std::istream;
 using std::min;
-using std::shared_ptr;
 using std::string;
 
 //--------------------------------------------------------------------------------------------------
@@ -88,18 +86,18 @@ void ParseContext::Warn(const location& loc, const char *msg, ErrorCode error_co
 }
 
 // Handling parsing error.
-CHECKED_STATUS ParseContext::Error(const location& loc,
-                                   const char *msg,
-                                   ErrorCode error_code,
-                                   const char* token) {
+Status ParseContext::Error(const location& loc,
+                           const char *msg,
+                           ErrorCode error_code,
+                           const char* token) {
   return ProcessContext::Error(Location(loc), msg, error_code, token);
 }
 
-CHECKED_STATUS ParseContext::Error(const location& loc, const char *msg, const char* token) {
+Status ParseContext::Error(const location& loc, const char *msg, const char* token) {
   return ProcessContext::Error(Location(loc), msg, token);
 }
 
-CHECKED_STATUS ParseContext::Error(const location& loc, ErrorCode error_code, const char* token) {
+Status ParseContext::Error(const location& loc, ErrorCode error_code, const char* token) {
   return ProcessContext::Error(Location(loc), error_code, token);
 }
 

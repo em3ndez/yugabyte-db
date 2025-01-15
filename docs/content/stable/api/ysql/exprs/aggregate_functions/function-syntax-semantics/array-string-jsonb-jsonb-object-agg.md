@@ -4,12 +4,11 @@ linkTitle: array_agg(), string_agg(), jsonb_agg(), jsonb_object_agg()
 headerTitle: array_agg(), string_agg(), jsonb_agg(), jsonb_object_agg()
 description: Describes the functionality of the array_agg(), string_agg(), jsonb_agg(), jsonb_object_agg() YSQL aggregate functions
 menu:
-  stable:
+  stable_api:
     identifier: array-string-jsonb-jsonb-object-agg
     parent: aggregate-function-syntax-semantics
     weight: 20
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 The aggregate functions `array_agg()`, `string_agg()`, `jsonb_agg()`, and `jsonb_object_agg()` are described in this same section because each produces, as a single value, a _list_ of the values that are aggregated.  (The term "list" is used informally and somewhat loosely here. The examples make the sense in which the word is used clear.)
@@ -218,8 +217,3 @@ This is the result:
      2 | {f,e}        | f ~ e         | ["f", "e"]      | {"f": 6}
      2 | {f,e,d}      | f ~ e ~ d     | ["f", "e", "d"] | {"d": 4, "f": 6}
 ```
-
-
-
-
-

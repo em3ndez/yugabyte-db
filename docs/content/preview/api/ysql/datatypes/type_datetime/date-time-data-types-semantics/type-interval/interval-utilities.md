@@ -4,12 +4,11 @@ headerTitle: User-defined interval utility functions
 linkTitle: Interval utility functions
 description: Presents copy-and-paste ready code to create utility functions that support learning about and using the interval data type. [YSQL]
 menu:
-  preview:
+  preview_api:
     identifier: interval-utilities
     parent: type-interval
     weight: 100
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 {{< tip title="Download the '.zip' file to create the reusable code that supports the pedagogy of the overall 'date-time' major section." >}}

@@ -4,12 +4,11 @@ linkTitle: ANY and ALL
 headerTitle: ANY and ALL — test if an element is in an array
 description: The ANY and ALL operators compare an element with each of the elements in an array.
 menu:
-  preview:
+  preview_api:
     identifier: any-all
     parent: array-functions-operators
     weight: 10
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 ## Overview

@@ -24,16 +24,18 @@
 
 #include "yb/common/types.h"
 
+#include "yb/util/metrics.h"
 #include "yb/yql/cql/ql/ptree/column_desc.h"
 #include "yb/yql/cql/ql/ptree/pt_dml.h"
 #include "yb/yql/cql/ql/ptree/sem_context.h"
+
+DECLARE_bool(cql_revert_to_partial_microsecond_support);
 
 namespace yb {
 namespace ql {
 
 using std::vector;
-using std::shared_ptr;
-using std::make_shared;
+using std::string;
 using strings::Substitute;
 
 using yb::bfql::BFOpcode;
@@ -69,17 +71,17 @@ void PTBcall::CollectReferencedIndexColnames(MCSet<string> *col_names) const {
   }
 }
 
-string PTBcall::QLName(QLNameOption option) const {
-  string arg_names;
-  string keyspace;
-
+string PTBcall::QLName(qlexpr::QLNameOption option) const {
   // cql_cast() is displayed as "cast(<col> as <type>)".
   if (strcmp(name_->c_str(), bfql::kCqlCastFuncName) == 0) {
     CHECK_GE(args_->size(), 2);
     const string column_name = args_->element(0)->QLName(option);
-    const string type =  QLType::ToCQLString(args_->element(1)->ql_type()->type_info()->type);
+    const auto& type = QLType::ToCQLString(args_->element(1)->ql_type()->type_info()->type);
     return strings::Substitute("cast($0 as $1)", column_name, type);
   }
+
+  string arg_names;
+  string keyspace;
 
   for (auto arg : args_->node_list()) {
     if (!arg_names.empty()) {
@@ -101,7 +103,7 @@ bool PTBcall::IsAggregateCall() const {
   return is_server_operator_ && BFDecl::is_aggregate_op(static_cast<TSOpcode>(bfopcode_));
 }
 
-CHECKED_STATUS PTBcall::Analyze(SemContext *sem_context) {
+Status PTBcall::Analyze(SemContext *sem_context) {
   // Before traversing the expression, check if this whole expression is actually a column.
   if (CheckIndexColumn(sem_context)) {
     return Status::OK();
@@ -116,7 +118,8 @@ CHECKED_STATUS PTBcall::Analyze(SemContext *sem_context) {
   // - If the datatype of an argument (such as bind variable) is not determined, and the overloaded
   //   function call cannot be resolved by the rest of the arguments, the parser should raised
   //   error for multiple matches.
-  SemState sem_state(sem_context, QLType::Create(UNKNOWN_DATA), InternalType::VALUE_NOT_SET);
+  SemState sem_state(
+      sem_context, QLType::Create(DataType::UNKNOWN_DATA), InternalType::VALUE_NOT_SET);
 
   int pindex = 0;
   const MCList<PTExpr::SharedPtr>& exprs = args_->node_list();
@@ -160,6 +163,11 @@ CHECKED_STATUS PTBcall::Analyze(SemContext *sem_context) {
     // Use the builtin-function opcode since this is a regular builtin call.
     bfopcode_ = static_cast<int32_t>(bfopcode);
 
+    if (FLAGS_cql_revert_to_partial_microsecond_support && (*name_ == "currenttimestamp")) {
+      if (sem_context->ql_metrics_) {
+        IncrementCounter(sem_context->ql_metrics_->microseconds_timestamps_used_);
+      }
+    }
     if (*name_ == "cql_cast" || *name_ == "tojson") {
       // Argument must be of primitive type for these operators.
       for (const PTExpr::SharedPtr &expr : exprs) {
@@ -306,7 +314,7 @@ CHECKED_STATUS PTBcall::Analyze(SemContext *sem_context) {
       // Check if constant folding is possible between the two datatype.
       SemState arg_state(sem_context,
                          QLType::Create(formal_types[pindex]),
-                         YBColumnSchema::ToInternalDataType(QLType::Create(formal_types[pindex])),
+                         YBColumnSchema::ToInternalDataType(formal_types[pindex]),
                          sem_context->bindvar_name());
 
       RETURN_NOT_OK(expr->Analyze(sem_context));
@@ -361,11 +369,11 @@ bool PTBcall::HaveColumnRef() const {
   return false;
 }
 
-CHECKED_STATUS PTBcall::CheckOperator(SemContext *sem_context) {
+Status PTBcall::CheckOperator(SemContext *sem_context) {
   if (sem_context->processing_set_clause() && sem_context->lhs_col() != nullptr) {
     if (sem_context->lhs_col()->ql_type()->IsCollection()) {
       // Only increment ("+") and decrement ("-") operators are allowed for collections.
-      const string type_name = QLType::ToCQLString(sem_context->lhs_col()->ql_type()->main());
+      const auto& type_name = QLType::ToCQLString(sem_context->lhs_col()->ql_type()->main());
       if (*name_ == "+" || *name_ == "-") {
         if (args_->element(0)->opcode() == TreeNodeOpcode::kPTRef) {
           name_->insert(0, type_name.c_str());
@@ -387,7 +395,7 @@ CHECKED_STATUS PTBcall::CheckOperator(SemContext *sem_context) {
   return Status::OK();
 }
 
-CHECKED_STATUS PTBcall::CheckCounterUpdateSupport(SemContext *sem_context) const {
+Status PTBcall::CheckCounterUpdateSupport(SemContext *sem_context) const {
   PTExpr::SharedPtr arg1 = args_->element(0);
   if (arg1->expr_op() != ExprOperator::kRef) {
     return sem_context->Error(arg1, "Right and left arguments must reference the same counter",
@@ -403,19 +411,19 @@ CHECKED_STATUS PTBcall::CheckCounterUpdateSupport(SemContext *sem_context) const
   return Status::OK();
 }
 
-CHECKED_STATUS PTBcall::CheckOperatorAfterArgAnalyze(SemContext *sem_context) {
+Status PTBcall::CheckOperatorAfterArgAnalyze(SemContext *sem_context) {
   if (*name_ == "tojson") {
     // The arguments must be analyzed and correct types must be set.
     const QLType::SharedPtr type = args_->element(0)->ql_type();
     DCHECK(!type->IsUnknown());
 
-    if (type->main() == TUPLE) {
+    if (type->main() == DataType::TUPLE) {
       // https://github.com/YugaByte/yugabyte-db/issues/936
       return sem_context->Error(args_->element(0),
           "Tuple type not implemented yet", ErrorCode::FEATURE_NOT_YET_IMPLEMENTED);
     }
 
-    if (type->Contains(FROZEN) || type->Contains(USER_DEFINED_TYPE)) {
+    if (type->Contains(DataType::FROZEN) || type->Contains(DataType::USER_DEFINED_TYPE)) {
       // Only the server side implementation allows complex types unwrapping based on the schema.
       name_->insert(0, "server_");
     }
@@ -428,7 +436,7 @@ void PTBcall::rscol_type_PB(QLTypePB *pb_type) const {
   if (aggregate_opcode() == bfql::TSOpcode::kAvg) {
     // Tablets return a map of (count, sum),
     // so that the average can be calculated across all tablets.
-    QLType::CreateTypeMap(INT64, args_->node_list().front()->ql_type()->main())
+    QLType::CreateTypeMap(DataType::INT64, args_->node_list().front()->ql_type()->main())
         ->ToQLTypePB(pb_type);
     return;
   }
@@ -443,7 +451,7 @@ yb::bfql::TSOpcode PTBcall::aggregate_opcode() const {
 //--------------------------------------------------------------------------------------------------
 
 // Collection constants.
-CHECKED_STATUS PTToken::Analyze(SemContext *sem_context) {
+Status PTToken::Analyze(SemContext *sem_context) {
 
   RETURN_NOT_OK(PTBcall::Analyze(sem_context));
 
@@ -496,8 +504,8 @@ CHECKED_STATUS PTToken::Analyze(SemContext *sem_context) {
           ErrorCode::CQL_STATEMENT_INVALID);
     }
     SemState sem_state(sem_context);
-    sem_state.SetExprState(schema.Column(index).type(),
-                           YBColumnSchema::ToInternalDataType(schema.Column(index).type()));
+    auto type = schema.Column(index).type();
+    sem_state.SetExprState(type, YBColumnSchema::ToInternalDataType(type));
     if (arg->expr_op() == ExprOperator::kBindVar) {
       sem_state.set_bindvar_name(PTBindVar::bcall_arg_bindvar_name(func_name(), index));
     }
@@ -511,7 +519,7 @@ CHECKED_STATUS PTToken::Analyze(SemContext *sem_context) {
   return CheckExpectedTypeCompatibility(sem_context);
 }
 
-CHECKED_STATUS PTToken::CheckOperator(SemContext *sem_context) {
+Status PTToken::CheckOperator(SemContext *sem_context) {
   // Nothing to do.
   return Status::OK();
 }

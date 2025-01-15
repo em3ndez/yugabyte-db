@@ -24,9 +24,7 @@ add_library(pggate_test
 
 target_link_libraries(pggate_test
                       yb_pggate
-                      yb_client
                       yb_test_util
-                      yb_client_test_util
                       integration-tests)
 
 set(YB_TEST_LINK_LIBS pggate_test ${YB_MIN_TEST_LIBS})
@@ -34,9 +32,12 @@ set(YB_TEST_LINK_LIBS pggate_test ${YB_MIN_TEST_LIBS})
 # build these tests after PostgrSQL.
 add_dependencies(pggate_test postgres)
 
+ADD_YB_TEST(pggate_test_catalog)
+ADD_YB_TEST(pggate_test_delete)
 ADD_YB_TEST(pggate_test_select)
 ADD_YB_TEST(pggate_test_select_inequality)
 ADD_YB_TEST(pggate_test_select_multi_tablets)
-ADD_YB_TEST(pggate_test_delete)
+ADD_YB_TEST(pggate_test_sequence)
+ADD_YB_TEST(pggate_test_table_size)
+ADD_YB_TEST(pggate_test_type)
 ADD_YB_TEST(pggate_test_update)
-ADD_YB_TEST(pggate_test_catalog)

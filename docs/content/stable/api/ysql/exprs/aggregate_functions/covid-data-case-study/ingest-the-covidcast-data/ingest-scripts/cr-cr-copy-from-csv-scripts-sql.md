@@ -4,12 +4,11 @@ linkTitle: Create cr_copy_from_scripts()
 headerTitle: Create the function cr_copy_from_scripts()
 description: Creates a function that writes the chosen one of three \COPY command invocations.
 menu:
-  stable:
+  stable_api:
     identifier: cr-cr-copy-from-csv-scripts-sql
     parent: ingest-scripts
     weight: 20
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 This procedure makes use of the [`row_number()`](../../../../../../exprs/window_functions/function-syntax-semantics/row-number-rank-dense-rank/#row-number) Window function to enable a single invocation of the function to choose the first, the second, or the third `.csv` file with respect to the alphabetical order of their filenames.

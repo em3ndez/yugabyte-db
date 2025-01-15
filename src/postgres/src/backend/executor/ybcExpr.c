@@ -35,6 +35,8 @@
 #include "parser/parse_type.h"
 #include "utils/lsyscache.h"
 #include "commands/dbcommands.h"
+#include "executor/executor.h"
+#include "executor/nodeSubplan.h"
 #include "executor/tuptable.h"
 #include "miscadmin.h"
 #include "utils/syscache.h"
@@ -44,16 +46,16 @@
 #include "executor/ybcExpr.h"
 #include "catalog/yb_type.h"
 
-Node *yb_expr_instantiate_params_mutator(Node *node, ParamListInfo paramLI);
-bool yb_pushdown_walker(Node *node, List **params);
+Node *yb_expr_instantiate_params_mutator(Node *node, EState *estate);
+bool yb_pushdown_walker(Node *node, List **colrefs);
 bool yb_can_pushdown_func(Oid funcid);
 
-YBCPgExpr YBCNewColumnRef(YBCPgStatement ybc_stmt, int16_t attr_num,
+YbcPgExpr YBCNewColumnRef(YbcPgStatement ybc_stmt, int16_t attr_num,
 						  int attr_typid, int attr_collation,
-						  const YBCPgTypeAttrs *type_attrs) {
-	YBCPgExpr expr = NULL;
-	const YBCPgTypeEntity *type_entity = YbDataTypeFromOidMod(attr_num, attr_typid);
-	YBCPgCollationInfo collation_info;
+						  const YbcPgTypeAttrs *type_attrs) {
+	YbcPgExpr expr = NULL;
+	const YbcPgTypeEntity *type_entity = YbDataTypeFromOidMod(attr_num, attr_typid);
+	YbcPgCollationInfo collation_info;
 	YBGetCollationInfo(attr_collation, type_entity, 0 /* datum */, true /* is_null */,
 					   &collation_info);
 	HandleYBStatus(YBCPgNewColumnRef(ybc_stmt, attr_num, type_entity,
@@ -62,11 +64,11 @@ YBCPgExpr YBCNewColumnRef(YBCPgStatement ybc_stmt, int16_t attr_num,
 	return expr;
 }
 
-YBCPgExpr YBCNewConstant(YBCPgStatement ybc_stmt, Oid type_id, Oid collation_id,
+YbcPgExpr YBCNewConstant(YbcPgStatement ybc_stmt, Oid type_id, Oid collation_id,
 						 Datum datum, bool is_null) {
-	YBCPgExpr expr = NULL;
-	const YBCPgTypeEntity *type_entity = YbDataTypeFromOidMod(InvalidAttrNumber, type_id);
-	YBCPgCollationInfo collation_info;
+	YbcPgExpr expr = NULL;
+	const YbcPgTypeEntity *type_entity = YbDataTypeFromOidMod(InvalidAttrNumber, type_id);
+	YbcPgCollationInfo collation_info;
 	YBGetCollationInfo(collation_id, type_entity, datum, is_null, &collation_info);
 	HandleYBStatus(YBCPgNewConstant(ybc_stmt, type_entity,
 									collation_info.collate_is_valid_non_c,
@@ -75,10 +77,19 @@ YBCPgExpr YBCNewConstant(YBCPgStatement ybc_stmt, Oid type_id, Oid collation_id,
 	return expr;
 }
 
-YBCPgExpr YBCNewConstantVirtual(YBCPgStatement ybc_stmt, Oid type_id, YBCPgDatumKind kind) {
-	YBCPgExpr expr = NULL;
-	const YBCPgTypeEntity *type_entity = YbDataTypeFromOidMod(InvalidAttrNumber, type_id);
+YbcPgExpr YBCNewConstantVirtual(YbcPgStatement ybc_stmt, Oid type_id, YbcPgDatumKind kind) {
+	YbcPgExpr expr = NULL;
+	const YbcPgTypeEntity *type_entity = YbDataTypeFromOidMod(InvalidAttrNumber, type_id);
 	HandleYBStatus(YBCPgNewConstantVirtual(ybc_stmt, type_entity, kind, &expr));
+	return expr;
+}
+
+YbcPgExpr YBCNewTupleExpr(YbcPgStatement ybc_stmt,
+						  const YbcPgTypeAttrs *type_attrs, int num_elems, YbcPgExpr *elems) {
+	YbcPgExpr expr = NULL;
+	const YbcPgTypeEntity *tuple_type_entity = YBCPgFindTypeEntity(RECORDOID);
+	HandleYBStatus(YBCPgNewTupleExpr(ybc_stmt, tuple_type_entity, type_attrs,
+									 num_elems, elems, &expr));
 	return expr;
 }
 
@@ -87,49 +98,65 @@ YBCPgExpr YBCNewConstantVirtual(YBCPgStatement ybc_stmt, Oid type_id, YBCPgDatum
  *
  *	  Expression mutator used internally by YbExprInstantiateParams
  */
-Node *yb_expr_instantiate_params_mutator(Node *node, ParamListInfo paramLI)
+Node *yb_expr_instantiate_params_mutator(Node *node, EState *estate)
 {
 	if (node == NULL)
 		return NULL;
 
 	if (IsA(node, Param))
 	{
-		Param *param = castNode(Param, node);
-		ParamExternData *prm = NULL;
-		ParamExternData prmdata;
-		if (paramLI->paramFetch != NULL)
-			prm = paramLI->paramFetch(paramLI, param->paramid,
-									  true, &prmdata);
-		else
-			prm = &paramLI->params[param->paramid - 1];
-
-		if (!OidIsValid(prm->ptype) ||
-			prm->ptype != param->paramtype)
-		{
-			/* Planner should ensure this does not happen */
-			elog(ERROR, "Invalid parameter: %s", nodeToString(param));
-		}
+		Param	   *param = castNode(Param, node);
+		Datum		pval = 0;
+		bool		pnull = true;
 		int16		typLen = 0;
 		bool		typByVal = false;
-		Datum		pval = 0;
-
-		get_typlenbyval(param->paramtype, &typLen, &typByVal);
-		if (prm->isnull || typByVal)
+		if (param->paramkind == PARAM_EXEC)
+		{
+			ParamExecData *prm = &(estate->es_param_exec_vals[param->paramid]);
+			if (prm->execPlan != NULL)
+			{
+				/* Parameter not evaluated yet, so go do it */
+				ExecSetParamPlan(prm->execPlan, GetPerTupleExprContext(estate));
+				/* ExecSetParamPlan should have processed this param... */
+				Assert(prm->execPlan == NULL);
+			}
 			pval = prm->value;
+			pnull = prm->isnull;
+		}
 		else
-			pval = datumCopy(prm->value, typByVal, typLen);
+		{
+			ParamExternData *prm = NULL;
+			ParamExternData prmdata;
+			if (estate->es_param_list_info->paramFetch != NULL)
+				prm = estate->es_param_list_info->paramFetch(estate->es_param_list_info,
+															 param->paramid,
+															 true, &prmdata);
+			else
+				prm = &estate->es_param_list_info->params[param->paramid - 1];
+
+			Assert(OidIsValid(prm->ptype) && prm->ptype == param->paramtype);
+			pval = prm->value;
+			pnull = prm->isnull;
+		}
+		get_typlenbyval(param->paramtype, &typLen, &typByVal);
+		/*
+		 * If parameter is by reference, make a copy in the current memory
+		 * context
+		 */
+		if (!pnull && !typByVal)
+			pval = datumCopy(pval, typByVal, typLen);
 
 		return (Node *) makeConst(param->paramtype,
 								  param->paramtypmod,
 								  param->paramcollid,
 								  (int) typLen,
 								  pval,
-								  prm->isnull,
+								  pnull,
 								  typByVal);
 	}
 	return expression_tree_mutator(node,
 								   yb_expr_instantiate_params_mutator,
-								   (void *) paramLI);
+								   (void *) estate);
 }
 
 /*
@@ -138,16 +165,48 @@ Node *yb_expr_instantiate_params_mutator(Node *node, ParamListInfo paramLI)
  *	  Replace the Param nodes of the expression tree with Const nodes carrying
  *	  current parameter values before pushing the expression down to DocDB
  */
-Expr *YbExprInstantiateParams(Expr* expr, ParamListInfo paramLI)
+Expr *YbExprInstantiateParams(Expr* expr, EState *estate)
 {
 	/* Fast-path if there are no params. */
-	if (paramLI == NULL)
-		return expr;
+	if (estate->es_param_list_info == NULL &&
+		estate->es_param_exec_vals == NULL)
+			return expr;
 
-	return (Expr *) expression_tree_mutator((Node *) expr,
-											yb_expr_instantiate_params_mutator,
-											(void *) paramLI);
+	/*
+	 * This does not follow common pattern of mutator invocation due to the
+	 * corner case when expr is a bare T_Param node. The expression_tree_mutator
+	 * just makes a copy of primitive nodes without running the mutator function
+	 * on them. So here we run the mutator to make sure the bare T_Param is
+	 * getting replaced, and if the expr is anything else, it will be properly
+	 * forwarded to the expression_tree_mutator.
+	 */
+	return (Expr *) yb_expr_instantiate_params_mutator((Node *) expr, estate);
 }
+
+/*
+ * YbInstantiatePushdownParams
+ *	  Replace the Param nodes of the expression trees with Const nodes carrying
+ *	  current parameter values before pushing the expression down to DocDB.
+ */
+YbPushdownExprs *
+YbInstantiatePushdownParams(YbPushdownExprs *pushdown, EState *estate)
+{
+	YbPushdownExprs *result;
+	if (pushdown->quals == NIL)
+		return NULL;
+	/* Make new instance for the scan state. */
+	result = (YbPushdownExprs *) palloc(sizeof(YbPushdownExprs));
+	/* Store mutated list of expressions. */
+	result->quals = (List *)
+		YbExprInstantiateParams((Expr *) pushdown->quals, estate);
+	/*
+	 * Column references are not modified by the executor, so it is OK to copy
+	 * the reference.
+	 */
+	result->colrefs = pushdown->colrefs;
+	return result;
+}
+
 
 /*
  * yb_can_pushdown_func
@@ -183,6 +242,16 @@ bool yb_can_pushdown_func(Oid funcid)
 	{
 		if (funcid == yb_funcs_safe_for_pushdown[i])
 			return true;
+	}
+
+	/*
+	 * Check whether this function is on a list of hand-picked functions
+	 * that cannot be pushed down.
+	 */
+	for (int i = 0; i < yb_funcs_unsafe_for_pushdown_count; ++i)
+	{
+		if (funcid == yb_funcs_unsafe_for_pushdown[i])
+			return false;
 	}
 
 	/* Examine misc function attributes that may affect pushability */
@@ -222,7 +291,7 @@ bool yb_can_pushdown_func(Oid funcid)
  *
  *	  Expression walker used internally by YbCanPushdownExpr
  */
-bool yb_pushdown_walker(Node *node, List **params)
+bool yb_pushdown_walker(Node *node, List **colrefs)
 {
 	if (node == NULL)
 		return false;
@@ -234,24 +303,20 @@ bool yb_pushdown_walker(Node *node, List **params)
 			AttrNumber	attno = var_expr->varattno;
 			/* DocDB is not aware of Postgres virtual attributes */
 			if (!AttrNumberIsForUserDefinedAttr(attno))
-			{
 				return true;
-			}
 			/* Need to convert values between DocDB and Postgres formats */
 			if (!YBCPgFindTypeEntity(var_expr->vartype))
-			{
 				return true;
-			}
 			/* Collect column reference */
-			if (params)
+			if (colrefs)
 			{
 				ListCell   *lc;
 				bool		found = false;
 
 				/* Check if the column reference has already been collected */
-				foreach(lc, *params)
+				foreach(lc, *colrefs)
 				{
-					YbExprParamDesc *param = (YbExprParamDesc *) lfirst(lc);
+					YbExprColrefDesc *param = (YbExprColrefDesc *) lfirst(lc);
 					if (param->attno == attno)
 					{
 						found = true;
@@ -262,12 +327,12 @@ bool yb_pushdown_walker(Node *node, List **params)
 				if (!found)
 				{
 					/* Add new column reference to the list */
-					YbExprParamDesc *new_param = makeNode(YbExprParamDesc);
+					YbExprColrefDesc *new_param = makeNode(YbExprColrefDesc);
 					new_param->attno = attno;
 					new_param->typid = var_expr->vartype;
 					new_param->typmod = var_expr->vartypmod;
 					new_param->collid = var_expr->varcollid;
-					*params = lappend(*params, new_param);
+					*colrefs = lappend(*colrefs, new_param);
 				}
 			}
 			break;
@@ -277,23 +342,56 @@ bool yb_pushdown_walker(Node *node, List **params)
 			FuncExpr *func_expr = castNode(FuncExpr, node);
 			/* DocDB executor does not expand variadic argument */
 			if (func_expr->funcvariadic)
-			{
 				return true;
-			}
+			/*
+			 * Unsafe to pushdown function if collation is not C, there may be
+			 * needed metadata lookup for collation details.
+			 */
+			if (YBIsCollationValidNonC(func_expr->inputcollid))
+				return true;
 			/* Check if the function is pushable */
 			if (!yb_can_pushdown_func(func_expr->funcid))
-			{
 				return true;
-			}
 			break;
 		}
 		case T_OpExpr:
 		{
 			OpExpr *op_expr = castNode(OpExpr, node);
-			if (!yb_can_pushdown_func(op_expr->opfuncid))
-			{
+			/*
+			 * Unsafe to pushdown function if collation is not C, there may be
+			 * needed metadata lookup for collation details.
+			 */
+			if (YBIsCollationValidNonC(op_expr->inputcollid))
 				return true;
+			if (!yb_can_pushdown_func(op_expr->opfuncid))
+				return true;
+			break;
+		}
+		case T_ScalarArrayOpExpr:
+		{
+			ScalarArrayOpExpr *saop_expr = castNode(ScalarArrayOpExpr, node);
+			if (!yb_enable_saop_pushdown)
+				return true;
+			/*
+			 * Unsafe to pushdown function if collation is not C, there may be
+			 * needed metadata lookup for collation details.
+			 */
+			if (YBIsCollationValidNonC(saop_expr->inputcollid))
+				return true;
+			if (!yb_can_pushdown_func(saop_expr->opfuncid))
+				return true;
+			if (list_length(saop_expr->args) == 2)
+			{
+				/* Check if DocDB can deconstruct the array */
+				Oid elmtype = get_element_type(exprType(lsecond(saop_expr->args)));
+				int16_t elmlen;
+				bool elmbyval;
+				char elmalign;
+				if (!YbTypeDetails(elmtype, &elmlen, &elmbyval, &elmalign))
+					return true;
 			}
+			else
+				return true;
 			break;
 		}
 		case T_CaseExpr:
@@ -304,19 +402,14 @@ bool yb_pushdown_walker(Node *node, List **params)
 			 * lookup to find equality operation for the argument data type.
 			 */
 			if (case_expr->arg)
-			{
 				return true;
-			}
 			break;
 		}
 		case T_Param:
 		{
 			Param *p = castNode(Param, node);
-			if (p->paramkind != PARAM_EXTERN ||
-					!YBCPgFindTypeEntity(p->paramtype))
-			{
+			if (!YBCPgFindTypeEntity(p->paramtype))
 				return true;
-			}
 			break;
 		}
 		case T_Const:
@@ -327,9 +420,7 @@ bool yb_pushdown_walker(Node *node, List **params)
 			* DocDB does not support arbitrary types.
 			*/
 			if (!YBCPgFindTypeEntity(c->consttype))
-			{
 				return true;
-			}
 			break;
 		}
 		case T_RelabelType:
@@ -340,7 +431,7 @@ bool yb_pushdown_walker(Node *node, List **params)
 		default:
 			return true;
 	}
-	return expression_tree_walker(node, yb_pushdown_walker, (void *) params);
+	return expression_tree_walker(node, yb_pushdown_walker, (void *) colrefs);
 }
 
 /*
@@ -354,26 +445,26 @@ bool yb_pushdown_walker(Node *node, List **params)
  *	  references are replaced with constants by YbExprInstantiateParams before
  *	  the DocDB request is sent.
  *
- *	  If the params parameter is provided, function also collects column
- *	  references represented by Var nodes in the expression tree. The params
- *	  list may be initially empty (NIL) or already contain some YbExprParamDesc
+ *	  If the colrefs parameter is provided, function also collects column
+ *	  references represented by Var nodes in the expression tree. The colrefs
+ *	  list may be initially empty (NIL) or already contain some YbExprColrefDesc
  *	  entries. That allows to collect column references from multiple
  *	  expressions into single list. The function avoids adding duplicate
  *	  references, however it does not remove duplecates if they are already
- *	  present in the params list.
+ *	  present in the colrefs list.
  *
  *	  To add support for another expression node type it should be added to the
  *	  yb_pushdown_walker where it should check node attributes that may affect
  *	  pushability, and implement evaluation of that node type instance in the
  *	  evalExpr() function.
  */
-bool YbCanPushdownExpr(Expr *pg_expr, List **params)
+bool YbCanPushdownExpr(Expr *pg_expr, List **colrefs)
 {
 	/* respond with false if pushdown disabled in GUC */
 	if (!yb_enable_expression_pushdown)
 		return false;
 
-	return !yb_pushdown_walker((Node *) pg_expr, params);
+	return !yb_pushdown_walker((Node *) pg_expr, colrefs);
 }
 
 /*
@@ -423,7 +514,6 @@ bool yb_transactional_walker(Node *node, void *context)
 		 * expression_tree_walker function and selecting those looking like they
 		 * do suspiciously transactional thing like running a subquery.
 		 */
-		case T_NextValueExpr:
 		case T_RangeTblRef:
 		case T_SubLink:
 		case T_SubPlan:
@@ -483,11 +573,11 @@ bool YbIsTransactionalExpr(Node *pg_expr)
  *	  DocDB statement. Caller is supposed to ensure that expression is pushable
  *	  so DocDB can handle it.
  */
-YBCPgExpr YBCNewEvalExprCall(YBCPgStatement ybc_stmt, Expr *pg_expr)
+YbcPgExpr YBCNewEvalExprCall(YbcPgStatement ybc_stmt, Expr *pg_expr)
 {
-	YBCPgExpr ybc_expr;
-	YBCPgCollationInfo collation_info;
-	const YBCPgTypeEntity *type_ent;
+	YbcPgExpr ybc_expr;
+	YbcPgCollationInfo collation_info;
+	const YbcPgTypeEntity *type_ent;
 	type_ent = YbDataTypeFromOidMod(InvalidAttrNumber,
 									exprType((Node *) pg_expr));
 	YBGetCollationInfo(exprCollation((Node *) pg_expr),
@@ -502,7 +592,7 @@ YBCPgExpr YBCNewEvalExprCall(YBCPgStatement ybc_stmt, Expr *pg_expr)
 									&ybc_expr));
 
 	Datum expr_datum = CStringGetDatum(nodeToString(pg_expr));
-	YBCPgExpr expr = YBCNewConstant(ybc_stmt, CSTRINGOID, C_COLLATION_OID,
+	YbcPgExpr expr = YBCNewConstant(ybc_stmt, CSTRINGOID, C_COLLATION_OID,
 									expr_datum , /* IsNull */ false);
 	HandleYBStatus(YBCPgOperatorAppendArg(ybc_expr, expr));
 	return ybc_expr;

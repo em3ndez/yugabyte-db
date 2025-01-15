@@ -9,13 +9,13 @@ menu:
 aliases:
   - /preview/api/redis/expire
   - /preview/api/yedis/expire
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 ## Synopsis
 
-<b>`EXPIRE key timeout`</b><br>
+**`EXPIRE key timeout`**
+
 Set a timeout on key (in seconds). After the timeout has expired, the key will automatically be deleted.
 
 ## Return value

@@ -1,80 +1,111 @@
-import React from 'react';
-import { isNonEmptyArray, isNonEmptyObject, isDefinedNotNull } from '../../../utils/ObjectUtils';
+import { isDefinedNotNull, isNonEmptyArray } from '../../../utils/ObjectUtils';
 import { YBLoadingCircleIcon } from '../../common/indicators';
 
 import _ from 'lodash';
 
-export const status = {
+/**
+ * A mapping from universe state to display text and className.
+ */
+export const UniverseState = {
   GOOD: {
-    statusText: 'Ready',
-    statusClassName: 'good'
+    text: 'Ready',
+    className: 'good'
   },
   PAUSED: {
-    statusText: 'Paused',
-    statusClassName: 'paused'
+    text: 'Paused',
+    className: 'paused'
   },
   PENDING: {
-    statusText: 'Pending',
-    statusClassName: 'pending'
+    text: 'Pending',
+    className: 'pending'
   },
   WARNING: {
-    statusText: 'Ready',
-    statusClassName: 'warning'
+    text: 'Ready',
+    className: 'warning'
   },
   BAD: {
-    statusText: 'Error',
-    statusClassName: 'bad'
+    text: 'Error',
+    className: 'bad'
   },
   UNKNOWN: {
-    statusText: 'Loading',
-    statusClassName: 'unknown'
+    text: 'Loading',
+    className: 'unknown'
   }
 };
 
-export const getUniverseStatus = (universe, universePendingTask) => {
+export const SoftwareUpgradeState = {
+  READY: 'Ready',
+  UPGRADING: 'Upgrading',
+  UPGRADE_FAILED: 'UpgradeFailed',
+  PRE_FINALIZE: 'PreFinalize',
+  FINALIZING: 'Finalizing',
+  FINALIZE_FAILED: 'FinalizeFailed',
+  ROLLING_BACK: 'RollingBack',
+  ROLLBACK_FAILED: 'RollbackFailed'
+};
+
+export const SoftwareUpgradeTaskType = {
+  SOFTWARE_UPGRADE: 'SoftwareUpgrade',
+  SOFTWARE_UPGRADEYB: 'SoftwareUpgradeYB',
+  FINALIZE_UPGRADE: 'FinalizeUpgrade',
+  ROLLBACK_UPGRADE: 'RollbackUpgrade'
+};
+
+/**
+ * Returns a universe status object with:
+ *  - state - A universe state from the universe state mapping {@link UniverseState}
+ *  - error - The error string from the current universe
+ */
+export const getUniverseStatus = (universe) => {
+  if (!universe?.universeDetails) {
+    return { state: UniverseState.UNKNOWN, error: '' };
+  }
   const {
     updateInProgress,
     updateSucceeded,
     universePaused,
+    placementModificationTaskUuid,
     errorString
   } = universe.universeDetails;
-
-  // statusText stores the status for display
-  // warning stores extra information for internal use (ex. warning icons for certain errors)
-  if (!isDefinedNotNull(universePendingTask) && updateSucceeded && !universePaused) {
-    return { status: status.GOOD, warning: '' };
+  /* TODO: Using placementModificationTaskUuid is a short term fix to not clear universe error
+   * state because updateSucceeded reports the state of the latest task only. This will be
+   * replaced by backend driven APIs in future.
+   */
+  const allUpdatesSucceeded = updateSucceeded && !isDefinedNotNull(placementModificationTaskUuid);
+  if (!updateInProgress && allUpdatesSucceeded && !universePaused) {
+    return { state: UniverseState.GOOD, error: errorString };
   }
-  if (!isDefinedNotNull(universePendingTask) && updateSucceeded && universePaused) {
-    return { status: status.PAUSED, warning: '' };
+  if (!updateInProgress && allUpdatesSucceeded && universePaused) {
+    return { state: UniverseState.PAUSED, error: errorString };
   }
-  if (updateInProgress && isNonEmptyObject(universePendingTask)) {
-    return { status: status.PENDING, warning: '' };
+  if (updateInProgress) {
+    return { state: UniverseState.PENDING, error: errorString };
   }
-  if (!updateInProgress && !updateSucceeded) {
+  if (!updateInProgress && !allUpdatesSucceeded) {
     return errorString === 'Preflight checks failed.'
-      ? { status: status.WARNING, warning: errorString }
-      : { status: status.BAD, warning: errorString };
+      ? { state: UniverseState.WARNING, error: errorString }
+      : { state: UniverseState.BAD, error: errorString };
   }
-  return { status: status.UNKNOWN, warning: '' };
+  return { state: UniverseState.UNKNOWN, error: errorString };
 };
 
 export const getUniverseStatusIcon = (curStatus) => {
-  if (_.isEqual(curStatus, status.GOOD)) {
+  if (_.isEqual(curStatus, UniverseState.GOOD)) {
     return <i className="fa fa-check-circle" />;
   }
-  if (_.isEqual(curStatus, status.PAUSED)) {
+  if (_.isEqual(curStatus, UniverseState.PAUSED)) {
     return <i className="fa fa-pause-circle-o" />;
   }
-  if (_.isEqual(curStatus, status.PENDING)) {
+  if (_.isEqual(curStatus, UniverseState.PENDING)) {
     return <i className="fa fa-hourglass-half" />;
   }
-  if (_.isEqual(curStatus, status.WARNING)) {
+  if (_.isEqual(curStatus, UniverseState.WARNING)) {
     return <i className="fa fa-warning" />;
   }
-  if (_.isEqual(curStatus, status.BAD)) {
+  if (_.isEqual(curStatus, UniverseState.BAD)) {
     return <i className="fa fa-warning" />;
   }
-  if (_.isEqual(curStatus, status.UNKNOWN)) {
+  if (_.isEqual(curStatus, UniverseState.UNKNOWN)) {
     return <YBLoadingCircleIcon size="small" />;
   }
 };
@@ -83,8 +114,7 @@ export const isPendingUniverseTask = (universeUUID, taskItem) => {
   return (
     taskItem.targetUUID === universeUUID &&
     (taskItem.status === 'Running' || taskItem.status === 'Initializing') &&
-    Number(taskItem.percentComplete) !== 100 &&
-    taskItem.target.toLowerCase() !== 'backup'
+    Number(taskItem.percentComplete) !== 100
   );
 };
 
@@ -98,4 +128,24 @@ export const hasPendingTasksForUniverse = (universeUUID, customerTaskList) => {
   return isNonEmptyArray(customerTaskList)
     ? customerTaskList.some((taskItem) => isPendingUniverseTask(universeUUID, taskItem))
     : false;
+};
+
+export const getcurrentUniverseFailedTask = (currentUniverse, customerTaskList) => {
+  const latestTask = customerTaskList?.find((task) => {
+    return task.targetUUID === currentUniverse.universeUUID;
+  });
+  if (latestTask && (latestTask.status === 'Failure' || latestTask.status === 'Aborted')) {
+    return latestTask;
+  }
+  const universeDetails = currentUniverse.universeDetails;
+  // Last universe task succeeded, but there can be a placement modification task failure.
+  if (isDefinedNotNull(universeDetails.placementModificationTaskUuid)) {
+    return customerTaskList?.find((task) => {
+      return (
+        task.targetUUID === currentUniverse.universeUUID &&
+        task.id === universeDetails.placementModificationTaskUuid
+      );
+    });
+  }
+  return null;
 };

@@ -1,15 +1,14 @@
 ---
-title: jsonb_populate_record() and json_populate_record() 
+title: jsonb_populate_record() and json_populate_record()
 headerTitle: jsonb_populate_record() and json_populate_record()
 linkTitle: jsonb_populate_record()
 description: Convert a JSON object into the equivalent SQL record.
 menu:
-  stable:
+  stable_api:
     identifier: jsonb-populate-record
     parent: json-functions-operators
     weight: 180
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 **Purpose:** Convert a JSON _object_ into the equivalent SQL `record`.
@@ -25,7 +24,7 @@ return value:      anyelement
 
 Use this `ysqlsh` script to create the required types _"t1"_ and _"t2"_, and then to execute the `ASSERT`.
 
-```
+```plpgsql
 create type t1 as ( d int, e text);
 create type t2 as (a int, b text[], c t1);
 
@@ -47,4 +46,3 @@ begin
 end;
 $body$;
 ```
-

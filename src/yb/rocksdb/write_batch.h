@@ -36,8 +36,7 @@
 // non-const method, all threads accessing the same WriteBatch must use
 // external synchronization.
 
-#ifndef YB_ROCKSDB_WRITE_BATCH_H
-#define YB_ROCKSDB_WRITE_BATCH_H
+#pragma once
 
 #include <stdint.h>
 
@@ -45,11 +44,13 @@
 #include <atomic>
 #include <string>
 #include <vector>
+#include <optional>
 
 #include "yb/rocksdb/status.h"
 #include "yb/rocksdb/write_batch_base.h"
 
 #include "yb/util/slice.h"
+#include "yb/util/slice_parts.h"
 
 namespace rocksdb {
 
@@ -59,18 +60,20 @@ class UserFrontiers;
 
 class DirectWriteHandler {
  public:
-  virtual void Put(const SliceParts& key, const SliceParts& value) = 0;
+  // Returns slices to inserted key and value.
+  virtual std::pair<Slice, Slice> Put(const SliceParts& key, const SliceParts& value) = 0;
   virtual void SingleDelete(const Slice& key) = 0;
 
   virtual ~DirectWriteHandler() = default;
 };
 
-// DirectWriter could be attached to WriteBatch, in this case when write batch is applied to
-// rocksdb, it calls direct writer passing DirectWriteHandler, that could be used to add
-// entries directly to mem table.
+// DirectWriter could be attached to a WriteBatch. In this case, when the write batch is written to
+// RocksDB, the Apply method of the direct writer is called, and it is passed a DirectWriteHandler.
+// The direct writer uses the methods of DirectWriteHandler such as Put and SingleDelete to write
+// entries directly to the memtable.
 class DirectWriter {
  public:
-  virtual CHECKED_STATUS Apply(DirectWriteHandler* handler) = 0;
+  virtual Status Apply(DirectWriteHandler* handler) = 0;
 
   virtual ~DirectWriter() = default;
 };
@@ -171,7 +174,7 @@ class WriteBatch : public WriteBatchBase {
     // default implementation will just call Put without column family for
     // backwards compatibility. If the column family is not default,
     // the function is noop
-    virtual CHECKED_STATUS PutCF(uint32_t column_family_id, const SliceParts& key,
+    virtual Status PutCF(uint32_t column_family_id, const SliceParts& key,
                                  const SliceParts& value) {
       if (column_family_id == 0) {
         // Put() historically doesn't return status. We didn't want to be
@@ -185,7 +188,7 @@ class WriteBatch : public WriteBatchBase {
     }
     virtual void Put(const Slice& /*key*/, const Slice& /*value*/) {}
 
-    virtual CHECKED_STATUS DeleteCF(uint32_t column_family_id, const Slice& key) {
+    virtual Status DeleteCF(uint32_t column_family_id, const Slice& key) {
       if (column_family_id == 0) {
         Delete(key);
         return Status::OK();
@@ -195,7 +198,7 @@ class WriteBatch : public WriteBatchBase {
     }
     virtual void Delete(const Slice& /*key*/) {}
 
-    virtual CHECKED_STATUS SingleDeleteCF(uint32_t column_family_id, const Slice& key) {
+    virtual Status SingleDeleteCF(uint32_t column_family_id, const Slice& key) {
       if (column_family_id == 0) {
         SingleDelete(key);
         return Status::OK();
@@ -208,7 +211,7 @@ class WriteBatch : public WriteBatchBase {
     // Merge and LogData are not pure virtual. Otherwise, we would break
     // existing clients of Handler on a source code level. The default
     // implementation of Merge does nothing.
-    virtual CHECKED_STATUS MergeCF(uint32_t column_family_id, const Slice& key,
+    virtual Status MergeCF(uint32_t column_family_id, const Slice& key,
                            const Slice& value) {
       if (column_family_id == 0) {
         Merge(key, value);
@@ -219,7 +222,7 @@ class WriteBatch : public WriteBatchBase {
     }
     virtual void Merge(const Slice& /*key*/, const Slice& /*value*/) {}
 
-    virtual CHECKED_STATUS Frontiers(const UserFrontiers&) {
+    virtual Status Frontiers(const UserFrontiers&) {
       return STATUS(NotSupported, "UserFrontiers not implemented");
     }
 
@@ -231,7 +234,7 @@ class WriteBatch : public WriteBatchBase {
     // implementation always returns true.
     virtual bool Continue();
   };
-  CHECKED_STATUS Iterate(Handler* handler) const;
+  Status Iterate(Handler* handler) const;
 
   // Retrieve the serialized version of this batch.
   const std::string& Data() const { return rep_; }
@@ -280,6 +283,10 @@ class WriteBatch : public WriteBatchBase {
     return direct_entries_;
   }
 
+  void SetHandlerForLogging(Handler* handler_for_logging) {
+    handler_for_logging_ = handler_for_logging;
+  }
+
  private:
   friend class WriteBatchInternal;
   std::unique_ptr<SavePoints> save_points_;
@@ -296,9 +303,7 @@ class WriteBatch : public WriteBatchBase {
   DirectWriter* direct_writer_ = nullptr;
   mutable size_t direct_entries_ = 0;
 
-  // Intentionally copyable
+  Handler* handler_for_logging_ = nullptr;
 };
 
 }  // namespace rocksdb
-
-#endif // YB_ROCKSDB_WRITE_BATCH_H

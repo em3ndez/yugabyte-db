@@ -15,7 +15,8 @@ package org.yb.cdc;
 
 import com.google.common.net.HostAndPort;
 import com.google.common.util.concurrent.ThreadFactoryBuilder;
-import org.apache.log4j.Logger;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.yb.client.*;
 import org.yb.master.MasterDdlOuterClass;
 import org.yb.util.ServerInfo;
@@ -31,7 +32,7 @@ import java.util.concurrent.Future;
 import java.util.stream.Collectors;
 
 public class ConcurrentLogConnector {
-  private static final Logger LOG = Logger.getLogger(ConcurrentLogConnector.class);
+  private static final Logger LOG = LoggerFactory.getLogger(ConcurrentLogConnector.class);
   private static AsyncYBClient client;
   private static YBClient syncClient;
   private static String CDC_CONFIG_FILE = "";
@@ -53,11 +54,13 @@ public class ConcurrentLogConnector {
   private String namespace;
   private String tableName;
 
+  private String dbType;
   private Properties prop = new Properties();
   int concurrency = 1;
 
   private boolean stopExecution = false;
   private int pollingInterval;
+  private boolean bootstrap;
 
   public ConcurrentLogConnector(CmdLineOpts opts, OutputClient opClient) throws Exception {
     InputStream input = new FileInputStream(opts.configFile);
@@ -70,10 +73,13 @@ public class ConcurrentLogConnector {
 
     pollingInterval = opts.pollingInterval;
 
+    bootstrap = opts.bootstrap;
+
     // Load a properties file.
     prop.load(input);
     format = prop.getProperty("format");
     namespace = prop.getProperty("schema.name");
+    dbType = prop.getProperty("db.type");
     tableName = prop.getProperty("table.name");
     String schemaName = PUBLIC_SCHEMA_NAME;
 
@@ -111,7 +117,7 @@ public class ConcurrentLogConnector {
             .getTableInfoList()) {
       if (tableInfo.getName().equals(tableName) &&
         tableInfo.getNamespace().getName().equals(namespace) &&
-        tableInfo.getPgschemaName().equals(schemaName)) {
+        (tableInfo.getPgschemaName().isEmpty() || tableInfo.getPgschemaName().equals(schemaName))) {
         tableId = tableInfo.getId().toStringUtf8();
         // If the tableId is found, there's no point in iterating further.
         break;
@@ -170,7 +176,7 @@ public class ConcurrentLogConnector {
                 try {
                   return new ConcurrentPoller(syncClient, client, outputClient, streamId,
                                               tableIdsToTabletIds, 2, format, stopExecution,
-                                              enableSnapshot);
+                                              enableSnapshot, bootstrap);
                 } catch (IOException e) {
                   e.printStackTrace();
                 }

@@ -11,8 +11,7 @@
 // under the License.
 //
 
-#ifndef YB_CLIENT_QL_DML_TEST_BASE_H
-#define YB_CLIENT_QL_DML_TEST_BASE_H
+#pragma once
 
 #include <algorithm>
 #include <functional>
@@ -20,10 +19,9 @@
 
 #include <gtest/gtest.h>
 
-#include "yb/client/callbacks.h"
 #include "yb/client/table_handle.h"
 #include "yb/common/ql_protocol.pb.h"
-#include "yb/common/ql_rowblock.h"
+#include "yb/qlexpr/ql_rowblock.h"
 
 #include "yb/server/server_fwd.h"
 
@@ -66,11 +64,9 @@ namespace kv_table_test {
 constexpr const auto kKeyColumn = "key";
 constexpr const auto kValueColumn = "value";
 
-YB_DEFINE_ENUM(Partitioning, (kHash)(kRange))
+void BuildSchema(test::Partitioning partitioning, Schema* schema);
 
-void BuildSchema(Partitioning partitioning, Schema* schema);
-
-CHECKED_STATUS CreateTable(
+Status CreateTable(
     const Schema& schema, int num_tablets, YBClient* client,
     TableHandle* table, const YBTableName& table_name = kTableName);
 
@@ -117,7 +113,7 @@ class KeyValueTableTest : public QLDmlTestBase<MiniClusterType> {
  protected:
   void CreateTable(Transactional transactional);
 
-  CHECKED_STATUS CreateTable(const Schema& schema);
+  Status CreateTable(const Schema& schema);
 
   void CreateIndex(Transactional transactional,
                    int indexed_column_index = 1,
@@ -178,9 +174,13 @@ class KeyValueTableTest : public QLDmlTestBase<MiniClusterType> {
 extern template class KeyValueTableTest<MiniCluster>;
 extern template class KeyValueTableTest<ExternalMiniCluster>;
 
-CHECKED_STATUS CheckOp(YBqlOp* op);
+Status CheckOp(YBqlOp* op);
+
+// Select rows count without intermediate conversion of rows to string vector as CountTableRows
+// does.
+Result<size_t> CountRows(
+    const YBSessionPtr& session, const TableHandle& table,
+    MonoDelta timeout = MonoDelta::FromSeconds(10) * kTimeMultiplier);
 
 }  // namespace client
 }  // namespace yb
-
-#endif // YB_CLIENT_QL_DML_TEST_BASE_H

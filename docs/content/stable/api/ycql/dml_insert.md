@@ -4,11 +4,10 @@ headerTitle: INSERT
 linkTitle: INSERT
 description: Use the INSERT statement to add a row to a specified table.
 menu:
-  stable:
+  stable_api:
     parent: api-cassandra
     weight: 1300
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 ## Synopsis
@@ -23,7 +22,7 @@ Use the `INSERT` statement to add a row to a specified table.
 
 ### using_expression
 
-```
+```ebnf
 using_expression = ttl_or_timestamp_expression { 'AND' ttl_or_timestamp_expression };
 ```
 
@@ -31,7 +30,7 @@ using_expression = ttl_or_timestamp_expression { 'AND' ttl_or_timestamp_expressi
 
 ### ttl_or_timestamp_expression
 
-```
+```ebnf
 ttl_or_timestamp_expression = 'TTL' ttl_expression | 'TIMESTAMP' timestamp_expression;
 ```
 
@@ -39,11 +38,11 @@ ttl_or_timestamp_expression = 'TTL' ttl_expression | 'TIMESTAMP' timestamp_expre
 
 ### Grammar
 
-```
-insert ::= INSERT INTO table_name ( column_name [ , ... ] ) VALUES ( 
-           expression [ , ... ] )  
-           [ IF { [ NOT ] EXISTS | if_expression } ] 
-           [ USING using_expression ] 
+```ebnf
+insert ::= INSERT INTO table_name ( column_name [ , ... ] ) VALUES (
+           expression [ , ... ] )
+           [ IF { [ NOT ] EXISTS | if_expression } ]
+           [ USING using_expression ]
            [ RETURNS STATUS AS ROW ]
 ```
 
@@ -51,21 +50,22 @@ Where
 
 - `table_name` and `column` are identifiers (`table_name` may be qualified with a keyspace name).
 - `value` can be any expression although Apache Cassandra requires that `value`s must be literals.
-- Restrictions for `if_expression` and `ttl_expression` are covered in the Semantics section below.
+- Restrictions for `if_expression` and `ttl_expression` are covered in the Semantics section.
 - See [Expressions](..#expressions) for more information on syntax rules.
 
 ## Semantics
 
-- An error is raised if the specified `table_name` does not exist. 
+- An error is raised if the specified `table_name` does not exist.
 - The columns list must include all primary key columns.
 - The `USING TIMESTAMP` clause indicates you would like to perform the INSERT as if it was done at the
   timestamp provided by the user. The timestamp is the number of microseconds since epoch.
 - By default `INSERT` has `upsert` semantics, that is, if the row already exists, it behaves like an `UPDATE`. If pure
  `INSERT` semantics is desired then the `IF NOT EXISTS` clause can be used to make sure an existing row is not overwritten by the `INSERT`.
-- **NOTE**: You should either use the `USING TIMESTAMP` clause in all of your statements or none of
+- **Note**: You should either use the `USING TIMESTAMP` clause in all of your statements or none of
   them. Using a mix of statements where some have `USING TIMESTAMP` and others do not will lead to
   very confusing results.
-- Inserting rows with TTL is not supported on tables with [transactions enabled](./../ddl_create_table#table-properties-1). 
+- Inserting rows with TTL is not supported on tables with [transactions enabled](./../ddl_create_table#table-properties-1).
+- `INSERT` is always done at `QUORUM` consistency level irrespective of setting.
 
 ### `VALUES` clause
 
@@ -106,7 +106,7 @@ ycqlsh:example> INSERT INTO employees(department_id, employee_id, name) VALUES (
 ycqlsh:example> SELECT * FROM employees;
 ```
 
-```
+```output
  department_id | employee_id | name
 ---------------+-------------+------
              1 |           1 | John
@@ -121,7 +121,7 @@ Example 1
 ycqlsh:example> INSERT INTO employees(department_id, employee_id, name) VALUES (2, 1, 'Joe') IF name = null;
 ```
 
-```
+```output
  [applied]
 -----------
       True
@@ -133,7 +133,7 @@ Example 2
 ycqlsh:example> INSERT INTO employees(department_id, employee_id, name) VALUES (2, 1, 'Jack') IF NOT EXISTS;
 ```
 
-```
+```output
  [applied]
 -----------
      False
@@ -145,7 +145,7 @@ Example 3
 ycqlsh:example> SELECT * FROM employees;
 ```
 
-```
+```output
  department_id | employee_id | name
 ---------------+-------------+------
              2 |           1 |  Joe
@@ -155,7 +155,7 @@ ycqlsh:example> SELECT * FROM employees;
 
 ### Insert a row with expiration time using the `USING TTL` clause
 
-You can do this as shown below.
+You can do this as follows:
 
 ```sql
 ycqlsh:example> INSERT INTO employees(department_id, employee_id, name) VALUES (2, 2, 'Jack') USING TTL 10;
@@ -167,7 +167,7 @@ Now query the employees table.
 ycqlsh:example> SELECT * FROM employees;
 ```
 
-```
+```output
  department_id | employee_id | name
 ---------------+-------------+------
              2 |           1 |  Joe
@@ -182,7 +182,7 @@ Again query the employees table after 11 seconds or more.
 ycqlsh:example> SELECT * FROM employees; -- 11 seconds after the insert.
 ```
 
-```
+```output
  department_id | employee_id | name
 ---------------+-------------+------
              2 |           1 |  Joe
@@ -204,7 +204,7 @@ Now query the employees table.
 ycqlsh:foo> SELECT * FROM employees;
 ```
 
-```
+```output
  department_id | employee_id | name
 ---------------+-------------+------
              1 |           1 | John
@@ -225,7 +225,7 @@ ycqlsh:foo> INSERT INTO employees(department_id, employee_id, name) VALUES (1, 3
 ycqlsh:foo> SELECT * FROM employees;
 ```
 
-```
+```output
  department_id | employee_id | name
 ---------------+-------------+-------
              1 |           1 |  John
@@ -246,7 +246,7 @@ ycqlsh:foo> INSERT INTO employees(department_id, employee_id, name) VALUES (1, 3
 ycqlsh:foo> SELECT * FROM employees;
 ```
 
-```
+```output
  department_id | employee_id | name
 ---------------+-------------+-------
              1 |           1 |  John
@@ -263,12 +263,10 @@ When executing a batch in YCQL, the protocol returns only one error or return st
 
 See examples in [batch docs](../batch#row-status).
 
-
-
 ## See also
 
 - [`CREATE TABLE`](../ddl_create_table)
-- [`DELETE`](../dml_delete)
-- [`SELECT`](../dml_select)
-- [`UPDATE`](../dml_update)
+- [`DELETE`](../dml_delete/)
+- [`SELECT`](../dml_select/)
+- [`UPDATE`](../dml_update/)
 - [`Expression`](..#expressions)

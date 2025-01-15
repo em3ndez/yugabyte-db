@@ -40,15 +40,20 @@
 #include "lib/stringinfo.h"
 #include "nodes/parsenodes.h"
 
-extern Oid	CreateTableGroup(CreateTableGroupStmt *stmt);
+#define DEFAULT_TABLEGROUP_NAME	"default"
+
+extern Oid	CreateTableGroup(YbCreateTableGroupStmt *stmt);
 
 extern Oid	get_tablegroup_oid(const char *tablegroupname, bool missing_ok);
-extern Oid  get_tablegroup_oid_by_table_oid(Oid table_oid);
 extern char *get_tablegroup_name(Oid grp_oid);
 
-extern void RemoveTablegroupById(Oid grp_oid);
-
+extern void RemoveTablegroupById(Oid grp_oid, bool remove_implicit);
+extern char *get_implicit_tablegroup_name(Oid oidSuffix);
+extern char *get_restore_tablegroup_name(Oid oidSuffix);
 extern ObjectAddress RenameTablegroup(const char *oldname, const char *newname);
 extern ObjectAddress AlterTablegroupOwner(const char *grpname, Oid newOwnerId);
+extern void ybAlterTablespaceForTablegroup(const char *grpname,
+										   Oid newTablespace,
+										   const char *newname);
 
 #endif							/* TABLEGROUP_H */

@@ -4,12 +4,11 @@ headerTitle: Three syntax contexts that use the specification of a UTC offset
 linkTitle: Syntax contexts for offset
 description: Explains the three syntax contexts that use the specification of a UTC offset. [YSQL]
 menu:
-  preview:
+  preview_api:
     identifier: syntax-contexts-to-spec-offset
     parent: timezones
     weight: 50
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 You can specify the _UTC_ offset, either _directly_ as an _interval_ value or _indirectly_ as a timezone name in three different syntax contexts:

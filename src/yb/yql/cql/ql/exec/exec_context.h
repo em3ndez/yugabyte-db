@@ -17,8 +17,7 @@
 // executed.
 //--------------------------------------------------------------------------------------------------
 
-#ifndef YB_YQL_CQL_QL_EXEC_EXEC_CONTEXT_H_
-#define YB_YQL_CQL_QL_EXEC_EXEC_CONTEXT_H_
+#pragma once
 
 #include <string>
 
@@ -81,13 +80,15 @@ class QueryPagingState {
                                               bool is_top_level_read_node);
 
   // Compose paging state to send to users.
-  CHECKED_STATUS ComposePagingStateForUser();
-  CHECKED_STATUS ComposePagingStateForUser(const QLPagingStatePB& child_state);
+  Status ComposePagingStateForUser();
+  Status ComposePagingStateForUser(const QLPagingStatePB& child_state);
+  Status ComposePagingStateForUser(const QLPagingStatePB& child_state,
+                                   uint32_t overridden_schema_version);
 
   // Load the paging state in DocDB responses.
-  CHECKED_STATUS LoadPagingStateFromDocdb(const RowsResult::SharedPtr& rows_result,
-                                          int64_t number_of_new_rows,
-                                          bool has_nested_query);
+  Status LoadPagingStateFromDocdb(const RowsResult::SharedPtr& rows_result,
+                                  int64_t number_of_new_rows,
+                                  bool has_nested_query);
 
   // Access functions to query_pb_.
   const std::string& table_id() const {
@@ -153,7 +154,7 @@ class QueryPagingState {
   }
 
   // row-read counters.
-  void set_read_count(size_t val) {
+  void set_read_count(int64_t val) {
     counter_pb_.set_read_count(val);
   }
 
@@ -162,7 +163,7 @@ class QueryPagingState {
   }
 
   // row-skip counter.
-  void set_skip_count(size_t val) {
+  void set_skip_count(int64_t val) {
     counter_pb_.set_skip_count(val);
   }
 
@@ -171,7 +172,7 @@ class QueryPagingState {
   }
 
   // row limit counter processing.
-  void set_select_limit(size_t val) {
+  void set_select_limit(int64_t val) {
     counter_pb_.set_select_limit(val);
   }
 
@@ -184,7 +185,7 @@ class QueryPagingState {
   }
 
   // row offset counter processing.
-  void set_select_offset(size_t val) {
+  void set_select_offset(int64_t val) {
     counter_pb_.set_select_offset(val);
   }
 
@@ -197,9 +198,9 @@ class QueryPagingState {
   }
 
   // Debug logging.
-  string DebugString() const {
-    return (string("\nQueryPB = {\n") + query_pb_.DebugString() + string ("\n};") +
-            string("\nCounterPB = {\n") + counter_pb_.DebugString() + string("\n};"));
+  std::string DebugString() const {
+    return (std::string("\nQueryPB = {\n") + query_pb_.DebugString() + std::string ("\n};") +
+            std::string("\nCounterPB = {\n") + counter_pb_.DebugString() + std::string("\n};"));
   }
 
   // Access to internal protobuf.
@@ -211,7 +212,7 @@ class QueryPagingState {
     return counter_pb_;
   }
 
-  uint64_t max_fetch_size() const {
+  int64_t max_fetch_size() const {
     return max_fetch_size_;
   }
 
@@ -292,7 +293,7 @@ class TnodeContext {
   }
 
   // Append rows result that was sent back by DocDB to this node.
-  CHECKED_STATUS AppendRowsResult(RowsResult::SharedPtr&& rows_result);
+  Status AppendRowsResult(RowsResult::SharedPtr&& rows_result);
 
   // Create CQL paging state based on user's information.
   // When calling YugaByte, users provide all info in StatementParameters including paging state.
@@ -300,7 +301,7 @@ class TnodeContext {
                                      bool is_top_level_select);
 
   // Clear paging state when the query reaches the end of scan.
-  CHECKED_STATUS ClearQueryState();
+  Status ClearQueryState();
 
   QueryPagingState *query_state() {
     return query_state_.get();
@@ -368,7 +369,8 @@ class TnodeContext {
   const client::YBqlReadOpPtr& uncovered_select_op() const {
     return uncovered_select_op_;
   }
-  QLRowBlock* keys() {
+
+  qlexpr::QLRowBlock* keys() {
     return keys_.get();
   }
 
@@ -396,7 +398,7 @@ class TnodeContext {
   //      The counter state = top-level query counter state.
   //      User paging state = { Nested QueryPagingState::query_pb_,
   //                            Top-Level QueryPagingState::counter_pb_ }
-  CHECKED_STATUS ComposeRowsResultForUser(const TreeNode* child_select_node, bool for_new_batches);
+  Status ComposeRowsResultForUser(const TreeNode* child_select_node, bool for_new_batches);
 
   const boost::optional<uint32_t>& hash_code_from_partition_key_ops() {
     return hash_code_from_partition_key_ops_;
@@ -451,7 +453,7 @@ class TnodeContext {
 
   // Select op template and primary keys for fetching from indexed table in an uncovered query.
   client::YBqlReadOpPtr uncovered_select_op_;
-  std::unique_ptr<QLRowBlock> keys_;
+  std::unique_ptr<qlexpr::QLRowBlock> keys_;
 
   boost::optional<uint32_t> hash_code_from_partition_key_ops_;
   boost::optional<uint32_t> max_hash_code_from_partition_key_ops_;
@@ -495,7 +497,7 @@ class ExecContext : public ProcessContextBase {
 
   //------------------------------------------------------------------------------------------------
   // Start a distributed transaction.
-  CHECKED_STATUS StartTransaction(
+  Status StartTransaction(
       IsolationLevel isolation_level, QLEnv* ql_env, Rescheduler* rescheduler);
 
   // Is a transaction currently in progress?
@@ -509,10 +511,10 @@ class ExecContext : public ProcessContextBase {
   }
 
   // Prepare a child distributed transaction.
-  CHECKED_STATUS PrepareChildTransaction(CoarseTimePoint deadline, ChildTransactionDataPB* data);
+  Status PrepareChildTransaction(CoarseTimePoint deadline, ChildTransactionDataPB* data);
 
   // Apply the result of a child distributed transaction.
-  CHECKED_STATUS ApplyChildTransactionResult(const ChildTransactionResultPB& result);
+  Status ApplyChildTransactionResult(const ChildTransactionResultPB& result);
 
   // Commit the current distributed transaction.
   void CommitTransaction(CoarseTimePoint deadline, client::CommitCallback callback);
@@ -563,5 +565,3 @@ class ExecContext : public ProcessContextBase {
 
 }  // namespace ql
 }  // namespace yb
-
-#endif  // YB_YQL_CQL_QL_EXEC_EXEC_CONTEXT_H_

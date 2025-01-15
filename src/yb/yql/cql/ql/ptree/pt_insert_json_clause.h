@@ -15,8 +15,7 @@
 // Tree node definitions for INSERT INTO ... JSON clause.
 //--------------------------------------------------------------------------------------------------
 
-#ifndef YB_YQL_CQL_QL_PTREE_PT_INSERT_JSON_CLAUSE_H_
-#define YB_YQL_CQL_QL_PTREE_PT_INSERT_JSON_CLAUSE_H_
+#pragma once
 
 #include <boost/optional.hpp>
 #include <rapidjson/document.h>
@@ -54,13 +53,13 @@ class PTInsertJsonClause: public PTCollection {
   }
 
   // Node semantics analysis.
-  CHECKED_STATUS Analyze(SemContext* sem_context) override;
+  Status Analyze(SemContext* sem_context) override;
   void PrintSemanticAnalysisResult(SemContext* sem_context);
 
   // Initialize this clause with JSON string and parsed JSON document.
   // Note that you have to std::move the document here.
-  CHECKED_STATUS PreExecInit(const std::string& json_string,
-                             rapidjson::Document json_document) {
+  Status PreExecInit(const std::string& json_string,
+                     rapidjson::Document json_document) {
     DCHECK(!json_document_) << "Double call to PreExecInit!";
     DCHECK(json_document.IsObject()) << "Supplied JSON should be an object";
     json_document_ = std::move(json_document);
@@ -102,5 +101,3 @@ class PTInsertJsonClause: public PTCollection {
 
 }  // namespace ql
 }  // namespace yb
-
-#endif // YB_YQL_CQL_QL_PTREE_PT_INSERT_JSON_CLAUSE_H_

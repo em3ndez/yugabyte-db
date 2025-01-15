@@ -30,18 +30,17 @@
 // under the License.
 //
 
-#ifndef YB_TABLET_OPERATIONS_OPERATION_TRACKER_H
-#define YB_TABLET_OPERATIONS_OPERATION_TRACKER_H
+#pragma once
 
 #include <memory>
 #include <string>
 #include <unordered_map>
 #include <vector>
 
+#include "yb/common/opid.h"
 #include "yb/gutil/ref_counted.h"
 #include "yb/tablet/operations/operation.h"
 #include "yb/util/locks.h"
-#include "yb/util/opid.h"
 
 namespace yb {
 
@@ -66,7 +65,7 @@ class OperationTracker {
   //
   // In the event that the tracker's memory limit is exceeded, returns a
   // ServiceUnavailable status.
-  CHECKED_STATUS Add(OperationDriver* driver);
+  Status Add(OperationDriver* driver);
 
   // Removes the operation from the pending list.
   // Also triggers the deletion of the Operation object, if its refcount == 0.
@@ -79,13 +78,13 @@ class OperationTracker {
   size_t TEST_GetNumPending() const;
 
   void WaitForAllToFinish() const;
-  CHECKED_STATUS WaitForAllToFinish(const MonoDelta& timeout) const;
+  Status WaitForAllToFinish(const MonoDelta& timeout) const;
 
   void StartInstrumentation(const scoped_refptr<MetricEntity>& metric_entity);
   void StartMemoryTracking(const std::shared_ptr<MemTracker>& parent_mem_tracker);
 
-  // Post tracker in called when operation tracker finishes tracking memory for corresponding op id.
-  // So post tracker could start tracking this memory in case it is still keeping memory for this
+  // Post-tracker is called when operation tracker finishes tracking memory for corresponding op id.
+  // So post-tracker could start tracking this memory in case it is still keeping memory for this
   // op id.
   void SetPostTracker(std::function<void(const OpId&)> post_tracker) {
     post_tracker_ = std::move(post_tracker);
@@ -124,7 +123,6 @@ class OperationTracker {
     int64_t memory_footprint = 0;
   };
 
-  // Protected by 'lock_'.
   typedef std::unordered_map<
       scoped_refptr<OperationDriver>,
       State,
@@ -143,5 +141,3 @@ class OperationTracker {
 
 }  // namespace tablet
 }  // namespace yb
-
-#endif // YB_TABLET_OPERATIONS_OPERATION_TRACKER_H

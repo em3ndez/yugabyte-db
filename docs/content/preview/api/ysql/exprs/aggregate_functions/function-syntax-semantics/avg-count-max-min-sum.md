@@ -4,12 +4,11 @@ linkTitle: avg(), count(), max(), min(), sum()
 headerTitle: avg(), count(), max(), min(), sum()
 description: Describes the functionality of the avg(), count(), max(), min(), sum() YSQL aggregate functions
 menu:
-  preview:
+  preview_api:
     identifier: avg-count-max-min-sum
     parent: aggregate-function-syntax-semantics
     weight: 10
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 Each of the aggregate functions [`avg()`](./#avg), [`count()`](./#count), [`max()`](./#max-min), [`min()`](./#max-min), and [`sum()`](./#sum) is invoked by using the same syntax—either the [`GROUP BY` syntax](./#group-by-syntax) or the [`OVER` syntax](./#over-syntax).

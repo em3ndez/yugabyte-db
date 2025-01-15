@@ -29,19 +29,23 @@
 // or implied.  See the License for the specific language governing permissions and limitations
 // under the License.
 //
-#ifndef YB_CONSENSUS_CONSENSUS_H_
-#define YB_CONSENSUS_CONSENSUS_H_
+#pragma once
 
 #include <iosfwd>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
 #include <boost/optional/optional_fwd.hpp>
 
 #include "yb/common/entity_ids_types.h"
+#include "yb/common/opid.h"
+#include "yb/common/opid.pb.h"
 
 #include "yb/consensus/consensus_fwd.h"
+#include "yb/consensus/consensus_meta.h"
+#include "yb/consensus/consensus_types.h"
 #include "yb/consensus/consensus_types.pb.h"
 #include "yb/consensus/metadata.pb.h"
 
@@ -49,13 +53,13 @@
 #include "yb/gutil/stringprintf.h"
 #include "yb/gutil/strings/substitute.h"
 
+#include "yb/rpc/rpc_fwd.h"
+
 #include "yb/tserver/tserver_types.pb.h"
 
 #include "yb/util/status_fwd.h"
 #include "yb/util/enums.h"
 #include "yb/util/monotime.h"
-#include "yb/util/opid.h"
-#include "yb/util/opid.pb.h"
 #include "yb/util/physical_time.h"
 #include "yb/util/status_callback.h"
 #include "yb/util/strongly_typed_bool.h"
@@ -152,28 +156,28 @@ class Consensus {
   virtual ~Consensus() {}
 
   // Starts running the consensus algorithm.
-  virtual CHECKED_STATUS Start(const ConsensusBootstrapInfo& info) = 0;
+  virtual Status Start(const ConsensusBootstrapInfo& info) = 0;
 
   // Returns true if consensus is running.
   virtual bool IsRunning() const = 0;
 
   // Emulates a leader election by simply making this peer leader.
-  virtual CHECKED_STATUS EmulateElection() = 0;
+  virtual Status EmulateElection() = 0;
 
-  virtual CHECKED_STATUS StartElection(const LeaderElectionData& data) = 0;
+  virtual Status StartElection(const LeaderElectionData& data) = 0;
 
   // We tried to step down, so you protege become leader.
   // But it failed to win election, so we should reset our withhold time and try to reelect ourself.
   // election_lost_by_uuid - uuid of protege that lost election.
-  virtual CHECKED_STATUS ElectionLostByProtege(const std::string& election_lost_by_uuid) = 0;
+  virtual Status ElectionLostByProtege(const std::string& election_lost_by_uuid) = 0;
 
   // Implement a LeaderStepDown() request.
-  virtual CHECKED_STATUS StepDown(const LeaderStepDownRequestPB* req,
-                                  LeaderStepDownResponsePB* resp);
+  virtual Status StepDown(const LeaderStepDownRequestPB* req,
+                          LeaderStepDownResponsePB* resp);
 
   // Wait until the node has LEADER role.
   // Returns Status::TimedOut if the role is not LEADER within 'timeout'.
-  virtual CHECKED_STATUS WaitUntilLeaderForTests(const MonoDelta& timeout) = 0;
+  virtual Status WaitUntilLeaderForTests(const MonoDelta& timeout) = 0;
 
   // Called by a Leader to replicate an entry to the state machine.
   //
@@ -207,10 +211,10 @@ class Consensus {
   //
   // This method can only be called on the leader, i.e. role() == LEADER
 
-  virtual CHECKED_STATUS TEST_Replicate(const ConsensusRoundPtr& round) = 0;
+  virtual Status TEST_Replicate(const ConsensusRoundPtr& round) = 0;
 
   // A batch version of Replicate, which is what we try to use as much as possible for performance.
-  virtual CHECKED_STATUS ReplicateBatch(const ConsensusRounds& rounds) = 0;
+  virtual Status ReplicateBatch(const ConsensusRounds& rounds) = 0;
 
   // Messages sent from LEADER to FOLLOWERS and LEARNERS to update their
   // state machines. This is equivalent to "AppendEntries()" in Raft
@@ -236,24 +240,25 @@ class Consensus {
   // error response could not be formed, which will result in the service
   // returning an UNKNOWN_ERROR RPC error code to the caller and including the
   // stringified Status message.
-  virtual CHECKED_STATUS Update(
-      ConsensusRequestPB* request,
-      ConsensusResponsePB* response,
-      CoarseTimePoint deadline) = 0;
+  virtual Status Update(
+      const std::shared_ptr<LWConsensusRequestPB>& request,
+      LWConsensusResponsePB* response, CoarseTimePoint deadline) = 0;
 
   // Messages sent from CANDIDATEs to voting peers to request their vote
   // in leader election.
-  virtual CHECKED_STATUS RequestVote(const VoteRequestPB* request,
-                                     VoteResponsePB* response) = 0;
+  virtual Status RequestVote(const VoteRequestPB* request,
+                             VoteResponsePB* response) = 0;
 
   // Implement a ChangeConfig() request.
-  virtual CHECKED_STATUS ChangeConfig(const ChangeConfigRequestPB& req,
-                                      const StdStatusCallback& client_cb,
-                                      boost::optional<tserver::TabletServerErrorPB::Code>* error);
+  virtual Status ChangeConfig(const ChangeConfigRequestPB& req,
+                              const StdStatusCallback& client_cb,
+                              boost::optional<tserver::TabletServerErrorPB::Code>* error);
 
   virtual Status UnsafeChangeConfig(
       const UnsafeChangeConfigRequestPB& req,
       boost::optional<tserver::TabletServerErrorPB::Code>* error_code) = 0;
+
+  virtual std::vector<FollowerCommunicationTime> GetFollowerCommunicationTimes() = 0;
 
   // Returns the current Raft role of this instance.
   virtual PeerRole role() const = 0;
@@ -269,12 +274,15 @@ class Consensus {
   int64_t LeaderTerm() const;
 
   // Returns the uuid of this peer.
-  virtual std::string peer_uuid() const = 0;
+  virtual const std::string& peer_uuid() const = 0;
 
   // Returns the id of the tablet whose updates this consensus instance helps coordinate.
-  virtual std::string tablet_id() const = 0;
+  virtual const TabletId& tablet_id() const = 0;
 
   virtual const TabletId& split_parent_tablet_id() const = 0;
+
+  // The sequence number of the clone op that created this tablet, and the source tablet's id.
+  virtual const std::optional<CloneSourceInfo>& clone_source_info() const = 0;
 
   // Returns a copy of the committed state of the Consensus system. Also allows returning the
   // leader lease status captured under the same lock.
@@ -312,11 +320,11 @@ class Consensus {
 
   // Assuming we are the leader, wait until we have a valid leader lease (i.e. the old leader's
   // lease has expired, and we have replicated a new lease that has not expired yet).
-  virtual CHECKED_STATUS WaitForLeaderLeaseImprecise(CoarseTimePoint deadline) = 0;
+  virtual Status WaitForLeaderLeaseImprecise(CoarseTimePoint deadline) = 0;
 
   // Check that this Consensus is a leader and has lease, returns Status::OK in this case.
   // Otherwise error status is returned.
-  virtual CHECKED_STATUS CheckIsActiveLeaderAndHasLease() const = 0;
+  virtual Status CheckIsActiveLeaderAndHasLease() const = 0;
 
   // Returns majority replicated ht lease, so we know that after leader change
   // operations would not be added with hybrid time below this lease.
@@ -329,9 +337,14 @@ class Consensus {
       MicrosTime min_allowed, CoarseTimePoint deadline) const = 0;
 
   // Read majority replicated messages for CDC producer.
-  virtual Result<ReadOpsResult> ReadReplicatedMessagesForCDC(const yb::OpId& from,
-                                                             int64_t* repl_index,
-                                                             const CoarseTimePoint deadline) = 0;
+  virtual Result<ReadOpsResult> ReadReplicatedMessagesForCDC(
+      const yb::OpId& from, int64_t* repl_index, const CoarseTimePoint deadline,
+      const bool fetch_single_entry = false) = 0;
+
+  // Read all the committed messages for CDC producer.
+  virtual Result<ReadOpsResult> ReadReplicatedMessagesForConsistentCDC(
+      OpId from, uint64_t stream_safe_time, CoarseTimePoint deadline,
+      bool fetch_single_entry = false, int64_t* repl_index = nullptr) = 0;
 
   virtual void UpdateCDCConsumerOpId(const yb::OpId& op_id) = 0;
 
@@ -357,7 +370,7 @@ class Consensus {
     POST_SHUTDOWN
   };
 
-  CHECKED_STATUS ExecuteHook(HookPoint point);
+  Status ExecuteHook(HookPoint point);
 
   enum State {
     kNotInitialized,
@@ -381,16 +394,16 @@ YB_DEFINE_ENUM(StateChangeReason,
 
 class Consensus::ConsensusFaultHooks {
  public:
-  virtual CHECKED_STATUS PreStart();
-  virtual CHECKED_STATUS PostStart();
-  virtual CHECKED_STATUS PreConfigChange();
-  virtual CHECKED_STATUS PostConfigChange();
-  virtual CHECKED_STATUS PreReplicate();
-  virtual CHECKED_STATUS PostReplicate();
-  virtual CHECKED_STATUS PreUpdate();
-  virtual CHECKED_STATUS PostUpdate();
-  virtual CHECKED_STATUS PreShutdown();
-  virtual CHECKED_STATUS PostShutdown();
+  virtual Status PreStart();
+  virtual Status PostStart();
+  virtual Status PreConfigChange();
+  virtual Status PostConfigChange();
+  virtual Status PreReplicate();
+  virtual Status PostReplicate();
+  virtual Status PreUpdate();
+  virtual Status PostUpdate();
+  virtual Status PreShutdown();
+  virtual Status PostShutdown();
   virtual ~ConsensusFaultHooks() {}
 };
 
@@ -413,12 +426,10 @@ struct LeaderState {
     return status == LeaderStatus::LEADER_AND_READY;
   }
 
-  CHECKED_STATUS CreateStatus() const;
+  Status CreateStatus() const;
 };
 
-CHECKED_STATUS MoveStatus(LeaderState&& state);
+Status MoveStatus(LeaderState&& state);
 
 } // namespace consensus
 } // namespace yb
-
-#endif // YB_CONSENSUS_CONSENSUS_H_

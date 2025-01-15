@@ -15,6 +15,7 @@
 #include "yb/master/master_replication.service.h"
 #include "yb/master/master_service_base.h"
 #include "yb/master/master_service_base-internal.h"
+#include "yb/master/xcluster/xcluster_manager.h"
 
 namespace yb {
 namespace master {
@@ -29,23 +30,61 @@ class MasterReplicationServiceImpl : public MasterServiceBase, public MasterRepl
   MASTER_SERVICE_IMPL_ON_LEADER_WITH_LOCK(
     CatalogManager,
     (ValidateReplicationInfo)
+    (CreateCDCStream)
+    (DeleteCDCStream)
+    (GetCDCStream)
+    (GetUniverseReplication)
+    (GetUDTypeMetadata)
+    (UpdateConsumerOnProducerSplit)
+    (UpdateConsumerOnProducerMetadata)
+    (ListCDCStreams)
+    (IsObjectPartOfXRepl)
+    (UpdateCDCStream)
+    (GetCDCDBStreamInfo)
+    (IsBootstrapRequired)
+    (WaitForReplicationDrain)
+    (GetTableSchemaFromSysCatalog)
+    (ChangeXClusterRole)
+    (BootstrapProducer)
+    (YsqlBackfillReplicationSlotNameToCDCSDKStream)
+    (DisableDynamicTableAdditionOnCDCSDKStream)
+    (RemoveUserTableFromCDCSDKStream)
+    (ValidateAndSyncCDCStateEntriesForCDCSDKStream)
+    (RemoveTablesFromCDCSDKStream)
   )
 
   MASTER_SERVICE_IMPL_ON_LEADER_WITH_LOCK(
-    enterprise::CatalogManager,
-    (AlterUniverseReplication)
-    (CreateCDCStream)
-    (DeleteCDCStream)
-    (DeleteUniverseReplication)
-    (GetCDCStream)
-    (GetUniverseReplication)
-    (IsSetupUniverseReplicationDone)
-    (UpdateConsumerOnProducerSplit)
-    (ListCDCStreams)
-    (SetUniverseReplicationEnabled)
-    (SetupUniverseReplication)
-    (UpdateCDCStream)
-    (GetCDCDBStreamInfo)
+      XClusterManager,
+      (GetXClusterSafeTime)
+      (GetXClusterSafeTimeForNamespace)
+      (PauseResumeXClusterProducerStreams)
+      (XClusterCreateOutboundReplicationGroup)
+      (XClusterAddNamespaceToOutboundReplicationGroup)
+      (XClusterRemoveNamespaceFromOutboundReplicationGroup)
+      (XClusterDeleteOutboundReplicationGroup)
+      (IsXClusterBootstrapRequired)
+      (GetXClusterStreams)
+      (CreateXClusterReplication)
+      (IsCreateXClusterReplicationDone)
+      (AddNamespaceToXClusterReplication)
+      (IsAlterXClusterReplicationDone)
+      (RepairOutboundXClusterReplicationGroupAddTable)
+      (RepairOutboundXClusterReplicationGroupRemoveTable)
+      (GetXClusterOutboundReplicationGroups)
+      (GetXClusterOutboundReplicationGroupInfo)
+      (GetUniverseReplications)
+      (GetUniverseReplicationInfo)
+      (GetReplicationStatus)
+      (XClusterReportNewAutoFlagConfigVersion)
+      (SetupUniverseReplication)
+      (IsSetupUniverseReplicationDone)
+      (SetupNamespaceReplicationWithBootstrap)
+      (IsSetupNamespaceReplicationWithBootstrapDone)
+      (AlterUniverseReplication)
+      (DeleteUniverseReplication)
+      (InsertPackedSchemaForXClusterTarget)
+      (XClusterEnsureSequenceUpdatesAreInWal)
+      (SetUniverseReplicationEnabled)
   )
 };
 

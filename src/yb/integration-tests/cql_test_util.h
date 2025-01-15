@@ -11,8 +11,7 @@
 // under the License.
 //
 
-#ifndef YB_INTEGRATION_TESTS_CQL_TEST_UTIL_H
-#define YB_INTEGRATION_TESTS_CQL_TEST_UTIL_H
+#pragma once
 
 #include <cassandra.h>
 
@@ -135,6 +134,10 @@ class CassandraResult {
   std::string RenderToString(const std::string& line_separator = ";",
                              const std::string& value_separator = ",") const;
 
+  bool HasMorePages() const;
+
+  const CassResult* get() const { return cass_result_.get(); }
+
  private:
   CassResultPtr cass_result_;
 };
@@ -149,6 +152,14 @@ class CassandraPrepared {
 
   CassandraStatement Bind();
 
+  bool operator!() const {
+    return !prepared_;
+  }
+
+  explicit operator bool() const {
+    return prepared_ != nullptr;
+  }
+
  private:
   CassPreparedPtr prepared_;
 };
@@ -162,16 +173,16 @@ class CassandraFuture {
 
   bool Ready() const;
 
-  CHECKED_STATUS Wait();
+  Status Wait();
 
-  CHECKED_STATUS WaitFor(MonoDelta duration);
+  Status WaitFor(MonoDelta duration);
 
   CassandraResult Result();
 
   CassandraPrepared Prepared();
 
  private:
-  CHECKED_STATUS CheckErrorCode();
+  Status CheckErrorCode();
 
   CassFuturePtr future_;
 };
@@ -188,14 +199,16 @@ class CassandraStatement {
       : cass_statement_(cass_statement_new(query.c_str(), parameter_count)) {}
 
   void SetKeyspace(const std::string& keyspace);
+  void SetPageSize(int page_size);
+  void SetPagingState(const CassandraResult& result);
 
-  void Bind(size_t index, const std::string& v);
-  void Bind(size_t index, const cass_bool_t& v);
-  void Bind(size_t index, const cass_float_t& v);
-  void Bind(size_t index, const cass_double_t& v);
-  void Bind(size_t index, const cass_int32_t& v);
-  void Bind(size_t index, const cass_int64_t& v);
-  void Bind(size_t index, const CassandraJson& v);
+  CassandraStatement& Bind(size_t index, const std::string& v);
+  CassandraStatement& Bind(size_t index, const cass_bool_t& v);
+  CassandraStatement& Bind(size_t index, const cass_float_t& v);
+  CassandraStatement& Bind(size_t index, const cass_double_t& v);
+  CassandraStatement& Bind(size_t index, const cass_int32_t& v);
+  CassandraStatement& Bind(size_t index, const cass_int64_t& v);
+  CassandraStatement& Bind(size_t index, const CassandraJson& v);
 
   CassStatement* get() const;
 
@@ -230,11 +243,12 @@ class CassandraSession {
  public:
   CassandraSession() = default;
 
-  CHECKED_STATUS Connect(CassCluster* cluster);
+  Status Connect(CassCluster* cluster);
 
   static Result<CassandraSession> Create(CassCluster* cluster);
 
-  CHECKED_STATUS Execute(const CassandraStatement& statement);
+  // if timeout_ms == 0 - default CASS_DEFAULT_REQUEST_TIMEOUT_MS = 12000 is used.
+  Status Execute(const CassandraStatement& statement, uint32_t timeout_ms = 0);
 
   Result<CassandraResult> ExecuteWithResult(const CassandraStatement& statement);
 
@@ -242,10 +256,11 @@ class CassandraSession {
 
   CassandraFuture ExecuteGetFuture(const std::string& query);
 
-  CHECKED_STATUS ExecuteQuery(const std::string& query);
+  // if timeout_ms == 0 - default CASS_DEFAULT_REQUEST_TIMEOUT_MS = 12000 is used.
+  Status ExecuteQuery(const std::string& query, uint32_t timeout_ms = 0);
 
   template <class... Args>
-  CHECKED_STATUS ExecuteQueryFormat(const std::string& query, Args&&... args) {
+  Status ExecuteQueryFormat(const std::string& query, Args&&... args) {
     return ExecuteQuery(Format(query, std::forward<Args>(args)...));
   }
 
@@ -254,7 +269,7 @@ class CassandraSession {
   Result<std::string> ExecuteAndRenderToString(const std::string& statement);
 
   template <class Action>
-  CHECKED_STATUS ExecuteAndProcessOneRow(
+  Status ExecuteAndProcessOneRow(
       const CassandraStatement& statement, const Action& action) {
     auto result = VERIFY_RESULT(ExecuteWithResult(statement));
     auto iterator = result.CreateIterator();
@@ -270,7 +285,7 @@ class CassandraSession {
   }
 
   template <class Action>
-  CHECKED_STATUS ExecuteAndProcessOneRow(const std::string& query, const Action& action) {
+  Status ExecuteAndProcessOneRow(const std::string& query, const Action& action) {
     return ExecuteAndProcessOneRow(CassandraStatement(query), action);
   }
 
@@ -283,7 +298,7 @@ class CassandraSession {
     return result;
   }
 
-  CHECKED_STATUS ExecuteBatch(const CassandraBatch& batch);
+  Status ExecuteBatch(const CassandraBatch& batch);
 
   CassandraFuture SubmitBatch(const CassandraBatch& batch);
 
@@ -312,6 +327,7 @@ class CppCassandraDriver {
   Result<CassandraSession> CreateSession();
 
   void EnableTLS(const std::vector<std::string>& ca_certs);
+  void SetCredentials(const std::string& username, const std::string& password);
 
  private:
   CassCluster* cass_cluster_ = nullptr;
@@ -346,5 +362,3 @@ extern const std::string kCqlTestKeyspace;
 Result<CassandraSession> EstablishSession(CppCassandraDriver* driver);
 
 } // namespace yb
-
-#endif // YB_INTEGRATION_TESTS_CQL_TEST_UTIL_H

@@ -8,6 +8,7 @@ menu:
     identifier: deploy-in-gcp-2-gke
     parent: public-clouds
     weight: 640
+type: docs
 ---
 
 <ul class="nav nav-tabs-alt nav-tabs-yb">
@@ -21,7 +22,7 @@ menu:
 
   <li>
     <a href="../gke/" class="nav-link active">
-      <i class="fas fa-cubes" aria-hidden="true"></i>
+      <i class="fa-regular fa-dharmachakra" aria-hidden="true"></i>
       Google Kubernetes Engine (GKE)
     </a>
   </li>
@@ -35,4 +36,4 @@ menu:
 
 </ul>
 
-Refer the [GKE deployment](../../../kubernetes/gke/) instructions in the Kubernetes section.
+Refer to the [GKE deployment](../../../kubernetes/) instructions in the Kubernetes section.

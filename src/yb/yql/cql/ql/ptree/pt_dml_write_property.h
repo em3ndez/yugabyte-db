@@ -11,8 +11,7 @@
 // under the License.
 //
 
-#ifndef YB_YQL_CQL_QL_PTREE_PT_DML_WRITE_PROPERTY_H_
-#define YB_YQL_CQL_QL_PTREE_PT_DML_WRITE_PROPERTY_H_
+#pragma once
 
 #include "yb/gutil/strings/substitute.h"
 
@@ -59,7 +58,7 @@ class PTDmlWriteProperty : public PTProperty {
   }
 
   // Node semantics analysis.
-  virtual CHECKED_STATUS Analyze(SemContext *sem_context) override;
+  virtual Status Analyze(SemContext *sem_context) override;
   void PrintSemanticAnalysisResult(SemContext *sem_context);
 
   DmlWritePropertyType property_type() const {
@@ -67,7 +66,7 @@ class PTDmlWriteProperty : public PTProperty {
   }
 
  protected:
-  bool IsValidProperty(const string& property_name) {
+  bool IsValidProperty(const std::string& property_name) {
     return kPropertyDataTypes.find(property_name) != kPropertyDataTypes.end();
   }
 
@@ -77,7 +76,7 @@ class PTDmlWriteProperty : public PTProperty {
   static const std::map<std::string, PTDmlWriteProperty::KVProperty> kPropertyDataTypes;
 };
 
-std::ostream& operator<<(ostream& os, const DmlWritePropertyType& property_type);
+std::ostream& operator<<(std::ostream& os, const DmlWritePropertyType& property_type);
 
 class PTDmlWritePropertyListNode : public TreeListNode<PTDmlWriteProperty> {
  public:
@@ -111,7 +110,7 @@ class PTDmlWritePropertyListNode : public TreeListNode<PTDmlWriteProperty> {
     return MCMakeShared<PTDmlWritePropertyListNode>(memctx, std::forward<TypeArgs>(args)...);
   }
 
-  virtual CHECKED_STATUS Analyze(SemContext *sem_context) override;
+  virtual Status Analyze(SemContext *sem_context) override;
 
   bool ignore_null_jsonb_attributes();
 };
@@ -138,7 +137,7 @@ class PTDmlWritePropertyMap : public PTDmlWriteProperty {
   }
 
   // Node semantics analysis.
-  virtual CHECKED_STATUS Analyze(SemContext *sem_context) override;
+  virtual Status Analyze(SemContext *sem_context) override;
   void PrintSemanticAnalysisResult(SemContext *sem_context);
 
   void SetPropertyName(MCSharedPtr<MCString> property_name) {
@@ -169,5 +168,3 @@ struct Options {
 
 } // namespace ql
 } // namespace yb
-
-#endif // YB_YQL_CQL_QL_PTREE_PT_DML_WRITE_PROPERTY_H_

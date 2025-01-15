@@ -16,12 +16,15 @@ set(YB_PCH_PATH ../)
 set(PGGATE_UTIL_SRCS
     pg_wire.cc
     pg_doc_data.cc
-    pg_tuple.cc)
+    pg_tuple.cc
+    ybc_guc.cc
+    ybc_util.cc
+    ybc-internal.cc
+    )
 
 set(PGGATE_UTIL_LIBS
     yb_util
-    yb_common
-    yb_client)
+    yb_common)
 
 ADD_YB_LIBRARY(yb_pggate_util
                SRCS ${PGGATE_UTIL_SRCS}

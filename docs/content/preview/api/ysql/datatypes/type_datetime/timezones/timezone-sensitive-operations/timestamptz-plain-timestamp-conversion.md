@@ -4,12 +4,11 @@ headerTitle: Sensitivity of converting between timestamptz and plain timestamp t
 linkTitle: Timestamptz to/from timestamp conversion
 description: Explains the sensitivity of conversion between timestamptz and plain timestamp to the UTC offset. [YSQL]
 menu:
-  preview:
+  preview_api:
     identifier: timestamptz-plain-timestamp-conversion
     parent: timezone-sensitive-operations
     weight: 10
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 The semantic rules for the conversion, in each direction, rest on a common-sense convention. Each conversion uses a value for the _UTC offset_. And this value is always known: _either_ because the _at time zone_ operator specifies it (either explicitly or implicitly via a timezone name); or from the session's current _TimeZone_ setting. This is explained in the section [Four ways to specify the _UTC offset_](../../ways-to-spec-offset/).

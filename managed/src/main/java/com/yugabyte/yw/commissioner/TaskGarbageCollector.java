@@ -1,8 +1,11 @@
+// Copyright (c) YugaByte, Inc.
+
 package com.yugabyte.yw.commissioner;
 
-import akka.actor.ActorSystem;
-import akka.actor.Scheduler;
 import com.google.common.annotations.VisibleForTesting;
+import com.yugabyte.yw.common.PlatformScheduler;
+import com.yugabyte.yw.common.config.CustomerConfKeys;
+import com.yugabyte.yw.common.config.RuntimeConfGetter;
 import com.yugabyte.yw.common.config.RuntimeConfigFactory;
 import com.yugabyte.yw.models.Customer;
 import com.yugabyte.yw.models.CustomerTask;
@@ -13,7 +16,6 @@ import java.util.List;
 import javax.inject.Inject;
 import javax.inject.Singleton;
 import lombok.extern.slf4j.Slf4j;
-import scala.concurrent.ExecutionContext;
 
 @Singleton
 @Slf4j
@@ -36,25 +38,23 @@ public class TaskGarbageCollector {
 
   // Config names
   static final String YB_TASK_GC_GC_CHECK_INTERVAL = "yb.taskGC.gc_check_interval";
-  static final String YB_TASK_GC_TASK_RETENTION_DURATION = "yb.taskGC.task_retention_duration";
 
   static {
     registerMetrics();
   }
 
-  private final Scheduler scheduler;
+  private final PlatformScheduler platformScheduler;
+  private final RuntimeConfGetter confGetter;
   private final RuntimeConfigFactory runtimeConfigFactory;
-  private final ExecutionContext executionContext;
 
   @Inject
   public TaskGarbageCollector(
-      ActorSystem actorSystem,
+      PlatformScheduler platformScheduler,
       RuntimeConfigFactory runtimeConfigFactory,
-      ExecutionContext executionContext) {
-
-    this.scheduler = actorSystem.scheduler();
+      RuntimeConfGetter confGetter) {
+    this.platformScheduler = platformScheduler;
+    this.confGetter = confGetter;
     this.runtimeConfigFactory = runtimeConfigFactory;
-    this.executionContext = executionContext;
   }
 
   @VisibleForTesting
@@ -84,11 +84,11 @@ public class TaskGarbageCollector {
       log.warn("!!! TASK GC DISABLED !!!");
     } else {
       log.info("Scheduling TaskGC every " + gcInterval);
-      scheduler.schedule(
-          Duration.ZERO, // InitialDelay
+      platformScheduler.schedule(
+          getClass().getSimpleName(),
+          Duration.ofMinutes(5), // InitialDelay
           gcInterval,
-          this::scheduleRunner,
-          this.executionContext);
+          this::scheduleRunner);
     }
   }
 
@@ -108,29 +108,31 @@ public class TaskGarbageCollector {
   @VisibleForTesting
   void purgeStaleTasks(Customer c, List<CustomerTask> staleTasks) {
     NUM_TASK_GC_RUNS_COUNT.inc();
-    int numRowsGCdInThisRun = 0;
-    for (CustomerTask customerTask : staleTasks) {
-      int numRowsDeleted = customerTask.cascadeDeleteCompleted();
-      numRowsGCdInThisRun += numRowsDeleted;
-      if (numRowsDeleted > 0) {
-        PURGED_CUSTOMER_TASK_COUNT.labels(c.getUuid().toString()).inc();
-        PURGED_TASK_INFO_COUNT.labels(c.getUuid().toString()).inc(numRowsDeleted - 1);
-      } else {
-        NUM_TASK_GC_ERRORS_COUNT.inc();
-      }
-    }
+    int numRowsGCdInThisRun =
+        staleTasks.stream()
+            .filter(CustomerTask::isDeletable)
+            .map(
+                customerTask -> {
+                  int numRowsDeleted = customerTask.cascadeDeleteCompleted();
+                  if (numRowsDeleted > 0) {
+                    PURGED_CUSTOMER_TASK_COUNT.labels(c.getUuid().toString()).inc();
+                    PURGED_TASK_INFO_COUNT.labels(c.getUuid().toString()).inc(numRowsDeleted - 1);
+                  } else {
+                    NUM_TASK_GC_ERRORS_COUNT.inc();
+                  }
+                  return numRowsDeleted;
+                })
+            .reduce(0, Integer::sum);
     log.info("Garbage collected {} rows", numRowsGCdInThisRun);
   }
 
   /** The interval at which the gc checker will run. */
   private Duration gcCheckInterval() {
-    return runtimeConfigFactory.staticApplicationConf().getDuration(YB_TASK_GC_GC_CHECK_INTERVAL);
+    return runtimeConfigFactory.globalRuntimeConf().getDuration(YB_TASK_GC_GC_CHECK_INTERVAL);
   }
 
   /** For how many days to retain a completed task before garbage collecting it. */
   private Duration taskRetentionDuration(Customer customer) {
-    return runtimeConfigFactory
-        .forCustomer(customer)
-        .getDuration(YB_TASK_GC_TASK_RETENTION_DURATION);
+    return confGetter.getConfForScope(customer, CustomerConfKeys.taskGcRetentionDuration);
   }
 }

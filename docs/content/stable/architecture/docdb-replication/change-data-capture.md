@@ -1,119 +1,80 @@
 ---
-title: Change data capture (CDC)
-headerTitle: Change data capture (CDC)
-linkTitle: Change data capture (CDC)
+title: Architecture for CDC using gRPC protocol
+headerTitle: CDC using gRPC protocol
+linkTitle: CDC using gRPC protocol
 description: Learn how YugabyteDB supports asynchronous replication of data changes (inserts, updates, and deletes) to external databases or applications.
-beta: /preview/faq/general/#what-is-the-definition-of-the-beta-feature-tag
+headContent: Asynchronous replication of data changes (inserts, updates, and deletes) to external databases or applications
+tags:
+  feature: early-access
 menu:
   stable:
     parent: architecture-docdb-replication
     identifier: architecture-docdb-replication-cdc
-    weight: 1160
-type: page
-isTocNested: true
-showAsideToc: true
+    weight: 600
+type: docs
 ---
 
-Change data capture (CDC) in YugabyteDB provides technology to ensure that any changes in data (inserts, updates, and deletions) are identified, captured, and automatically applied to another data repository instance or made available for consumption by applications and other tools.
+Change data capture (CDC) in YugabyteDB provides technology to ensure that any changes in data due to operations such as inserts, updates, and deletions are identified, captured, and made available for consumption by applications and other tools.
 
-## Use cases
+## Architecture
 
-Change data capture is useful in a number of scenarios, such as the ones described here.
+Every YB-TServer has a `CDC service` that is stateless. The main APIs provided by the CDC service are the following:
 
-### Microservice-oriented architectures
+- `createCDCSDKStream` API for creating the stream on the database.
+- `getChangesCDCSDK` API that can be used by the client to get the latest set of changes.
 
-Some microservices require a stream of changes to the data and using CDC in YugabyteDB can provide consumable data changes to CDC subscribers.
+![Stateless CDC Service](/images/architecture/stateless_cdc_service.png)
 
-### Asynchronous replication to remote systems
+{{<lead link="../../../develop/change-data-capture/">}}
 
-Remote systems may subscribe to a stream of data changes and then transform and consume the changes. Maintaining separate database instances for transactional and reporting purposes can be used to manage workload performance.
+See [Change data capture](../../../develop/change-data-capture/) for more details and limitations.
 
-### Multiple data center strategies
+{{</lead>}}
 
-Maintaining multiple data centers enables enterprises to provide:
+## CDC streams
 
-- High availability (HA) — Redundant systems help ensure that your operations virtually never fail.
-- Geo-redundancy — Geographically dispersed servers provide resiliency against catastrophic events and natural disasters.
+YugabyteDB automatically splits user tables into multiple shards (also called tablets) using either a hash- or range-based strategy. The primary key for each row in the table uniquely identifies the location of the tablet in the row.
 
-Two data center (2DC), or dual data center, deployments are a common use of CDC that allows efficient management of two YugabyteDB universes that are geographically separated. For more information, see [Two data center (2DC) deployments](../async-replication) and [Replicate between two data centers](../../../deploy/multi-dc/async-replication)
+Each tablet has its own WAL file. WAL is NOT in-memory, but it is disk persisted. Each WAL preserves the order in which transactions (or changes) happened. Hybrid TS, Operation ID, and additional metadata about the transaction is also preserved.
 
-### Compliance and auditing
+![How does CDC work](/images/explore/cdc-overview-work2.png)
 
-Auditing and compliance requirements can require you to use CDC to maintain records of data changes.
+YugabyteDB normally purges WAL segments after some period of time. This means that the connector does not have the complete history of all changes that have been made to the database. Therefore, when the connector first connects to a particular YugabyteDB database, it starts by performing a consistent snapshot of each of the database schemas.
 
-{{< note title="Note" >}}
+The YugabyteDB Debezium connector captures row-level changes in the schemas of a YugabyteDB database. The first time it connects to a YugabyteDB cluster, the connector takes a consistent snapshot of all schemas. After that snapshot is complete, the connector continuously captures row-level changes that insert, update, and delete database content, and that were committed to a YugabyteDB database.
 
-In the sections below, the terms "data center", "cluster", and "universe" are used interchangeably. We assume here that each YB universe is deployed in a single data center.
+![How does CDC work](/images/explore/cdc-overview-work.png)
 
-{{< /note >}}
+The core primitive of CDC is the _stream_. Streams can be enabled and disabled on databases. You can specify which tables to include or exclude. Every change to a watched database table is emitted as a record in a configurable format to a configurable sink. Streams scale to any YugabyteDB cluster independent of its size and are designed to impact production traffic as little as possible.
 
-## Process architecture
+Creating a new CDC stream returns a stream UUID. This is facilitated via the [yb-admin](../../../admin/yb-admin/#change-data-capture-cdc-commands) tool. A stream ID is created first, per database. You configure the maximum batch side in YugabyteDB, while the polling frequency is configured on the connector side.
 
-![CDC process architecture](/images/architecture/cdc-2dc/process-architecture.png)
+Connector tasks can consume changes from multiple tablets. At least once delivery is guaranteed. In turn, connector tasks write to the Kafka cluster, and tasks don't need to match Kafka partitions. Tasks can be independently scaled up or down.
 
-### CDC streams
+The connector produces a change event for every row-level insert, update, and delete operation that was captured, and sends change event records for each table in a separate Kafka topic. Client applications read the Kafka topics that correspond to the database tables of interest, and can react to every row-level event they receive from those topics. For each table, the default behavior is that the connector streams all generated events to a separate Kafka topic for that table. Applications and services consume data change event records from that topic. All changes for a row (or rows in the same tablet) are received in the order in which they happened. A checkpoint per stream ID and tablet is updated in a state table after a successful write to Kafka brokers.
 
-Creating a new CDC stream on a table returns a stream UUID. The CDC Service stores information about all streams in the system table `cdc_streams`. The schema for this table looks like this:
+## CDC guarantees
 
-```
-cdc_streams {
-stream_id  text,
-params     map<text, text>,
-primary key (stream_id)
-}
-```
+CDC in YugabyteDB provides technology to ensure that any changes in data due to operations (such as inserts, updates, and deletions) are identified, captured, and automatically applied to another data repository instance, or made available for consumption by applications and other tools. CDC provides the following guarantees.
 
-### CDC subscribers
+### Per-tablet ordered delivery
 
-Along with creating a CDC stream, a CDC subscriber is also created for all existing tablets of the stream. A new subscriber entry is created in the `cdc_subscribers` table. The schema for this table is:
+All data changes for one row or multiple rows in the same tablet are received in the order in which they occur. Due to the distributed nature of the problem, however, gRPC replication does not guarantee order across tablets.
 
-```
-cdc_subscribers {
-stream_id      text,
-subscriber_id  text,
-tablet_id      text,
-data           map<text, text>,
-primary key (stream_id, subscriber_id, tablet_id)
-}
-```
-
-### CDC service APIs
-
-Every YB-TServer has a `CDC service` that is stateless. The main APIs provided by `CDC Service` are:
-
-- `SetupCDC` API — Sets up a CDC stream for a table.
-- `RegisterSubscriber` API — Registers a CDC subscriber that will read changes from some, or all, tablets of the CDC stream.
-- `GetChanges` API – Used by CDC subscribers to get the latest set of changes.
-- `GetSnapshot` API — Used to bootstrap CDC subscribers and get the current snapshot of the database (typically will be invoked prior to GetChanges)
-
-### Pushing changes to external systems
-
-Each YugabyteDB's TServer has CDC subscribers (`cdc_subscribers`) that are responsible for getting changes for all tablets for which the TServer is a leader. When a new stream and subscriber are created, the TServer `cdc_subscribers` detects this and starts invoking the `cdc_service.GetChanges` API periodically to get the latest set of changes.
-
-While invoking `GetChanges`, the CDC subscriber needs to pass in a `from_checkpoint` which is the last `OP ID` that it successfully consumed. When the CDC service receives a request of `GetChanges` for a tablet, it reads the changes from the WAL (log cache) starting from `from_checkpoint`, deserializes them and returns those to CDC subscriber. It also records the `from_checkpoint` in `cdc_subscribers` table in the data column. This will be used for bootstrapping fallen subscribers who don’t know the last checkpoint or in case of tablet leader changes.
-
-When `cdc_subscribers` receive the set of changes, they then push these changes out to Kafka.
-
-### CDC guarantees
-
-#### Per-tablet ordered delivery guarantee
-
-All data changes for one row, or multiple rows in the same tablet, will be received in the order in which they occur. Due to the distributed nature of the problem, however, there is no guarantee for the order across tablets.
-
-For example, let us imagine the following scenario:
+Consider the following scenario:
 
 - Two rows are being updated concurrently.
 - These two rows belong to different tablets.
-- The first row `row #1` was updated at time `t1` and the second row `row #2` was updated at time `t2`.
+- The first row `row #1` was updated at time `t1`, and the second row `row #2` was updated at time `t2`.
 
 In this case, it is possible for CDC to push the later update corresponding to `row #2` change to Kafka before pushing the earlier update, corresponding to `row #1`.
 
-#### At-least-once delivery
+### At-least-once delivery
 
-Updates for rows will be pushed at least once. With "at-least-once" delivery, you will never lose a message, but might end up being delivered to a CDC consumer more than once. This can happen in case of tablet leader change, where the old leader already pushed changes to Kafka, but the latest pushed `op id` was not updated in `cdc_subscribers` table.
+Updates for rows are pushed at least once. With the at-least-once delivery, you never lose a message, however the message might be delivered to a CDC consumer more than once. This can happen in case of a tablet leader change, where the old leader already pushed changes to Kafka, but the latest pushed `op id` was not updated in the CDC metadata.
 
-For example, imagine a CDC client has received changes for a row at times t1 and t3. It is possible for the client to receive those updates again.
+For example, a CDC client has received changes for a row at times `t1` and `t3`. It is possible for the client to receive those updates again.
 
-#### No gaps in change stream
+### No gaps in change stream
 
-When you have received a change for a row for timestamp `t`, you will not receive a previously unseen change for that row from an earlier timestamp. This guarantees that receiving any change implies that all earlier changes have been received for a row.
+When you have received a change for a row for timestamp `t`, you do not receive a previously unseen change for that row from an earlier timestamp. This guarantees that receiving any change implies that all earlier changes have been received for a row.

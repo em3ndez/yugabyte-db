@@ -1,29 +1,46 @@
 // Copyright (c) YugaByte, Inc.
 
 import _ from 'lodash';
-import React, { Component } from 'react';
+import { Component } from 'react';
+import { toast } from 'react-toastify';
 import { Field, FieldArray } from 'redux-form';
 import { Col, Alert } from 'react-bootstrap';
+import clsx from 'clsx';
+
+import { fetchGlobalRunTimeConfigs } from '../../../../api/admin';
 import { YBModal, YBInputField, YBSelectWithLabel, YBToggle, YBCheckBox } from '../fields';
-import { isNonEmptyArray } from '../../../../utils/ObjectUtils';
+import { YBLoadingCircleIcon } from '../../indicators';
+import {
+  createErrorMessage,
+  isNonEmptyArray,
+  isDefinedNotNull,
+  isNonEmptyObject
+} from '../../../../utils/ObjectUtils';
 import { getPromiseState } from '../../../../utils/PromiseUtils';
-import { 
-  isKubernetesUniverse,
+import {
+  getIsKubernetesUniverse,
   getPrimaryCluster,
-  getReadOnlyCluster 
+  getReadOnlyCluster,
+  getUniverseRegions
 } from '../../../../utils/UniverseUtils';
-import { isDefinedNotNull, isNonEmptyObject } from '../../../../utils/ObjectUtils';
-import './RollingUpgradeForm.scss';
 import { EncryptionInTransit } from './EncryptionInTransit';
 import GFlagComponent from '../../../universes/UniverseForm/GFlagComponent';
 import { FlexShrink, FlexContainer } from '../../flexbox/YBFlexBox';
-import clsx from 'clsx';
-import WarningIcon from './images/warning.svg';
+import { TASK_LONG_TIMEOUT } from '../../../tasks/constants';
+import { HelmOverridesModal } from '../../../universes/UniverseForm/HelmOverrides';
+import { YBBanner, YBBannerVariant } from '../../descriptors';
+import { hasLinkedXClusterConfig } from '../../../xcluster/ReplicationUtils';
+
+import { hasNecessaryPerm } from '../../../../redesign/features/rbac/common/RbacApiPermValidator';
+import { ApiPermissionMap } from '../../../../redesign/features/rbac/ApiAndUserPermMapping';
+
+import './RollingUpgradeForm.scss';
+import { compareYBSoftwareVersions, isVersionStable } from '../../../../utils/universeUtilsTyped';
 
 export default class RollingUpgradeForm extends Component {
   constructor(props) {
     super(props);
-    this.state = { formConfirmed: false };
+    this.state = { formConfirmed: false, globalRuntimeConfigs: null, isLoading: true };
   }
 
   toggleConfirmValidation = () => {
@@ -55,31 +72,47 @@ export default class RollingUpgradeForm extends Component {
       universe: {
         currentUniverse: {
           data: {
-            universeDetails: {
-              currentClusterType,
-              clusters,
-              nodePrefix,
-              rootAndClientRootCASame
-            },
+            universeDetails: { currentClusterType, clusters, nodePrefix, rootAndClientRootCASame },
             universeUUID
           }
         }
       },
       overrideIntentParams,
-      resetLocation
+      resetLocation,
+      featureFlags
     } = this.props;
+    let systemdBoolean = false;
 
     const payload = {};
+    payload.clusters = [];
+    const asyncCluster = _.cloneDeep(getReadOnlyCluster(clusters));
     switch (visibleModal) {
       case 'softwareUpgradesModal': {
         payload.taskType = 'Software';
         payload.upgradeOption = values.rollingUpgrade ? 'Rolling' : 'Non-Rolling';
         break;
       }
+      case 'vmImageUpgradeModal': {
+        const regionList = getUniverseRegions(clusters);
+        const regionAMIs = regionList.reduce(
+          (prev, curRegion) => ({
+            ...prev,
+            [curRegion.uuid]: values[curRegion.uuid]
+          }),
+          {}
+        );
+        payload.taskType = 'VMImage';
+        payload.upgradeOption = 'Rolling';
+        payload.machineImages = regionAMIs;
+        if (isNonEmptyObject(asyncCluster)) {
+          payload.clusters.push(asyncCluster);
+        }
+        break;
+      }
       case 'systemdUpgrade': {
         payload.taskType = 'Systemd';
         payload.upgradeOption = 'Rolling';
-        var systemdBoolean = true;
+        systemdBoolean = true;
         break;
       }
       case 'gFlagsModal': {
@@ -88,20 +121,29 @@ export default class RollingUpgradeForm extends Component {
         break;
       }
       case 'tlsConfigurationModal': {
-        const cluster = currentClusterType === 'PRIMARY' ?
-          getPrimaryCluster(clusters) : getReadOnlyCluster(clusters);
+        const cluster =
+          currentClusterType === 'PRIMARY'
+            ? getPrimaryCluster(clusters)
+            : getReadOnlyCluster(clusters);
         payload.taskType = 'Certs';
         payload.upgradeOption = 'Rolling';
         payload.enableNodeToNodeEncrypt = cluster.userIntent.enableNodeToNodeEncrypt;
         payload.enableClientToNodeEncrypt = cluster.userIntent.enableClientToNodeEncrypt;
         payload.rootAndClientRootCASame = rootAndClientRootCASame;
-        payload.rootCA = values.tlsCertificate === "Create New Certificate" ? null : values.tlsCertificate;
-        payload.createNewRootCA = values.tlsCertificate === "Create New Certificate";
+        payload.rootCA =
+          values.tlsCertificate === 'Create New Certificate' ? null : values.tlsCertificate;
+        payload.createNewRootCA = values.tlsCertificate === 'Create New Certificate';
         break;
       }
       case 'rollingRestart': {
         payload.taskType = 'Restart';
         payload.upgradeOption = 'Rolling';
+        //send read replica clsuter details in payload only for k8s universe
+        if (
+          getIsKubernetesUniverse(this.props.universe.currentUniverse.data) &&
+          isNonEmptyObject(asyncCluster)
+        )
+          payload.clusters.push(asyncCluster);
         break;
       }
       case 'resizeNodesModal': {
@@ -109,6 +151,18 @@ export default class RollingUpgradeForm extends Component {
         payload.upgradeOption = 'Rolling';
         break;
       }
+      case 'thirdpartyUpgradeModal': {
+        payload.taskType = 'Thirdparty_Software';
+        payload.upgradeOption = 'Rolling';
+        break;
+      }
+      case 'helmOverridesModal':
+        payload.taskType = 'kubernetes_overrides';
+        payload.universeOverrides = values.universeOverrides;
+        payload.azOverrides = values.azOverrides;
+        payload.upgradeOption = values.rollingUpgrade ? 'Rolling' : 'Non-Rolling';
+
+        break;
       default:
         return;
     }
@@ -117,24 +171,34 @@ export default class RollingUpgradeForm extends Component {
     if (!isDefinedNotNull(primaryCluster)) {
       return;
     }
-    payload.ybSoftwareVersion = values.ybSoftwareVersion;
+    if (payload.taskType !== 'VMImage') {
+      payload.ybSoftwareVersion = values.ybSoftwareVersion;
+    }
     payload.universeUUID = universeUUID;
     payload.nodePrefix = nodePrefix;
     const masterGFlagList = [];
     const tserverGFlagList = [];
     if (isNonEmptyArray(values?.gFlags)) {
       values.gFlags.forEach((flag) => {
-        if (flag?.hasOwnProperty('MASTER'))
+        if (Object.prototype.hasOwnProperty.call(flag, 'MASTER')) {
           masterGFlagList.push({ name: flag?.Name, value: flag['MASTER'] });
-        if (flag?.hasOwnProperty('TSERVER'))
+        }
+        if (Object.prototype.hasOwnProperty.call(flag, 'TSERVER')) {
           tserverGFlagList.push({ name: flag?.Name, value: flag['TSERVER'] });
+        }
       });
     }
     primaryCluster.userIntent.ybSoftwareVersion = values.ybSoftwareVersion;
     primaryCluster.userIntent.masterGFlags = masterGFlagList;
     primaryCluster.userIntent.tserverGFlags = tserverGFlagList;
     primaryCluster.userIntent.useSystemd = systemdBoolean;
-    payload.clusters = [primaryCluster];
+
+    if (visibleModal === 'helmOverridesModal') {
+      primaryCluster.userIntent.universeOverrides = values.universeOverrides;
+      primaryCluster.userIntent.azOverrides = values.azOverrides;
+    }
+
+    payload.clusters = [primaryCluster, ...payload.clusters];
     payload.sleepAfterMasterRestartMillis = values.timeDelay * 1000;
     payload.sleepAfterTServerRestartMillis = values.timeDelay * 1000;
     if (overrideIntentParams) {
@@ -145,6 +209,9 @@ export default class RollingUpgradeForm extends Component {
         primaryCluster.userIntent.deviceInfo.volumeSize = overrideIntentParams.volumeSize;
       }
     }
+
+    if (!isDefinedNotNull(primaryCluster.enableYbc) && payload.taskType === 'Software')
+      payload.enableYbc = featureFlags.released.enableYbc || featureFlags.test.enableYbc;
 
     this.props.submitRollingUpgradeForm(payload, universeUUID).then((response) => {
       if (response.payload.status === 200) {
@@ -157,6 +224,8 @@ export default class RollingUpgradeForm extends Component {
         } else {
           this.resetAndClose();
         }
+      } else {
+        toast.error(createErrorMessage(response.payload), { autoClose: 3000 });
       }
     });
   };
@@ -168,26 +237,78 @@ export default class RollingUpgradeForm extends Component {
     this.setState({ formConfirmed: false });
   };
 
+  componentDidMount() {
+    const { fetchRuntimeConfigs } = this.props;
+    fetchRuntimeConfigs();
+  }
+
   render() {
     const {
       modalVisible,
       handleSubmit,
       universe,
       modal: { visibleModal },
-      universe: { error },
-      softwareVersions,
+      universe: { error, supportedReleases },
       formValues,
-      certificates
+      certificates,
+      overrideIntentParams,
+      runtimeConfigs
     } = this.props;
 
+    const skipVersionChecksValue = runtimeConfigs?.data?.configEntries?.find(
+      (c) => c.key === 'yb.skip_version_checks'
+    )?.value;
+    // By default skipVersionChecks is false
+    // If runtime config flag is not accessible, assign false to the variable
+    const skipVersionChecks =
+      skipVersionChecksValue === undefined || skipVersionChecksValue === 'false' ? false : true;
     const currentVersion = this.getCurrentVersion();
+    const isCurrentVersionStable = isVersionStable(currentVersion);
     const submitAction = handleSubmit(this.setRollingUpgradeProperties);
-
-    const softwareVersionOptions = softwareVersions.map((item, idx) => (
-      <option key={idx} disabled={item === currentVersion} value={item}>
-        {item}
-      </option>
-    ));
+    let softwareVersionOptions = [];
+    if (getPromiseState(supportedReleases).isSuccess()) {
+      let filteredReleases;
+      const sortedStableDbReleases = (supportedReleases?.data || [])
+        ?.filter((release) => isVersionStable(release))
+        ?.sort((versionA, versionB) =>
+          compareYBSoftwareVersions({
+            versionA: versionB,
+            versionB: versionA,
+            options: {
+              suppressFormatError: true,
+              requireOrdering: true
+            }
+          })
+        );
+      const sortedPreviewDbReleases = (supportedReleases?.data || [])
+        ?.filter((release) => !isVersionStable(release))
+        ?.sort((versionA, versionB) =>
+          compareYBSoftwareVersions({
+            versionA: versionB,
+            versionB: versionA,
+            options: {
+              suppressFormatError: true,
+              requireOrdering: true
+            }
+          })
+        );
+      if (!skipVersionChecks) {
+        if (isCurrentVersionStable) {
+          filteredReleases = sortedStableDbReleases;
+        } else {
+          filteredReleases = sortedPreviewDbReleases;
+        }
+      } else {
+        // Print stable versions before preview versions
+        filteredReleases = sortedStableDbReleases.concat(sortedPreviewDbReleases);
+      }
+      softwareVersionOptions = filteredReleases.map((item, idx) => (
+        // eslint-disable-next-line react/no-array-index-key
+        <option key={idx} disabled={item === currentVersion} value={item}>
+          {item}
+        </option>
+      ));
+    }
 
     const tlsCertificateOptions = certificates.map((item) => (
       <option
@@ -230,7 +351,7 @@ export default class RollingUpgradeForm extends Component {
                   }}
                 />
               ) : (
-                <span>Latest software is installed</span>
+                <span>Selected software version already installed</span>
               )
             }
             asyncValidating={!this.state.formConfirmed}
@@ -258,21 +379,109 @@ export default class RollingUpgradeForm extends Component {
           </YBModal>
         );
       }
-      case 'gFlagsModal': {
+      case 'vmImageUpgradeModal': {
+        const regionList = getUniverseRegions(
+          universe?.currentUniverse?.data.universeDetails?.clusters
+        );
+
         return (
           <YBModal
             className={getPromiseState(universe.rollingUpgrade).isError() ? 'modal-shake' : ''}
             visible={modalVisible}
             formName="RollingUpgradeForm"
             onHide={this.resetAndClose}
-            footerAccessory={
-              formValues.upgradeOption === 'Non-Rolling' && (
-                <span className="non-rolling-msg">
-                  <img alt="Note" src={WarningIcon} />
-                  &nbsp; <b>Note!</b> &nbsp; Flags that require rolling restart won't be applied
-                </span>
-              )
-            }
+            cancelLabel="Cancel"
+            error={error}
+            onFormSubmit={submitAction}
+            showCancelButton={true}
+            size="large"
+            submitLabel="Upgrade"
+            title="Upgrade VM Image"
+          >
+            <div className="form-right-aligned-labels rolling-upgrade-form">
+              {regionList.map((region) => (
+                <Field
+                  key={region.uuid}
+                  name={region.uuid}
+                  type="text"
+                  component={YBInputField}
+                  label={`${region.name} AMI`}
+                />
+              ))}
+            </div>
+            {errorAlert}
+          </YBModal>
+        );
+      }
+      case 'helmOverridesModal': {
+        const editValues = {};
+        const { universeDetails } = this.props.universe.currentUniverse.data;
+        const primaryCluster = getPrimaryCluster(universeDetails.clusters);
+        const { universeOverrides, azOverrides } = primaryCluster.userIntent;
+        if (universeOverrides) {
+          editValues['universeOverrides'] = universeOverrides;
+        }
+        if (azOverrides) {
+          editValues['azOverrides'] = Object.keys(azOverrides).map(
+            (k) => k + `:\n${azOverrides[k]}`
+          );
+        }
+
+        //no instance tags for k8s
+        delete editValues.instaceTags;
+
+        return (
+          <HelmOverridesModal
+            visible={true}
+            onHide={this.resetAndClose}
+            submitLabel="Upgrade"
+            getConfiguretaskParams={() => {
+              return universeDetails;
+            }}
+            setHelmOverridesData={(helmYaml) => {
+              this.props.change('universeOverrides', helmYaml.universeOverrides);
+              this.props.change('azOverrides', helmYaml.azOverrides);
+              this.props.change('rollingUpgrade', helmYaml.rollingUpgrade);
+              this.props.change('timeDelay', helmYaml.timeDelay);
+              submitAction();
+            }}
+            editValues={editValues}
+            editMode={true}
+            forceUpdate={true}
+          />
+        );
+      }
+      case 'gFlagsModal': {
+        //checks if tags are not runtime , runtime flags changes apply without restart
+        const isNotRuntime = formValues?.gFlags.some((f) => !f?.tags?.includes('runtime'));
+        const GFLAG_UPDATE_OPTIONS = [
+          {
+            value: 'Rolling',
+            label: 'Apply all changes using a rolling restart (slower, zero downtime)'
+          },
+          {
+            value: 'Non-Rolling',
+            label:
+              'Apply all changes immediately, using a concurrent restart (faster, some downtime)'
+          },
+          {
+            value: 'Non-Restart',
+            label:
+              'Apply all changes which do not require a restart immediately;' +
+              `${
+                isNotRuntime
+                  ? 'apply remaining changes the next time the database is restarted'
+                  : ''
+              }`
+          }
+        ];
+
+        return (
+          <YBModal
+            className={getPromiseState(universe.rollingUpgrade).isError() ? 'modal-shake' : ''}
+            visible={modalVisible}
+            formName="RollingUpgradeForm"
+            onHide={this.resetAndClose}
             title="G-Flags"
             size="large"
             onFormSubmit={submitAction}
@@ -292,19 +501,19 @@ export default class RollingUpgradeForm extends Component {
               />
               <FlexContainer className="gflag-upgrade-container">
                 <FlexShrink className="gflag-upgrade--label">
-                  <span>G-Flag Upgrade Options</span>
+                  <span>G-Flag Update Options</span>
                 </FlexShrink>
                 <div className="gflag-upgrade-options">
-                  {['Rolling', 'Non-Rolling', 'Non-Restart'].map((target, i) => (
-                    <div key={target} className="row-flex">
-                      <div className={clsx('upgrade-radio-option', i === 1 && 'mb-8')} key={target}>
+                  {GFLAG_UPDATE_OPTIONS.map((option, i) => (
+                    <div key={option.value} className="row-flex">
+                      <div className={clsx('upgrade-radio-option', i === 1 && 'mb-8')}>
                         <Field
                           name={'upgradeOption'}
                           type="radio"
                           component="input"
-                          value={`${target}`}
+                          value={option.value}
                         />
-                        <span className="upgrade-radio-label">{`${target}`}</span>
+                        <span className="upgrade-radio-label">{option.label}</span>
                       </div>
                       {i === 0 && (
                         <div className="gflag-delay">
@@ -323,14 +532,16 @@ export default class RollingUpgradeForm extends Component {
                   ))}
                 </div>
               </FlexContainer>
-              {errorAlert}
+              <div className="gflag-err-msg">{errorAlert}</div>
             </div>
           </YBModal>
         );
       }
       case 'tlsConfigurationModal': {
-        if (this.props.enableNewEncryptionInTransitModal &&
-          !isKubernetesUniverse(universe.currentUniverse.data)) {
+        if (
+          this.props.enableNewEncryptionInTransitModal &&
+          !getIsKubernetesUniverse(universe.currentUniverse.data)
+        ) {
           return (
             <EncryptionInTransit
               visible={modalVisible}
@@ -340,6 +551,8 @@ export default class RollingUpgradeForm extends Component {
             />
           );
         }
+        const universeHasXClusterConfig = hasLinkedXClusterConfig([universe.currentUniverse.data]);
+
         return (
           <YBModal
             className={getPromiseState(universe.rollingUpgrade).isError() ? 'modal-shake' : ''}
@@ -362,14 +575,41 @@ export default class RollingUpgradeForm extends Component {
                   }}
                 />
               ) : (
-                <span>Select new CA signed cert from the list</span>
+                <span>Select a new certificate from the list</span>
               )
             }
             asyncValidating={
               !this.state.formConfirmed ||
               formValues.tlsCertificate === universe.currentUniverse?.data?.universeDetails?.rootCA
             }
+            disableSubmit={
+              !hasNecessaryPerm({
+                ...ApiPermissionMap.MODIFY_UNIVERSE_TLS,
+                onResource: universe.currentUniverse?.data?.universeUUID
+              })
+            }
           >
+            {universeHasXClusterConfig && getIsKubernetesUniverse(universe.currentUniverse.data) && (
+              <YBBanner variant={YBBannerVariant.WARNING} showBannerIcon={false}>
+                <b>{`Warning! `}</b>
+                <p>
+                  This Kubernetes universe is involved in one or more xCluster configurations.
+                  Changing TLS certificates on this universe will break the xCluster replication as
+                  mismatched certificates is not supported.
+                </p>
+                <p>
+                  To enable replication again after rotating the TLS certificate on this universe,
+                  you must:
+                  <ol>
+                    <li>
+                      Configure the TLS certificates on all other participating universes to match
+                      this universe.
+                    </li>
+                    <li>Restart all affected xCluster configurations.</li>
+                  </ol>
+                </p>
+              </YBBanner>
+            )}
             <div className="form-right-aligned-labels rolling-upgrade-form">
               <Field
                 name="tlsCertificate"
@@ -472,21 +712,61 @@ export default class RollingUpgradeForm extends Component {
             formName="RollingUpgradeForm"
             showCancelButton
             onHide={this.resetAndClose}
-            title="Confirm Resize Nodes"
+            title="Resize Nodes"
             onFormSubmit={submitAction}
             error={error}
             footerAccessory={
               <YBCheckBox
-                  label="Confirm rolling restart"
-                  input={{
-                    checked: this.state.formConfirmed,
-                    onChange: this.toggleConfirmValidation
-                  }}
+                label="Confirm resize nodes"
+                input={{
+                  checked: this.state.formConfirmed,
+                  onChange: this.toggleConfirmValidation
+                }}
               />
             }
             asyncValidating={!this.state.formConfirmed}
           >
             <div className="form-right-aligned-labels rolling-upgrade-form top-10 time-delay-container">
+              {overrideIntentParams.instanceType ? (
+                <Field
+                  name="timeDelay"
+                  type="number"
+                  component={YBInputField}
+                  label="Rolling Upgrade Delay Between Servers (secs)"
+                  initValue={TASK_LONG_TIMEOUT / 1000}
+                />
+              ) : (
+                <span>This operation will be performed without restart</span>
+              )}
+            </div>
+            {errorAlert}
+          </YBModal>
+        );
+      }
+      case 'thirdpartyUpgradeModal': {
+        return (
+          <YBModal
+            className={getPromiseState(universe.rollingUpgrade).isError() ? 'modal-shake' : ''}
+            visible={modalVisible}
+            formName="RollingUpgradeForm"
+            onHide={this.resetAndClose}
+            submitLabel="Upgrade"
+            showCancelButton
+            title="Initiate Third-party Software Upgrade"
+            onFormSubmit={submitAction}
+            error={error}
+            footerAccessory={
+              <YBCheckBox
+                label="Confirm third-party software upgrade"
+                input={{
+                  checked: this.state.formConfirmed,
+                  onChange: this.toggleConfirmValidation
+                }}
+              />
+            }
+            asyncValidating={!this.state.formConfirmed}
+          >
+            <div className="form-right-aligned-labels rolling-upgrade-form">
               <Field
                 name="timeDelay"
                 type="number"

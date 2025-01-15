@@ -4,12 +4,11 @@ headerTitle: Functions that return the current date-time moment
 linkTitle: Current date-time moment
 description: The semantics of the functions that return the current date-time moment. [YSQL]
 menu:
-  stable:
+  stable_api:
     identifier: current-date-time-moment
     parent: date-time-functions
     weight: 40
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 Each of the nine functions in this group returns a moment value of the specified data type that honors the "moment kind" semantics. (See the note "Don't use "_timeofday()_" above. For the reasons that it explains, that function is not included in the count of ten that the table in the subsection [Functions that return the current date-time moment](../#functions-that-return-the-current-date-time-moment-current-date-time-moment) presents. This is why the present paragraph starts with "Each of the _nine_ functions...")
@@ -59,7 +58,7 @@ Modern applications almost invariably must work globally—in other words, they 
 
 The functions _now()_ and _current_timestamp_ both have identical semantics to _transaction_timestamp()_. But the latter has the name that best expresses its purpose. Yugabyte therefore recommends that you avoid using _now()_ or _current_timestamp_.
 
-Notice that, while _date_ might seem appealing because facts like "hire date" are conventionally recorded without a time of day component, different locations around the globe can have different dates at the same absolute moment. (See the section [Absolute time and the UTC Time Standard](../../conceptual-background/#absolute-time-and-the-utc-time-standard).) So it's better to record even "hire date" as a _timestamptz_ value. If you need to display this as a plain date, then you can convert it to a plain _timestamp_ value in the desired timezone (see the section [function timezone() | at time zone operator](../miscellaneous/#function-timezone-at-time-zone-operator-returns-time-timetz-timestamp-timestamptz)); and then you can typecast this value to a _date_ value (see the subsection [plain timestamp to date](../../typecasting-between-date-time-values/#plain-timestamp-to-date) in the section "Typecasting between values of different date-time datatypes").
+Notice that, while _date_ might seem appealing because facts like "hire date" are conventionally recorded without a time of day component, different locations around the globe can have different dates at the same absolute moment. (See the section [Absolute time and the UTC Time Standard](../../conceptual-background/#absolute-time-and-the-utc-time-standard).) So it's better to record even "hire date" as a _timestamptz_ value. If you need to display this as a plain date, then you can convert it to a plain _timestamp_ value in the desired timezone (see the section [function timezone() | at time zone operator](../miscellaneous/#function-timezone-at-time-zone-operator-returns-time-timetz-timestamp-timestamptz)); and then you can typecast this value to a _date_ value (see the subsection [plain timestamp to date](../../typecasting-between-date-time-values/#plain-timestamp-to-date) in the section "Typecasting between values of different date-time data types").
 {{< /tip >}}
 
 ### The semantics of "start of transaction", "start of statement", and "instantaneous"
@@ -143,7 +142,7 @@ select to_char(
   '9.999') as "stmt #1 time minus txn time";
 ```
 
-You'll see that _"stmt #1 time minus txn time"_ differs from 5.0 seconds by maybe as much as 0.03 seconds. This reflects the inevitable time that it takes for the client-server round trips and for the \\_!_ metacommand to launch a new shell and invoke the operating system sleep utility. (_psql_ and therefore _ysqlsh_ have no intrinsic sleep function. And if you use _pg_sleep()_, then you complicate the discussion because this requires a top-level SQL call of its own.)
+You'll see that _"stmt #1 time minus txn time"_ differs from 5.0 seconds by maybe as much as 0.03 seconds. This reflects the inevitable time that it takes for the client-server round trips and for the \\_!_ meta-command to launch a new shell and invoke the operating system sleep utility. (_psql_ and therefore _ysqlsh_ have no intrinsic sleep function. And if you use _pg_sleep()_, then you complicate the discussion because this requires a top-level SQL call of its own.)
 
 Notice that this observation confirms that it is the _start transaction_ explicit call that determines the moment at which the transaction starts—and not the start moment of the first subsequent database call within that started transaction.
 
@@ -308,7 +307,7 @@ select
 Of course, the result will depend on when you do this. Here's the result when it was done at about 20:00 local time on 30-Sep-2021 in the _America/Los_Angeles_ timezone.
 
 ```output
-        today()         |       tomorrow()       |      yesterday()       
+        today()         |       tomorrow()       |      yesterday()
 ------------------------+------------------------+------------------------
  2021-10-01 00:00:00+00 | 2021-10-02 00:00:00+00 | 2021-09-30 00:00:00+00
 ```

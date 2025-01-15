@@ -1,16 +1,15 @@
 ---
-title: Manage users and roles
+title: Manage users and roles - YSQL
+headerTitle: Manage users and roles
 linkTitle: Manage users and roles
 description: Manage users and roles in YSQL
 headcontent: Manage users and roles
-image: /images/section_icons/secure/create-roles.png
 menu:
   preview:
     identifier: create-roles
     parent: authorization
     weight: 717
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 <ul class="nav nav-tabs-alt nav-tabs-yb">
@@ -35,6 +34,12 @@ Roles in YSQL can represent individual users or a group of users. Users are a ro
 
 You manage roles and users using the CREATE ROLE, GRANT, REVOKE, and DROP ROLE statements.
 
+{{< note title="YSQL and case sensitivity" >}}
+
+Like SQL, YSQL is case-insensitive by default. When specifying an identifier, such as the name of a table or role, YSQL automatically converts the identifier to lowercase. For example, `CREATE ROLE Alice` creates the role "alice". To use a case-sensitive name for an identifier, enclose the name in quotes. For example, to create the role "Alice", use `CREATE ROLE "Alice"`.
+
+{{< /note >}}
+
 ## Create roles
 
 You can create roles with the [CREATE ROLE](../../../api/ysql/the-sql-language/statements/dcl_create_role/) statement.
@@ -51,7 +56,7 @@ Roles that have `LOGIN` privileges are users. For example, create a user `john` 
 yugabyte=# CREATE ROLE john LOGIN PASSWORD 'PasswdForJohn';
 ```
 
-Read about [how to create users in YugabyteDB](../../enable-authentication/ysql/) in the Authentication section.
+Read about [how to create users in YugabyteDB](../../enable-authentication/authentication-ysql/) in the Authentication section.
 
 ## Grant roles
 
@@ -107,8 +112,8 @@ You should see the following output:
 In the table, note the following:
 
 * The `yugabyte` role is the built-in superuser.
-* The role `john` can login, and hence is a user. Note that `john` is not a superuser.
-* The roles `engineering` and `developer` cannot login.
+* The role `john` can log in, and hence is a user. Note that `john` is not a superuser.
+* The roles `engineering` and `developer` cannot log in.
 * Both `john` and `developer` inherit the role `engineering`.
 
 ## Revoke roles

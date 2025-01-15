@@ -29,8 +29,7 @@
 // or implied.  See the License for the specific language governing permissions and limitations
 // under the License.
 //
-#ifndef YB_UTIL_ROLLING_LOG_H
-#define YB_UTIL_ROLLING_LOG_H
+#pragma once
 
 #include <memory>
 #include <string>
@@ -75,7 +74,7 @@ class RollingLog {
   // Open the log.
   // It is optional to call this function. Append() will automatically open
   // the log as necessary if it is not open.
-  CHECKED_STATUS Open();
+  Status Open();
 
   // Set the size limit for the current and any future log files.
   //
@@ -95,16 +94,16 @@ class RollingLog {
   // Note that this is a synchronous API and causes potentially-blocking IO on the
   // current thread. However, this does not fsync() or otherwise ensure durability
   // of the appended data.
-  CHECKED_STATUS Append(GStringPiece data);
+  Status Append(GStringPiece data);
 
   // Close the log.
-  CHECKED_STATUS Close();
+  Status Close();
 
  private:
   std::string GetLogFileName(int sequence) const;
 
   // Compress the given path, writing a new file '<path>.gz'.
-  CHECKED_STATUS CompressFile(const std::string& path) const;
+  Status CompressFile(const std::string& path) const;
 
   Env* const env_;
   const std::string log_dir_;
@@ -119,4 +118,3 @@ class RollingLog {
 };
 
 } // namespace yb
-#endif /* YB_UTIL_ROLLING_LOG_H */

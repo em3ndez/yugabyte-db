@@ -20,8 +20,7 @@
 // the parse tree.
 //--------------------------------------------------------------------------------------------------
 
-#ifndef YB_YQL_CQL_QL_PTREE_PROCESS_CONTEXT_H_
-#define YB_YQL_CQL_QL_PTREE_PROCESS_CONTEXT_H_
+#pragma once
 
 #include "yb/util/status_fwd.h"
 #include "yb/util/memory/arena.h"
@@ -54,28 +53,28 @@ class ProcessContextBase {
   void Warn(const YBLocation& loc, const std::string& msg, ErrorCode error_code);
 
   // Handling parsing error.
-  CHECKED_STATUS Error(const YBLocation& loc,
-                       const char *msg,
-                       ErrorCode error_code,
-                       const char* token = nullptr);
-  CHECKED_STATUS Error(const YBLocation& loc,
-                       const std::string& msg,
-                       ErrorCode error_code,
-                       const char* token = nullptr);
-  CHECKED_STATUS Error(const YBLocation& loc, const std::string& msg, const char* token = nullptr);
-  CHECKED_STATUS Error(const YBLocation& loc, const char *msg, const char* token = nullptr);
-  CHECKED_STATUS Error(const YBLocation& loc, ErrorCode error_code, const char* token = nullptr);
+  Status Error(const YBLocation& loc,
+               const char *msg,
+               ErrorCode error_code,
+               const char* token = nullptr);
+  Status Error(const YBLocation& loc,
+               const std::string& msg,
+               ErrorCode error_code,
+               const char* token = nullptr);
+  Status Error(const YBLocation& loc, const std::string& msg, const char* token = nullptr);
+  Status Error(const YBLocation& loc, const char *msg, const char* token = nullptr);
+  Status Error(const YBLocation& loc, ErrorCode error_code, const char* token = nullptr);
 
   // Variants of Error() that report location of tnode as the error location.
-  CHECKED_STATUS Error(const TreeNode *tnode, ErrorCode error_code);
-  CHECKED_STATUS Error(const TreeNode *tnode, const std::string& msg, ErrorCode error_code);
-  CHECKED_STATUS Error(const TreeNode *tnode, const char *msg, ErrorCode error_code);
-  CHECKED_STATUS Error(const TreeNode *tnode, const Status& s, ErrorCode error_code);
+  Status Error(const TreeNode *tnode, ErrorCode error_code);
+  Status Error(const TreeNode *tnode, const std::string& msg, ErrorCode error_code);
+  Status Error(const TreeNode *tnode, const char *msg, ErrorCode error_code);
+  Status Error(const TreeNode *tnode, const Status& s, ErrorCode error_code);
 
-  CHECKED_STATUS Error(const TreeNodePtr& tnode, ErrorCode error_code);
-  CHECKED_STATUS Error(const TreeNodePtr& tnode, const std::string& msg, ErrorCode error_code);
-  CHECKED_STATUS Error(const TreeNodePtr& tnode, const char *msg, ErrorCode error_code);
-  CHECKED_STATUS Error(const TreeNodePtr& tnode, const Status& s, ErrorCode error_code);
+  Status Error(const TreeNodePtr& tnode, ErrorCode error_code);
+  Status Error(const TreeNodePtr& tnode, const std::string& msg, ErrorCode error_code);
+  Status Error(const TreeNodePtr& tnode, const char *msg, ErrorCode error_code);
+  Status Error(const TreeNodePtr& tnode, const Status& s, ErrorCode error_code);
 
   // Memory pool for allocating and deallocating operating memory spaces during a process.
   MemoryContext *PTempMem() const {
@@ -91,7 +90,7 @@ class ProcessContextBase {
   }
 
   // Return status of a process.
-  CHECKED_STATUS GetStatus();
+  Status GetStatus();
 
  protected:
   MCString* error_msgs();
@@ -145,5 +144,3 @@ class ProcessContext : public ProcessContextBase {
 
 }  // namespace ql
 }  // namespace yb
-
-#endif  // YB_YQL_CQL_QL_PTREE_PROCESS_CONTEXT_H_

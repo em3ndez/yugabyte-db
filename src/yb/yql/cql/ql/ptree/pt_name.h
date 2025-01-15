@@ -15,8 +15,7 @@
 // Tree node definitions for database object names such as table, column, or index names.
 //--------------------------------------------------------------------------------------------------
 
-#ifndef YB_YQL_CQL_QL_PTREE_PT_NAME_H_
-#define YB_YQL_CQL_QL_PTREE_PT_NAME_H_
+#pragma once
 
 #include "yb/client/yb_table_name.h"
 #include "yb/yql/cql/ql/ptree/tree_node.h"
@@ -50,7 +49,7 @@ class PTName : public TreeNode {
     return MCMakeShared<PTName>(memctx, std::forward<TypeArgs>(args)...);
   }
 
-  virtual CHECKED_STATUS Analyze(SemContext *sem_context) override {
+  virtual Status Analyze(SemContext *sem_context) override {
     return Status::OK();
   }
 
@@ -126,7 +125,7 @@ class PTQualifiedName : public PTName {
   void Prepend(const PTName::SharedPtr& ptname);
 
   // Node semantics analysis.
-  virtual CHECKED_STATUS Analyze(SemContext *sem_context) override;
+  virtual Status Analyze(SemContext *sem_context) override;
 
   const MCString& first_name() const {
     return ptnames_.front()->name();
@@ -151,7 +150,7 @@ class PTQualifiedName : public PTName {
   }
 
   // Analyze this qualified name as an object name.
-  CHECKED_STATUS AnalyzeName(SemContext *sem_context, ObjectType object_type);
+  Status AnalyzeName(SemContext *sem_context, ObjectType object_type);
 
   client::YBTableName ToTableName() const {
     return client::YBTableName(YQL_DATABASE_CQL, first_name().c_str(), last_name().c_str());
@@ -176,5 +175,3 @@ using PTQualifiedNameListNode = TreeListNode<PTQualifiedName>;
 
 }  // namespace ql
 }  // namespace yb
-
-#endif  // YB_YQL_CQL_QL_PTREE_PT_NAME_H_

@@ -1,11 +1,11 @@
 import _ from 'lodash';
-import React from 'react';
 import userEvent from '@testing-library/user-event';
 import { render } from '../../../test-utils';
 import { HAReplicationView } from './HAReplicationView';
-import { HAConfig, HAReplicationSchedule } from '../../../redesign/helpers/dtos';
+import { HaConfig, HaReplicationSchedule } from '../dtos';
+import { MOCK_HA_WS_RUNTIME_CONFIG } from './mockUtils';
 
-const mockConfig: HAConfig = {
+const mockConfig: HaConfig = {
   uuid: 'config-id-1',
   cluster_key: 'fake-key',
   last_failover: 123,
@@ -36,17 +36,22 @@ const mockConfig: HAConfig = {
     }
   ]
 };
-const mockSchedule: HAReplicationSchedule = {
+const mockSchedule: HaReplicationSchedule = {
   frequency_milliseconds: 60000,
   is_running: true
 };
 
-const setup = (config?: HAConfig) => {
+const setup = (config?: HaConfig) => {
+  const fetchRunTimeConfigs = jest.fn();
+  const setRunTimeConfig = jest.fn();
   return render(
     <HAReplicationView
-      config={config || mockConfig}
+      haConfig={config ?? mockConfig}
       schedule={mockSchedule}
       editConfig={() => {}}
+      runtimeConfigs={MOCK_HA_WS_RUNTIME_CONFIG}
+      fetchRuntimeConfigs={fetchRunTimeConfigs}
+      setRuntimeConfig={setRunTimeConfig}
     />
   );
 };
@@ -56,26 +61,26 @@ describe('HA replication configuration overview', () => {
     const component = setup();
     expect(component.getByText(/replication frequency/i)).toBeInTheDocument();
     expect(component.getByText(/enable replication/i)).toBeInTheDocument();
-    expect(component.getByRole('button', { name: /edit configuration/i })).toBeInTheDocument();
+    expect(component.getByRole('button', { name: /actions/i })).toBeInTheDocument();
     expect(component.queryByRole('button', { name: /make active/i })).not.toBeInTheDocument();
   });
 
   it('should render standby configuration properly', () => {
     const config = _.cloneDeep(mockConfig);
-    config.instances.forEach(item => item.is_leader = false); // mark all instances as standby
+    config.instances.forEach((item) => (item.is_leader = false)); // mark all instances as standby
     const component = setup(config);
 
     expect(component.queryByText(/replication frequency/i)).not.toBeInTheDocument();
     expect(component.queryByText(/enable replication/i)).not.toBeInTheDocument();
-    expect(component.queryByRole('button', { name: /edit configuration/i })).not.toBeInTheDocument();
+    expect(component.queryByRole('button', { name: /actions/i })).not.toBeInTheDocument();
     expect(component.getByRole('button', { name: /make active/i })).toBeInTheDocument();
   });
 
   it('should render cluster topology in correct order', () => {
     const component = setup();
-    const instances = Array
-      .from(component.container.querySelectorAll('.ha-replication-view__topology-col--address'))
-      .map(item => item.textContent);
+    const instances = Array.from(
+      component.container.querySelectorAll('.ha-replication-view__topology-col--address')
+    ).map((item) => item.textContent);
 
     // should put active instance on top and sort standby instances by address
     expect(instances).toEqual([
@@ -85,11 +90,12 @@ describe('HA replication configuration overview', () => {
     ]);
   });
 
-  it('should render a modal on click at the delete config button', () => {
+  it('should render a modal on when clicking the delete configuration menu item', () => {
     const component = setup();
 
     // check if modal opens
-    userEvent.click(component.getByRole('button', { name: /delete configuration/i }));
+    userEvent.click(component.getByRole('button', { name: /actions/i }));
+    userEvent.click(component.getByRole('menuitem', { name: /delete configuration/i }));
     expect(component.getByTestId('ha-delete-confirmation-modal')).toBeInTheDocument();
 
     // check if modal closes
@@ -99,7 +105,7 @@ describe('HA replication configuration overview', () => {
 
   it('should render a modal on click at the promotion button', () => {
     const config = _.cloneDeep(mockConfig);
-    config.instances.forEach(item => item.is_leader = false); // mark all instances as standby
+    config.instances.forEach((item) => (item.is_leader = false)); // mark all instances as standby
     const component = setup(config);
 
     // check if modal opens
@@ -114,7 +120,7 @@ describe('HA replication configuration overview', () => {
   it('should show generic error message on incorrect config', () => {
     const consoleError = jest.fn();
     jest.spyOn(console, 'error').mockImplementation(consoleError);
-    const component = setup({} as HAConfig);
+    const component = setup({} as HaConfig);
 
     expect(component.getByTestId('ha-generic-error')).toBeInTheDocument();
     expect(consoleError).toBeCalled();

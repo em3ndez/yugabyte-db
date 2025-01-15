@@ -14,15 +14,14 @@
 package org.yb.client;
 
 import com.google.protobuf.Message;
-import org.yb.CommonTypes.PeerRole;
+import io.netty.buffer.ByteBuf;
 import org.yb.CommonNet.HostPortPB;
-import org.yb.consensus.Metadata;
+import org.yb.CommonTypes.PeerRole;
 import org.yb.WireProtocol;
 import org.yb.annotations.InterfaceAudience;
 import org.yb.master.MasterClusterOuterClass;
 import org.yb.util.Pair;
 import org.yb.util.ServerInfo;
-import org.jboss.netty.buffer.ChannelBuffer;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -34,7 +33,7 @@ class ListMastersRequest extends YRpc<ListMastersResponse> {
   }
 
   @Override
-  ChannelBuffer serialize(Message header) {
+  ByteBuf serialize(Message header) {
     assert header.isInitialized();
     final MasterClusterOuterClass.ListMastersRequestPB.Builder builder =
       MasterClusterOuterClass.ListMastersRequestPB.newBuilder();
@@ -74,7 +73,8 @@ class ListMastersRequest extends YRpc<ListMastersResponse> {
                                 rpc_addr != null ? rpc_addr.getHost() : "UNKNOWN",
                                 rpc_addr != null ? rpc_addr.getPort() : 0,
                                 entry.getRole() == PeerRole.LEADER,
-                                entry.hasError() ? entry.getError().getCode().name() : "ALIVE");
+                                entry.hasError() ? entry.getError().getCode().name() : "ALIVE",
+                                entry.getRole());
         masters.add(master);
       }
     }
@@ -82,6 +82,6 @@ class ListMastersRequest extends YRpc<ListMastersResponse> {
     ListMastersResponse response = new ListMastersResponse(
         deadlineTracker.getElapsedMillis(), masterUUID, hasErr, masters);
 
-    return new Pair<ListMastersResponse, Object>(response, hasErr ? respBuilder.getError() : null);
+    return new Pair<>(response, hasErr ? respBuilder.getError() : null);
   }
 }

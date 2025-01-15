@@ -11,8 +11,7 @@
 // under the License.
 //
 
-#ifndef YB_TOOLS_YB_GENERATE_PARTITIONS_H
-#define YB_TOOLS_YB_GENERATE_PARTITIONS_H
+#pragma once
 
 #include <functional>
 #include <locale>
@@ -47,28 +46,28 @@ typedef std::map<std::string, master::TabletLocationsPB> TabletMap;
 class YBPartitionGenerator {
  public:
   explicit YBPartitionGenerator(const client::YBTableName& table_name,
-                                const vector<std::string>& master_addresses);
+                                const std::vector<std::string>& master_addresses);
   ~YBPartitionGenerator();
 
-  CHECKED_STATUS Init();
+  Status Init();
   // Retrieves the partition_key and tablet_id for a given row, which is a string of comma
   // separated values. The format of the comma separated values should be similar to the Schema
   // object where we first have the hash keys, then the range keys and finally the regular
   // columns of the table.
-  CHECKED_STATUS LookupTabletId(const std::string &row,
-                                std::string *tablet_id,
-                                std::string* partition_key);
-  CHECKED_STATUS LookupTabletId(const std::string &row,
-                                const std::set<int>& skipped_cols,
-                                std::string *tablet_id,
-                                std::string* partition_key);
-  CHECKED_STATUS LookupTabletIdWithTokenizer(const CsvTokenizer& tokenizer,
-                                             const std::set<int>& skipped_cols,
-                                             std::string *tablet_id,
-                                             std::string* partition_key);
+  Status LookupTabletId(const std::string &row,
+                        std::string *tablet_id,
+                        std::string* partition_key);
+  Status LookupTabletId(const std::string &row,
+                        const std::set<int>& skipped_cols,
+                        std::string *tablet_id,
+                        std::string* partition_key);
+  Status LookupTabletIdWithTokenizer(const CsvTokenizer& tokenizer,
+                                     const std::set<int>& skipped_cols,
+                                     std::string *tablet_id,
+                                     std::string* partition_key);
 
  private:
-  CHECKED_STATUS BuildTabletMap(
+  Status BuildTabletMap(
     const google::protobuf::RepeatedPtrField<master::TabletLocationsPB> &tablets);
 
   TabletMap tablet_map_;
@@ -80,4 +79,3 @@ class YBPartitionGenerator {
 
 } // namespace tools
 } // namespace yb
-#endif // YB_TOOLS_YB_GENERATE_PARTITIONS_H

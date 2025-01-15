@@ -30,8 +30,7 @@
 // under the License.
 //
 // Utility methods for dealing with string case.
-#ifndef YB_UTIL_STRING_CASE_H_
-#define YB_UTIL_STRING_CASE_H_
+#pragma once
 
 #include <string>
 
@@ -64,10 +63,24 @@ std::string AllCapsToCamelCase(const std::string &all_caps);
 void ToLowerCase(const std::string &string,
                  std::string *out);
 
+// Lower-case all of the characters in the given string.
+inline std::string ToLowerCase(const std::string &string) {
+  std::string out;
+  ToLowerCase(string, &out);
+  return out;
+}
+
 // Upper-case all of the characters in the given string.
 // 'string' and 'out' may refer to the same string to replace in-place.
 void ToUpperCase(const std::string &string,
                  std::string *out);
+
+// Upper-case all of the characters in the given string.
+inline std::string ToUpperCase(const std::string &string) {
+  std::string out;
+  ToUpperCase(string, &out);
+  return out;
+}
 
 // Capitalizes a string containing a word in place.
 // For example:
@@ -79,4 +92,3 @@ std::string Capitalize(const std::string& word);
 bool ContainsUpperCase(const std::string& str);
 
 }  // namespace yb
-#endif  // YB_UTIL_STRING_CASE_H_

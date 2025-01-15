@@ -4,12 +4,11 @@ linkTitle: Array slice operator
 headerTitle: The array slice operator
 description: The array slice operator
 menu:
-  preview:
+  preview_api:
     identifier: array-slice-operator
     parent: array-functions-operators
     weight: 30
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 **Purpose:** Return a new array whose length is defined by specifying the slice's lower and upper bound along each dimension.

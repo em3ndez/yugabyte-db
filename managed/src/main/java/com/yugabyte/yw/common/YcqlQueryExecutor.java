@@ -34,6 +34,7 @@ public class YcqlQueryExecutor {
   private static final Logger LOG = LoggerFactory.getLogger(YcqlQueryExecutor.class);
   private static final String DEFAULT_DB_USER = Util.DEFAULT_YCQL_USERNAME;
   private static final String DEFAULT_DB_PASSWORD = Util.DEFAULT_YCQL_PASSWORD;
+  private static final String AUTH_ERR_MSG = "Provided username and/or password are incorrect";
 
   public void createUser(Universe universe, DatabaseUserFormData data) {
     // Create user for customer CQL.
@@ -42,10 +43,11 @@ public class YcqlQueryExecutor {
     // --use_cassandra_authentication=true
     // This is always true if the universe was created via cloud.
     RunQueryFormData ycqlQuery = new RunQueryFormData();
-    ycqlQuery.query =
+    ycqlQuery.setQuery(
         String.format(
             "CREATE ROLE '%s' WITH SUPERUSER=true AND LOGIN=true AND PASSWORD='%s'",
-            Util.escapeSingleQuotesOnly(data.username), Util.escapeSingleQuotesOnly(data.password));
+            Util.escapeSingleQuotesOnly(data.username),
+            Util.escapeSingleQuotesOnly(data.password)));
     JsonNode ycqlResponse =
         executeQuery(universe, ycqlQuery, true, data.ycqlAdminUsername, data.ycqlAdminPassword);
     LOG.info("Creating YCQL user, result: " + ycqlResponse.toString());
@@ -56,17 +58,18 @@ public class YcqlQueryExecutor {
   }
 
   public void validateAdminPassword(Universe universe, DatabaseSecurityFormData data) {
-    RunQueryFormData ycqlQuery = new RunQueryFormData();
-    ycqlQuery.query = "SELECT now() FROM system.local";
+    CassandraConnection cc = null;
     try {
-      JsonNode ycqlResponse =
-          executeQuery(universe, ycqlQuery, true, data.ycqlAdminUsername, data.ycqlAdminPassword);
-      if (ycqlResponse.has("error")) {
-        throw new PlatformServiceException(
-            Http.Status.BAD_REQUEST, ycqlResponse.get("error").asText());
-      }
+      cc =
+          createCassandraConnection(
+              universe.getUniverseUUID(), true, data.ycqlAdminUsername, data.ycqlAdminPassword);
     } catch (AuthenticationException e) {
+      LOG.warn(e.getMessage());
       throw new PlatformServiceException(Http.Status.UNAUTHORIZED, e.getMessage());
+    } finally {
+      if (cc != null) {
+        cc.close();
+      }
     }
   }
 
@@ -77,11 +80,11 @@ public class YcqlQueryExecutor {
     // --use_cassandra_authentication=true
     // This is always true if the universe was created via cloud.
     RunQueryFormData ycqlQuery = new RunQueryFormData();
-    ycqlQuery.query =
+    ycqlQuery.setQuery(
         String.format(
             "ALTER ROLE '%s' WITH PASSWORD='%s'",
             Util.escapeSingleQuotesOnly(data.ycqlAdminUsername),
-            Util.escapeSingleQuotesOnly(data.ycqlAdminPassword));
+            Util.escapeSingleQuotesOnly(data.ycqlAdminPassword)));
     JsonNode ycqlResponse =
         executeQuery(universe, ycqlQuery, true, data.ycqlAdminUsername, data.ycqlCurrAdminPassword);
     LOG.info("Updating YCQL user, result: " + ycqlResponse.toString());
@@ -170,10 +173,16 @@ public class YcqlQueryExecutor {
       String username,
       String password) {
     ObjectNode response = newObject();
-    CassandraConnection cc =
-        createCassandraConnection(universe.universeUUID, authEnabled, username, password);
+    CassandraConnection cc = null;
     try {
-      ResultSet rs = cc.session.execute(queryParams.query);
+      cc = createCassandraConnection(universe.getUniverseUUID(), authEnabled, username, password);
+    } catch (AuthenticationException e) {
+      response.put("error", AUTH_ERR_MSG);
+      return response;
+    }
+
+    try {
+      ResultSet rs = cc.session.execute(queryParams.getQuery());
       if (rs.iterator().hasNext()) {
         List<Map<String, Object>> rows = resultSetToMap(rs);
         response.set("result", toJson(rows));
@@ -181,12 +190,14 @@ public class YcqlQueryExecutor {
         // For commands without a result we return only executed command identifier
         // (SELECT/UPDATE/...). We can't return query itself to avoid logging of
         // sensitive data.
-        response.put("queryType", getQueryType(queryParams.query));
+        response.put("queryType", getQueryType(queryParams.getQuery()));
       }
     } catch (Exception e) {
-      response.put("error", removeQueryFromErrorMessage(e.getMessage(), queryParams.query));
+      response.put("error", removeQueryFromErrorMessage(e.getMessage(), queryParams.getQuery()));
     } finally {
-      cc.close();
+      if (cc != null) {
+        cc.close();
+      }
     }
     return response;
   }

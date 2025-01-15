@@ -1,4 +1,4 @@
-@import '../../../_style/colors';
+@use '../../../_style/colors';
 
 .ha-replication-view {
   &__header-buttons {
@@ -21,7 +21,7 @@
   }
 
   &__label {
-    color: $YB_SUBTITLE_COLOR;
+    color: colors.$YB_SUBTITLE_COLOR;
   }
 
   &__value {
@@ -59,6 +59,29 @@
 
     &--address {
       width: 100%;
+    }
+  }
+  &__no-cert--add-button {
+    background: none;
+    border: none;
+    padding: 0;
+
+    color: colors.$YB_ORANGE;
+    &:hover {
+      color: colors.$YB_ORANGE_HOVER;
+      text-decoration: underline;
+    }
+    cursor: pointer;
+  }
+  
+
+  &__cert-container {
+    display: flex;
+    &--identifier {
+      min-width: 750px;
+    }
+    &--ellipse {
+      min-width: 35px;
     }
   }
 }

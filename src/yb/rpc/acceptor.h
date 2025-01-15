@@ -30,8 +30,7 @@
 // under the License.
 //
 
-#ifndef YB_RPC_ACCEPTOR_H
-#define YB_RPC_ACCEPTOR_H
+#pragma once
 
 #include <mutex>
 #include <vector>
@@ -67,9 +66,9 @@ class Acceptor {
 
   // Setup acceptor to listen address.
   // Return bound address in bound_address.
-  CHECKED_STATUS Listen(const Endpoint& endpoint, Endpoint* bound_endpoint = nullptr);
+  Status Listen(const Endpoint& endpoint, Endpoint* bound_endpoint = nullptr);
 
-  CHECKED_STATUS Start();
+  Status Start();
   void Shutdown();
 
  private:
@@ -102,4 +101,3 @@ class Acceptor {
 
 } // namespace rpc
 } // namespace yb
-#endif // YB_RPC_ACCEPTOR_H

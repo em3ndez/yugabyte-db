@@ -1,6 +1,6 @@
 // Copyright (c) YugaByte, Inc.
 
-import React, { Component } from 'react';
+import { Component } from 'react';
 import PropTypes from 'prop-types';
 
 export default class YBLabelWithIcon extends Component {
@@ -8,9 +8,9 @@ export default class YBLabelWithIcon extends Component {
     icon: PropTypes.string
   };
   render() {
-    const { icon } = this.props;
+    const { icon, className } = this.props;
     return (
-      <span>
+      <span className={className}>
         {icon && <i className={icon}></i>}
         {this.props.children}
       </span>

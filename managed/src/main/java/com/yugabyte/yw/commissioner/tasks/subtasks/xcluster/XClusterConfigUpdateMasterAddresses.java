@@ -11,18 +11,16 @@
 package com.yugabyte.yw.commissioner.tasks.subtasks.xcluster;
 
 import com.yugabyte.yw.commissioner.BaseTaskDependencies;
-import com.yugabyte.yw.commissioner.UserTaskDetails;
 import com.yugabyte.yw.commissioner.tasks.XClusterConfigTaskBase;
-import com.yugabyte.yw.common.utils.Pair;
-import com.yugabyte.yw.forms.ITaskParams;
+import com.yugabyte.yw.common.XClusterUniverseService;
 import com.yugabyte.yw.forms.XClusterConfigTaskParams;
 import com.yugabyte.yw.models.HighAvailabilityConfig;
 import com.yugabyte.yw.models.Universe;
+import com.yugabyte.yw.models.XClusterConfig;
 import com.yugabyte.yw.models.helpers.NodeDetails;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import javax.inject.Inject;
@@ -37,13 +35,9 @@ import org.yb.client.YBClient;
 public class XClusterConfigUpdateMasterAddresses extends XClusterConfigTaskBase {
 
   @Inject
-  protected XClusterConfigUpdateMasterAddresses(BaseTaskDependencies baseTaskDependencies) {
-    super(baseTaskDependencies);
-  }
-
-  @Override
-  public void initialize(ITaskParams params) {
-    super.initialize(params);
+  protected XClusterConfigUpdateMasterAddresses(
+      BaseTaskDependencies baseTaskDependencies, XClusterUniverseService xClusterUniverseService) {
+    super(baseTaskDependencies, xClusterUniverseService);
   }
 
   public static class Params extends XClusterConfigTaskParams {
@@ -60,11 +54,8 @@ public class XClusterConfigUpdateMasterAddresses extends XClusterConfigTaskBase 
   @Override
   public String getName() {
     return String.format(
-        "%s %s(targetUniverse=%s, sourceUniverse=%s)",
-        super.getName(),
-        this.getClass().getSimpleName(),
-        taskParams().universeUUID,
-        taskParams().sourceUniverseUuid);
+        "%s (targetUniverse=%s, sourceUniverse=%s)",
+        super.getName(), taskParams().getUniverseUUID(), taskParams().sourceUniverseUuid);
   }
 
   @Override
@@ -83,7 +74,7 @@ public class XClusterConfigUpdateMasterAddresses extends XClusterConfigTaskBase 
             String.format(
                 "Failed to update master addresses of XClusterConfigs for Universe(%s): "
                     + "Failed to get cluster config: %s",
-                targetUniverse.universeUUID, getMasterClusterConfigResp.errorMessage());
+                targetUniverse.getUniverseUUID(), getMasterClusterConfigResp.errorMessage());
         throw new RuntimeException(errMsg);
       }
       Map<String, CdcConsumer.ProducerEntryPB> replicationGroups =
@@ -91,18 +82,16 @@ public class XClusterConfigUpdateMasterAddresses extends XClusterConfigTaskBase 
 
       // Update all the xCluster configs whose source and target universes belong to this task.
       for (String replicationGroupName : replicationGroups.keySet()) {
-        Optional<Pair<UUID, String>> sourceUuidAndConfigName =
-            maybeParseReplicationGroupName(replicationGroupName);
-        // If replication group name cannot be parsed, ignore it. The replication might have been
-        // created through yb-admin command.
-        if (!sourceUuidAndConfigName.isPresent()) {
-          log.warn(
-              "Skipping {} because it does not conform to the Platform replication group naming",
-              replicationGroupName);
+        XClusterConfig xClusterConfig =
+            XClusterConfig.getByReplicationGroupNameTarget(
+                replicationGroupName, targetUniverse.getUniverseUUID());
+        if (xClusterConfig == null) {
+          // Skip replication for xcluster replications were created by yb-admin command and not
+          // existing in YBA.
           continue;
         }
-        UUID sourceUniverseUUID = sourceUuidAndConfigName.get().getFirst();
-        String xClusterConfigName = sourceUuidAndConfigName.get().getSecond();
+        UUID sourceUniverseUUID = xClusterConfig.getSourceUniverseUUID();
+        String xClusterConfigName = xClusterConfig.getName();
         // Skip the replication configs whose source universe does not belong to this task.
         if (!sourceUniverseUUID.equals(taskParams().sourceUniverseUuid)) {
           continue;
@@ -131,7 +120,7 @@ public class XClusterConfigUpdateMasterAddresses extends XClusterConfigTaskBase 
                       + "between source(%s) and target(%s) to %s: %s",
                   xClusterConfigName,
                   sourceUniverseUUID,
-                  taskParams().universeUUID,
+                  taskParams().getUniverseUUID(),
                   sourceUniverse.getMasterAddresses(),
                   resp.errorMessage());
           throw new RuntimeException(errMsg);
@@ -141,11 +130,11 @@ public class XClusterConfigUpdateMasterAddresses extends XClusterConfigTaskBase 
                 + "updated to {}",
             xClusterConfigName,
             sourceUniverseUUID,
-            taskParams().universeUUID,
+            taskParams().getUniverseUUID(),
             sourceUniverse.getMasterAddresses());
 
         if (HighAvailabilityConfig.get().isPresent()) {
-          getUniverse(true).incrementVersion();
+          getUniverse().incrementVersion();
         }
       }
     } catch (Exception e) {

@@ -12,6 +12,9 @@
 //
 
 #include "yb/tserver/remote_bootstrap_file_downloader.h"
+#include "yb/tserver/remote_client_base.h"
+
+#include <iomanip>
 
 #include "yb/common/wire_protocol.h"
 
@@ -24,31 +27,28 @@
 #include "yb/tserver/remote_bootstrap.proxy.h"
 
 #include "yb/util/crc.h"
-#include "yb/util/flag_tags.h"
+#include "yb/util/flags.h"
 #include "yb/util/logging.h"
 #include "yb/util/net/rate_limiter.h"
 #include "yb/util/size_literals.h"
 #include "yb/util/status_format.h"
+#include "yb/util/stopwatch.h"
 
 using namespace yb::size_literals;
 
 DECLARE_uint64(rpc_max_message_size);
-DEFINE_int32(remote_bootstrap_max_chunk_size, 64_MB,
+DEFINE_UNKNOWN_int32(remote_bootstrap_max_chunk_size, 64_MB,
              "Maximum chunk size to be transferred at a time during remote bootstrap.");
 
-// Deprecated because it's misspelled.  But if set, this flag takes precedence over
-// remote_bootstrap_rate_limit_bytes_per_sec for compatibility.
-DEFINE_int64(remote_boostrap_rate_limit_bytes_per_sec, 0,
-             "DEPRECATED. Replaced by flag remote_bootstrap_rate_limit_bytes_per_sec.");
-TAG_FLAG(remote_boostrap_rate_limit_bytes_per_sec, hidden);
+DEPRECATE_FLAG(int64, remote_boostrap_rate_limit_bytes_per_sec, "10_2022");
 
-DEFINE_int64(remote_bootstrap_rate_limit_bytes_per_sec, 256_MB,
+DEFINE_UNKNOWN_int64(remote_bootstrap_rate_limit_bytes_per_sec, 256_MB,
              "Maximum transmission rate during a remote bootstrap. This is across all the remote "
              "bootstrap sessions for which this process is acting as a sender or receiver. So "
              "the total limit will be 2 * remote_bootstrap_rate_limit_bytes_per_sec because a "
              "tserver or master can act both as a sender and receiver at the same time.");
 
-DEFINE_int32(bytes_remote_bootstrap_durable_write_mb, 8,
+DEFINE_UNKNOWN_int32(bytes_remote_bootstrap_durable_write_mb, 1024,
              "Explicitly call fsync after downloading the specified amount of data in MB "
              "during a remote bootstrap session. If 0 fsync() is not called.");
 
@@ -62,7 +62,7 @@ namespace tserver {
 namespace {
 
 // Decode the remote error into a human-readable Status object.
-CHECKED_STATUS ExtractRemoteError(
+Status ExtractRemoteError(
     const rpc::ErrorStatusPB& remote_error, const Status& original_status) {
   if (!remote_error.HasExtension(RemoteBootstrapErrorPB::remote_bootstrap_error_ext)) {
     return original_status;
@@ -78,7 +78,6 @@ CHECKED_STATUS ExtractRemoteError(
 
 } // namespace
 
-extern std::atomic<int32_t> remote_bootstrap_clients_started_;
 
 RemoteBootstrapFileDownloader::RemoteBootstrapFileDownloader(
     const std::string* log_prefix, FsManager* fs_manager)
@@ -117,10 +116,12 @@ Status RemoteBootstrapFileDownloader::DownloadFile(
     }
   }
 
-  WritableFileOptions opts;
-  opts.sync_on_close = true;
+  if (env().FileExists(file_path)) {
+    LOG(INFO) << file_path << " already exists and will be replaced";
+    RETURN_NOT_OK(env().DeleteFile(file_path));
+  }
   std::unique_ptr<WritableFile> file;
-  RETURN_NOT_OK(env().NewWritableFile(opts, file_path, &file));
+  RETURN_NOT_OK(env().NewWritableFile(file_path, &file));
 
   data_id->set_file_name(file_pb.name());
   RETURN_NOT_OK_PREPEND(DownloadFile(*data_id, file.get()),
@@ -150,8 +151,7 @@ Status RemoteBootstrapFileDownloader::DownloadFile(
 
   if (FLAGS_remote_bootstrap_rate_limit_bytes_per_sec > 0) {
     static auto rate_updater = []() {
-      auto remote_bootstrap_clients_started =
-          remote_bootstrap_clients_started_.load(std::memory_order_acquire);
+      auto remote_bootstrap_clients_started = RemoteClientBase::StartedClientsCount();
       if (remote_bootstrap_clients_started < 1) {
         YB_LOG_EVERY_N(ERROR, 100) << "Invalid number of remote bootstrap sessions: "
                                    << remote_bootstrap_clients_started;
@@ -170,6 +170,12 @@ Status RemoteBootstrapFileDownloader::DownloadFile(
   rpc::RpcController controller;
   controller.set_timeout(session_idle_timeout_);
   FetchDataRequestPB req;
+  Stopwatch verify_data_timer;
+  Stopwatch append_data_timer;
+  Stopwatch sync_timer;
+  Stopwatch file_download_timer;
+  file_download_timer.start();
+  size_t iterations = 0;
 
   bool done = false;
   while (!done) {
@@ -192,15 +198,20 @@ Status RemoteBootstrapFileDownloader::DownloadFile(
     }, [&resp]() { return resp.ByteSize(); });
     RETURN_NOT_OK_UNWIND_PREPEND(status, controller, "Unable to fetch data from remote");
     DCHECK_LE(resp.chunk().data().size(), max_length);
+    iterations++;
 
     // Sanity-check for corruption.
+    verify_data_timer.resume();
     RETURN_NOT_OK_PREPEND(VerifyData(offset, resp.chunk()),
                           Format("Error validating data item $0", data_id));
+    verify_data_timer.stop();
 
     // Write the data.
     VLOG_WITH_PREFIX(3) << "Verifying received data";
+    append_data_timer.resume();
     RETURN_NOT_OK(appendable->Append(resp.chunk().data()));
-    VLOG_WITH_PREFIX(3) << "Verified successfully: resp size: " << resp.ByteSize()
+    append_data_timer.stop();
+    VLOG_WITH_PREFIX(3) << "Verified and appended successfully: resp size: " << resp.ByteSize()
                         << ", chunk size: " << resp.chunk().data().size();
 
     if (offset + resp.chunk().data().size() ==
@@ -211,13 +222,33 @@ Status RemoteBootstrapFileDownloader::DownloadFile(
     if (FLAGS_bytes_remote_bootstrap_durable_write_mb != 0) {
       periodic_sync_unsynced_bytes += resp.chunk().data().size();
       if (periodic_sync_unsynced_bytes > FLAGS_bytes_remote_bootstrap_durable_write_mb * 1_MB) {
+        sync_timer.resume();
         RETURN_NOT_OK(appendable->Sync());
+        sync_timer.stop();
         periodic_sync_unsynced_bytes = 0;
       }
     }
   }
 
-  VLOG_WITH_PREFIX(2) << "Transmission rate: " << rate_limiter->GetRate();
+  sync_timer.resume();
+  RETURN_NOT_OK(appendable->Sync());
+  sync_timer.stop();
+
+  file_download_timer.stop();
+
+  const auto total_bytes = rate_limiter->total_bytes();
+  LOG_WITH_PREFIX(INFO) << std::fixed << std::setprecision(3)
+    << "Downloaded file: " << data_id.file_name()
+    << "; Stats: Total time: " << file_download_timer.elapsed().wall_millis() << " ms"
+    << ", iterations: " << iterations
+    << ", Transmission rate: " << rate_limiter->GetRate()
+    << ", RateLimiter total time slept: " << rate_limiter->total_time_slept().ToMilliseconds()
+    << " ms, Total bytes: " << total_bytes
+    << ", CRC/verify rate: " << (total_bytes / verify_data_timer.elapsed().wall_millis())
+    << " bytes/msec (total_ms: " << verify_data_timer.elapsed().wall_millis()
+    << "), Append rate " << (total_bytes / append_data_timer.elapsed().wall_millis())
+    << " bytes/msec (total_ms: " << append_data_timer.elapsed().wall_millis()
+    << "), File sync time " << sync_timer.elapsed().wall_millis() << "ms";
 
   return Status::OK();
 }

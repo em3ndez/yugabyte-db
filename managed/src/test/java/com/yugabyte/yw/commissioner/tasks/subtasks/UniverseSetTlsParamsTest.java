@@ -13,8 +13,10 @@ import com.yugabyte.yw.commissioner.AbstractTaskBase;
 import com.yugabyte.yw.common.FakeDBApplication;
 import com.yugabyte.yw.common.ModelFactory;
 import com.yugabyte.yw.forms.UniverseDefinitionTaskParams;
+import com.yugabyte.yw.forms.UniverseDefinitionTaskParams.UserIntent;
 import com.yugabyte.yw.models.Customer;
 import com.yugabyte.yw.models.Universe;
+import com.yugabyte.yw.models.helpers.PlacementInfo;
 import java.util.UUID;
 import org.junit.Before;
 import org.junit.Test;
@@ -28,6 +30,14 @@ public class UniverseSetTlsParamsTest extends FakeDBApplication {
   public void setUp() {
     defaultCustomer = ModelFactory.testCustomer();
     defaultUniverse = ModelFactory.createUniverse();
+    Universe.saveDetails(
+        defaultUniverse.getUniverseUUID(),
+        universe -> {
+          UniverseDefinitionTaskParams uParams = defaultUniverse.getUniverseDetails();
+          PlacementInfo pi = uParams.getPrimaryCluster().placementInfo;
+          UserIntent ui = uParams.getPrimaryCluster().userIntent;
+          uParams.upsertCluster(ui, pi, null);
+        });
   }
 
   private void prepareUniverse(
@@ -37,16 +47,17 @@ public class UniverseSetTlsParamsTest extends FakeDBApplication {
       boolean allowInsecure,
       UUID rootCA) {
     Universe.saveDetails(
-        defaultUniverse.universeUUID,
+        defaultUniverse.getUniverseUUID(),
         universe -> {
           UniverseDefinitionTaskParams universeDetails = universe.getUniverseDetails();
-          UniverseDefinitionTaskParams.UserIntent userIntent =
-              universeDetails.getPrimaryCluster().userIntent;
+          universeDetails.clusters.forEach(
+              c -> {
+                c.userIntent.enableClientToNodeEncrypt = enableClientToNodeEncrypt;
+                c.userIntent.enableNodeToNodeEncrypt = enableNodeToNodeEncrypt;
+              });
           universeDetails.updateInProgress = updateInProgress;
           universeDetails.rootCA = rootCA;
           universeDetails.allowInsecure = allowInsecure;
-          userIntent.enableNodeToNodeEncrypt = enableNodeToNodeEncrypt;
-          userIntent.enableClientToNodeEncrypt = enableClientToNodeEncrypt;
         });
   }
 
@@ -56,7 +67,7 @@ public class UniverseSetTlsParamsTest extends FakeDBApplication {
       boolean allowInsecure,
       UUID rootCA) {
     UniverseSetTlsParams.Params params = new UniverseSetTlsParams.Params();
-    params.universeUUID = defaultUniverse.universeUUID;
+    params.setUniverseUUID(defaultUniverse.getUniverseUUID());
     params.enableNodeToNodeEncrypt = enableNodeToNodeEncrypt;
     params.enableClientToNodeEncrypt = enableClientToNodeEncrypt;
     params.allowInsecure = allowInsecure;
@@ -71,12 +82,13 @@ public class UniverseSetTlsParamsTest extends FakeDBApplication {
       boolean enableClientToNodeEncrypt,
       boolean allowInsecure,
       UUID rootCA) {
-    Universe universe = Universe.getOrBadRequest(defaultUniverse.universeUUID);
+    Universe universe = Universe.getOrBadRequest(defaultUniverse.getUniverseUUID());
     UniverseDefinitionTaskParams universeDetails = universe.getUniverseDetails();
-    UniverseDefinitionTaskParams.UserIntent userIntent =
-        universeDetails.getPrimaryCluster().userIntent;
-    assertEquals(enableNodeToNodeEncrypt, userIntent.enableNodeToNodeEncrypt);
-    assertEquals(enableClientToNodeEncrypt, userIntent.enableClientToNodeEncrypt);
+    universeDetails.clusters.forEach(
+        c -> {
+          assertEquals(enableNodeToNodeEncrypt, c.userIntent.enableNodeToNodeEncrypt);
+          assertEquals(enableClientToNodeEncrypt, c.userIntent.enableClientToNodeEncrypt);
+        });
     assertEquals(allowInsecure, universeDetails.allowInsecure);
     assertEquals(rootCA, universeDetails.rootCA);
   }

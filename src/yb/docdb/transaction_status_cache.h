@@ -11,8 +11,7 @@
 // under the License.
 //
 
-#ifndef YB_DOCDB_TRANSACTION_STATUS_CACHE_H
-#define YB_DOCDB_TRANSACTION_STATUS_CACHE_H
+#pragma once
 
 #include "yb/common/read_hybrid_time.h"
 #include "yb/common/transaction.h"
@@ -31,21 +30,19 @@ class TransactionStatusCache {
 
   // Returns transaction commit time if already committed by the specified time or HybridTime::kMin
   // otherwise.
-  Result<CommitMetadata> GetCommitData(const TransactionId& transaction_id);
+  Result<TransactionLocalState> GetTransactionLocalState(const TransactionId& transaction_id);
 
  private:
   struct GetCommitDataResult;
 
-  boost::optional<CommitMetadata> GetLocalCommitData(const TransactionId& transaction_id);
+  boost::optional<TransactionLocalState> GetLocalCommitData(const TransactionId& transaction_id);
   Result<GetCommitDataResult> DoGetCommitData(const TransactionId& transaction_id);
 
   const TransactionOperationContext& txn_context_opt_;
   ReadHybridTime read_time_;
   CoarseTimePoint deadline_;
-  std::unordered_map<TransactionId, CommitMetadata, TransactionIdHash> cache_;
+  std::unordered_map<TransactionId, TransactionLocalState, TransactionIdHash> cache_;
 };
 
 } // namespace docdb
 } // namespace yb
-
-#endif  // YB_DOCDB_TRANSACTION_STATUS_CACHE_H

@@ -21,9 +21,9 @@ import org.slf4j.LoggerFactory;
 import org.yb.minicluster.RocksDBMetrics;
 
 import org.yb.util.BuildTypeUtil;
-import org.yb.util.YBTestRunnerNonTsanOnly;
+import org.yb.YBTestRunner;
 import org.yb.util.RegexMatcher;
-import org.yb.util.YBTestRunnerNonTsanOnly;
+import org.yb.YBTestRunner;
 
 import java.math.BigDecimal;
 import java.sql.Connection;
@@ -42,20 +42,15 @@ import java.util.stream.Collectors;
 
 import static org.yb.AssertionWrappers.*;
 
-@RunWith(value=YBTestRunnerNonTsanOnly.class)
+@RunWith(value=YBTestRunner.class)
 public class TestPgSelect extends BasePgSQLTest {
   private static final Logger LOG = LoggerFactory.getLogger(TestPgSelect.class);
-  private static int kMaxClockSkewMs = 100;
-  private static int kRaftHeartbeatIntervalMs = 500;
 
-  /**
-   * @return flags shared between tablet server and initdb
-   */
   @Override
   protected Map<String, String> getTServerFlags() {
     Map<String, String> flagMap = super.getTServerFlags();
-    flagMap.put("max_clock_skew_usec", "" + kMaxClockSkewMs * 1000);
-    flagMap.put("raft_heartbeat_interval_ms", "" + kRaftHeartbeatIntervalMs);
+    flagMap.put("ysql_enable_packed_row", "false");
+    flagMap.put("pg_client_use_shared_memory", "false");
     return flagMap;
   }
 
@@ -344,389 +339,7 @@ public class TestPgSelect extends BasePgSQLTest {
                                              String stmt,
                                              boolean pushdown_expected) throws Exception {
     verifyStatementMetric(statement, stmt, AGGREGATE_PUSHDOWNS_METRIC,
-                          pushdown_expected ? 1 : 0, 1, 1, true);
-  }
-
-  private Long getCountForTable(String metricName, String tableName) throws Exception {
-    return getTserverMetricCountForTable(metricName, tableName);
-  }
-
-  /*
-   * TODO: move this test to a different file. For now it makes sense for them to be here
-   * because they are related to the consistent prefix tests
-   */
-  @Test
-  public void testSetIsolationLevelsWithReadFromFollowersSessionVariable() throws Exception {
-    try (Statement statement = connection.createStatement()) {
-      // If follower reads are disabled, we should be allowed to set any staleness.
-      // Enabling follower reads should fail if staleness is less than 2 * max_clock_skew.
-      statement.execute("SET yb_read_from_followers = false");
-      statement.execute("SET yb_follower_read_staleness_ms = " + (2 * kMaxClockSkewMs - 1));
-      runInvalidQuery(statement, "SET yb_read_from_followers = true",
-                      "ERROR: cannot enable yb_read_from_followers with a staleness of less than "
-                      + "2 * (max_clock_skew");
-      statement.execute("SET yb_follower_read_staleness_ms = " + kMaxClockSkewMs / 2);
-      runInvalidQuery(statement, "SET yb_read_from_followers = true",
-                      "ERROR: cannot enable yb_read_from_followers with a staleness of less than "
-                      + "2 * (max_clock_skew");
-      statement.execute("SET yb_follower_read_staleness_ms = " + 0);
-      runInvalidQuery(statement, "SET yb_read_from_followers = true",
-                      "ERROR: cannot enable yb_read_from_followers with a staleness of less than "
-                      + "2 * (max_clock_skew");
-
-      statement.execute("SET yb_follower_read_staleness_ms = " + (2 * kMaxClockSkewMs + 1));
-      statement.execute("SET yb_read_from_followers = true");
-
-      // If follower reads are enabled, we should be allowed to set staleness to any value over
-      // 2 * max_clock_skew, which is 500ms. Any value smaller than that should fail.
-      statement.execute("SET yb_read_from_followers = true");
-      statement.execute("SET yb_follower_read_staleness_ms = " + 2 * kMaxClockSkewMs);
-      runInvalidQuery(statement, "SET yb_follower_read_staleness_ms = " + (2 * kMaxClockSkewMs - 1),
-                      "ERROR: cannot enable yb_read_from_followers with a staleness of less than "
-                      + "2 * (max_clock_skew");
-      runInvalidQuery(statement, "SET yb_follower_read_staleness_ms = " + kMaxClockSkewMs / 2,
-                      "ERROR: cannot enable yb_read_from_followers with a staleness of less than "
-                      + "2 * (max_clock_skew");
-      runInvalidQuery(statement, "SET yb_follower_read_staleness_ms = 0",
-                      "ERROR: cannot enable yb_read_from_followers with a staleness of less than "
-                      + "2 * (max_clock_skew");
-      statement.execute("SET yb_follower_read_staleness_ms = " + (2 * kMaxClockSkewMs + 1));
-
-      // Test enabling follower reads with various isolation levels.
-      // Reset session variable.
-      statement.execute("SET yb_read_from_followers = false");
-
-      // READ UNCOMMITTED with yb_read_from_followers enabled -> ok.
-      statement.execute(
-          "SET SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL READ UNCOMMITTED");
-      statement.execute("SET yb_read_from_followers = true");
-
-      // Reset session variable.
-      statement.execute("SET yb_read_from_followers = false");
-
-      // READ COMMITTED with yb_read_from_followers enabled -> ok.
-      statement.execute(
-          "SET SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL READ COMMITTED");
-      statement.execute("SET yb_read_from_followers = true");
-
-      // Reset session variable.
-      statement.execute("SET yb_read_from_followers = false");
-
-      // REPEATABLE READ with yb_read_from_followers enabled
-      statement.execute(
-          "SET SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL REPEATABLE READ");
-      statement.execute("SET yb_read_from_followers = true");
-
-      // Reset session variable.
-      statement.execute("SET yb_read_from_followers = false");
-
-      // SERIALIZABLE with yb_read_from_followers enabled
-      statement.execute(
-          "SET SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL SERIALIZABLE");
-      statement.execute("SET yb_read_from_followers = true");
-
-      // Reset session variable.
-      statement.execute("SET yb_read_from_followers = false");
-
-      // Reset the isolation level to the lowest possible.
-      statement.execute(
-          "SET SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL READ UNCOMMITTED");
-      statement.execute("SET yb_read_from_followers = true");
-
-      // yb_read_from_followers enabled with READ UNCOMMITTED -> ok.
-      statement.execute(
-          "SET SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL READ UNCOMMITTED");
-
-      // yb_read_from_followers enabled with READ COMMITTED -> ok.
-      statement.execute(
-          "SET SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL READ COMMITTED");
-
-      // yb_read_from_followers enabled with REPEATABLE READ
-      statement.execute(
-          "SET SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL REPEATABLE READ");
-
-      // yb_read_from_followers enabled with SERIALIZABL
-      statement.execute(
-          "SET SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL SERIALIZABLE");
-
-      // Reset the isolation level to the lowest possible.
-      statement.execute(
-          "SET SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL READ UNCOMMITTED");
-
-      // yb_read_from_followers enabled with START TRANSACTION ISOLATION LEVEL READ UNCOMMITTED
-      // -> ok.
-      statement.execute("SET yb_read_from_followers = true");
-      statement.execute("START TRANSACTION ISOLATION LEVEL READ UNCOMMITTED");
-      statement.execute("ABORT");
-
-      // yb_read_from_followers enabled with START TRANSACTION ISOLATION LEVEL READ COMMITTED
-      // -> ok.
-      statement.execute("START TRANSACTION ISOLATION LEVEL READ COMMITTED");
-      statement.execute("ABORT");
-
-
-      // yb_read_from_followers enabled with START TRANSACTION ISOLATION LEVEL REPEATABLE READ
-      statement.execute("START TRANSACTION ISOLATION LEVEL REPEATABLE READ");
-      statement.execute("ABORT");
-
-      // yb_read_from_followers enabled with START TRANSACTION ISOLATION LEVEL SERIALIZABLE
-      statement.execute("START TRANSACTION ISOLATION LEVEL SERIALIZABLE");
-      statement.execute("ABORT");
-
-      // Reset session variable.
-      statement.execute("SET yb_read_from_followers = false");
-
-      // START TRANSACTION ISOLATION LEVEL READ UNCOMMITTED with yb_read_from_followers enabled
-      // -> ok.
-      statement.execute("START TRANSACTION ISOLATION LEVEL READ UNCOMMITTED");
-      statement.execute("SET yb_read_from_followers = true");
-      statement.execute("ABORT");
-
-      // Reset session variable.
-      statement.execute("SET yb_read_from_followers = false");
-
-      // START TRANSACTION ISOLATION LEVEL READ COMMITTED with yb_read_from_followers enabled
-      // -> ok.
-      statement.execute("START TRANSACTION ISOLATION LEVEL READ COMMITTED");
-      statement.execute("SET yb_read_from_followers = true");
-      statement.execute("ABORT");
-
-      // Reset session variable.
-      statement.execute("SET yb_read_from_followers = false");
-      // START TRANSACTION ISOLATION LEVEL REPEATABLE READ with yb_read_from_followers enabled
-      statement.execute("START TRANSACTION ISOLATION LEVEL REPEATABLE READ");
-      statement.execute("SET yb_read_from_followers = true");
-      statement.execute("ABORT");
-
-      // Reset session variable.
-      statement.execute("SET yb_read_from_followers = false");
-      // START TRANSACTION ISOLATION LEVEL SERIALIZABLE with yb_read_from_followers enabled
-      statement.execute("START TRANSACTION ISOLATION LEVEL SERIALIZABLE");
-      statement.execute("SET yb_read_from_followers = true");
-      statement.execute("ABORT");
-    }
-  }
-
-  @Test
-  public void testConsistentPrefixForIndexes() throws Exception {
-    try (Statement statement = connection.createStatement()) {
-      statement.execute("CREATE TABLE consistentprefix(k int primary key, v int)");
-      statement.execute("CREATE INDEX idx on consistentprefix(v)");
-      LOG.info("Start writing");
-      statement.execute(String.format("INSERT INTO consistentprefix(k, v) VALUES(%d, %d)", 1, 1));
-      LOG.info("Done writing");
-
-      final long kFollowerReadStalenessMs = BuildTypeUtil.adjustTimeout(1200);
-      statement.execute("SET yb_read_from_followers = true;");
-      statement.execute("SET yb_follower_read_staleness_ms = " + kFollowerReadStalenessMs);
-      LOG.info("Using staleness of " + kFollowerReadStalenessMs + " ms.");
-      // Sleep for the updates to be visible during follower reads.
-      Thread.sleep(kFollowerReadStalenessMs);
-
-      assertOneRow(statement,
-                   "/*+ Set(transaction_read_only on) */ "
-                       + "SELECT * FROM consistentprefix where v = 1",
-                   1, 1);
-      // The read will first read the ybctid from the index table, then use it to do a lookup
-      // on the indexed table.
-      long count_reqs = getCountForTable("consistent_prefix_read_requests", "consistentprefix");
-      assertEquals(count_reqs, 1);
-      count_reqs = getCountForTable("consistent_prefix_read_requests", "idx");
-      assertEquals(count_reqs, 1);
-
-      long count_rows = getCountForTable("pgsql_consistent_prefix_read_rows", "consistentprefix");
-      assertEquals(count_rows, 1);
-      count_rows = getCountForTable("pgsql_consistent_prefix_read_rows", "idx");
-      assertEquals(count_rows, 1);
-    }
-  }
-
-  @Test
-  public void testFollowerReadsRedirected() throws Exception {
-    try (Statement statement = connection.createStatement()) {
-      statement.execute("CREATE TABLE t(a int primary key) SPLIT INTO 9 TABLETS");
-      LOG.info("Start writing");
-      final int kRows = 100;
-      statement.execute(String.format("INSERT INTO t SELECT generate_series(1, %d)", kRows));
-      LOG.info("Done writing");
-
-      final long kFollowerReadStalenessLargeMs = 30000;
-
-      statement.execute("SET yb_debug_log_docdb_requests = true;");
-      statement.execute("SET yb_read_from_followers = true;");
-      statement.execute("SET default_transaction_read_only = true;");
-
-      statement.execute("SET yb_follower_read_staleness_ms = " + kFollowerReadStalenessLargeMs);
-      final int kNumLoops = 100;
-      final int kJitterMs = 3 * kRaftHeartbeatIntervalMs / kNumLoops;
-      long count_reqs0 = getCountForTable("consistent_prefix_read_requests", "t");
-      for (int i = 0; i < kNumLoops; i++) {
-        statement.executeQuery(String.format("SELECT * from t where a = %d", 1 + (i % kRows)));
-        Thread.sleep(kJitterMs);
-      }
-      long count_reqs1 = getCountForTable("consistent_prefix_read_requests", "t");
-      LOG.info("Reading " + kNumLoops + " rows with large staleness. Had "
-               + (count_reqs1 - count_reqs0) + " requests.");
-      assertEquals(count_reqs1 - count_reqs0, kNumLoops);
-
-      final int kFollowerReadStalenessSmallMs = 300;
-      assertLessThan(kFollowerReadStalenessSmallMs, kRaftHeartbeatIntervalMs);
-      assertGreaterThan(kFollowerReadStalenessSmallMs, 2 * kMaxClockSkewMs);
-      statement.execute("SET yb_follower_read_staleness_ms = " + kFollowerReadStalenessSmallMs);
-      for (int i = 0; i < kNumLoops; i++) {
-        statement.executeQuery(String.format("SELECT * from t where a = %d", 1 + (i % kRows)));
-        Thread.sleep(kJitterMs);
-      }
-      long count_reqs2 = getCountForTable("consistent_prefix_read_requests", "t");
-      LOG.info("Reading " + kNumLoops + " rows with small staleness. Had "
-               + (count_reqs1 - count_reqs0) + " requests.");
-      assertGreaterThan(count_reqs2 - count_reqs1, (long)kNumLoops);
-
-      // required to clean up the table.
-      statement.execute("SET default_transaction_read_only = false;");
-    }
-  }
-
-  public void doSelect(boolean use_ordered_by, boolean get_count, Statement statement,
-                       boolean enable_follower_read, List<Row> rows_list,
-                       long expected_num_tablet_requests) throws Exception {
-    String follower_read_setting = (enable_follower_read ? "on" : "off");
-    int row_count = rows_list.size();
-    LOG.info("Reading rows with follower reads " + follower_read_setting);
-    long old_count_reqs = getCountForTable("consistent_prefix_read_requests", "consistentprefix");
-    long old_count_rows = getCountForTable("pgsql_consistent_prefix_read_rows", "consistentprefix");
-    if (get_count) {
-      assertOneRow(statement,
-                   "/*+ Set(transaction_read_only " + follower_read_setting + ") */ "
-                       + "SELECT count(*) FROM consistentprefix",
-                   row_count);
-    } else if (use_ordered_by) {
-      assertRowList(statement,
-                    "/*+ Set(transaction_read_only " + follower_read_setting + ") */ "
-                        + "SELECT * FROM consistentprefix ORDER BY k",
-                    rows_list);
-    } else {
-      assertRowSet(statement,
-                   "/*+ Set(transaction_read_only " + follower_read_setting + ") */ "
-                       + "SELECT * FROM consistentprefix k",
-                   new HashSet(rows_list));
-    }
-    long count_reqs = getCountForTable("consistent_prefix_read_requests", "consistentprefix");
-    assertEquals(count_reqs - old_count_reqs,
-                 !enable_follower_read ? 0 : expected_num_tablet_requests);
-    long count_rows = getCountForTable("pgsql_consistent_prefix_read_rows", "consistentprefix");
-    assertEquals(count_rows - old_count_rows,
-                 !enable_follower_read || row_count == 0
-                     ? 0
-                     : (get_count ? expected_num_tablet_requests : row_count));
-
-  }
-
-  public void testConsistentPrefix(int kNumRows, boolean use_ordered_by, boolean get_count)
-      throws Exception {
-    try (Statement statement = connection.createStatement()) {
-      statement.execute("CREATE TABLE consistentprefix(k int primary key)");
-
-      final int kNumRowsDeleted = 10;
-      final int kNumRowsUnchanged = kNumRows - kNumRowsDeleted;
-      ArrayList<Row> all_rows = new ArrayList<Row>();
-      ArrayList<Row> unchanged_rows = new ArrayList<Row>();
-      LOG.info("Start writing");
-      long startWriteMs = System.currentTimeMillis();
-      for (int i = 0; i < kNumRows; i++) {
-        statement.execute(String.format("INSERT INTO consistentprefix(k) VALUES(%d)", i));
-        all_rows.add(new Row(i));
-        if (i >= kNumRowsDeleted) {
-          unchanged_rows.add(new Row(i));
-        }
-      }
-      LOG.info("Done writing");
-      long doneWriteMs = System.currentTimeMillis();
-
-      Set<Row> expected_rows_set = new HashSet<Row>(all_rows);
-      Set<Row> expected_rows_unchanged_set = new HashSet<Row>(unchanged_rows);
-      final int kNumTablets = 3;
-      final int kNumRowsPerTablet = (int)Math.ceil(kNumRows / (1.0 * kNumTablets));
-      final int kNumTabletRequests = kNumTablets * (int)Math.ceil(kNumRowsPerTablet / 1024.0);
-      final long kOpDurationMs = BuildTypeUtil.adjustTimeout(2500);
-
-      Thread.sleep(kOpDurationMs);
-
-      statement.execute("SET yb_read_from_followers = true;");
-
-      // Set staleness so that the read happens before the initial writes have started.
-      long staleness_ms = System.currentTimeMillis() + kOpDurationMs - startWriteMs;
-      statement.execute("SET yb_follower_read_staleness_ms = " + staleness_ms);
-      LOG.info("Using staleness of " + staleness_ms + " ms.");
-      doSelect(use_ordered_by, get_count, statement, true, Collections.emptyList(),
-               kNumTablets);
-
-
-      // Set staleness so that the read happens after the initial writes are done.
-      staleness_ms = System.currentTimeMillis() - doneWriteMs;
-      statement.execute("SET yb_follower_read_staleness_ms = " + staleness_ms);
-      LOG.info("Using staleness of " + staleness_ms + " ms.");
-      doSelect(use_ordered_by, get_count, statement, true, all_rows, kNumTabletRequests);
-
-      Connection write_connection = getConnectionBuilder().connect();
-      ArrayList<Statement> write_txns = new ArrayList<Statement>();
-      LOG.info("Start delete");
-      long startDeleteMs = System.currentTimeMillis();
-      for (int i = 0; i < kNumRowsDeleted; i++) {
-        write_txns.add(write_connection.createStatement());
-        Statement write_txn = write_txns.get(i);
-        write_txn.execute("START TRANSACTION");
-        write_txn.execute("DELETE FROM consistentprefix where k = " + i);
-      }
-      long writtenDeleteMs = System.currentTimeMillis();
-      Thread.sleep(kOpDurationMs);
-
-      doSelect(use_ordered_by, get_count, statement, false, all_rows, 0);
-
-      // Set staleness so the read happens after the initial writes are done. Before deletes start.
-      staleness_ms = System.currentTimeMillis() - (doneWriteMs + startDeleteMs) / 2;
-      statement.execute("SET yb_follower_read_staleness_ms = " + staleness_ms);
-      LOG.info("Using staleness of " + staleness_ms + " ms.");
-      doSelect(use_ordered_by, get_count, statement, true, all_rows, kNumTabletRequests);
-
-      long startCommitMs = System.currentTimeMillis();
-      for (int i = 0; i < kNumRowsDeleted; i++) {
-        Statement write_txn = write_txns.get(i);
-        write_txn.execute("COMMIT");
-      }
-      long committedDeleteMs = System.currentTimeMillis();
-      LOG.info("Done delete");
-      Thread.sleep(kOpDurationMs);
-
-      doSelect(use_ordered_by, get_count, statement, false, unchanged_rows, 0);
-
-      // Set staleness so that the read happens before deletes are committed.
-      staleness_ms = System.currentTimeMillis() - (writtenDeleteMs + startCommitMs) / 2;
-      statement.execute("SET yb_follower_read_staleness_ms = " + staleness_ms);
-      LOG.info("Using staleness of " + staleness_ms + " ms.");
-      doSelect(use_ordered_by, get_count, statement, true, all_rows, kNumTabletRequests);
-
-      // Set staleness so that the read happens after deletes are committed.
-      staleness_ms = System.currentTimeMillis() - (committedDeleteMs + kOpDurationMs / 2);
-      statement.execute("SET yb_follower_read_staleness_ms = " + staleness_ms);
-      LOG.info("Using staleness of " + staleness_ms + " ms.");
-      doSelect(use_ordered_by, get_count, statement, true, unchanged_rows, kNumTabletRequests);
-    }
-  }
-
-  @Test
-  public void testCountConsistentPrefix() throws Exception {
-    testConsistentPrefix(100, /* use_ordered_by */ false, /* get_count */ true);
-  }
-
-  @Test
-  public void testOrderedSelectConsistentPrefix() throws Exception {
-    testConsistentPrefix(5000, /* use_ordered_by */ true, /* get_count */ false);
-  }
-
-  @Test
-  public void testSelectConsistentPrefix() throws Exception {
-    testConsistentPrefix(7000, /* use_ordered_by */ false, /* get_count */ false);
+                          pushdown_expected ? 1 : 0, 0, 1, true);
   }
 
   @Test
@@ -734,23 +347,33 @@ public class TestPgSelect extends BasePgSQLTest {
     try (Statement statement = connection.createStatement()) {
       createSimpleTable("aggtest");
 
-      // Pushdown COUNT/MAX/MIN/SUM for INTEGER/FLOAT.
+      // Pushdown COUNT/MAX/MIN/SUM/AVG for INTEGER.
       verifyStatementPushdownMetric(
-          statement, "SELECT COUNT(vi), MAX(vi), MIN(vi), SUM(vi) FROM aggtest", true);
+          statement, "SELECT COUNT(vi), MAX(vi), MIN(vi), SUM(vi), AVG(vi) FROM aggtest", true);
+      // Pushdown COUNT/MAX/MIN/SUM for FLOAT.
       verifyStatementPushdownMetric(
           statement, "SELECT COUNT(r), MAX(r), MIN(r), SUM(r) FROM aggtest", true);
-
-      // Don't pushdown if non-supported aggregate is provided (e.g. AVG, at least for now).
+      // Don't pushdown AVG for FLOAT.
       verifyStatementPushdownMetric(
-          statement, "SELECT COUNT(vi), AVG(vi) FROM aggtest", false);
+          statement, "SELECT AVG(r) FROM aggtest", false);
+
+      // Don't pushdown if non-supported aggregate is provided (e.g. BIT_AND, at least for now).
+      verifyStatementPushdownMetric(
+          statement, "SELECT COUNT(vi), BIT_AND(vi) FROM aggtest", false);
 
       // Pushdown COUNT(*).
       verifyStatementPushdownMetric(
           statement, "SELECT COUNT(*) FROM aggtest", true);
 
-      // Don't pushdown if there's a WHERE condition.
+      // Pushdown if there's a pushable WHERE condition.
       verifyStatementPushdownMetric(
-          statement, "SELECT COUNT(*) FROM aggtest WHERE h > 0", false);
+          statement, "SELECT COUNT(*) FROM aggtest WHERE h > 0", true);
+
+      // Don't pushdown if there's a not pushable WHERE condition.
+      verifyStatementPushdownMetric(
+          statement,
+          "SELECT COUNT(*) FROM aggtest WHERE CASE h WHEN 42 THEN true ELSE false END",
+          false);
 
       // Pushdown for BIGINT COUNT/MAX/MIN.
       verifyStatementPushdownMetric(
@@ -759,6 +382,10 @@ public class TestPgSelect extends BasePgSQLTest {
       // Don't pushdown for BIGINT SUM.
       verifyStatementPushdownMetric(
           statement, "SELECT SUM(h) FROM aggtest", false);
+
+      // Don't pushdown for BIGINT AVG.
+      verifyStatementPushdownMetric(
+          statement, "SELECT AVG(h) FROM aggtest", false);
 
       // Pushdown COUNT/MIN/MAX for text.
       verifyStatementPushdownMetric(
@@ -787,9 +414,9 @@ public class TestPgSelect extends BasePgSQLTest {
       verifyStatementPushdownMetric(
           statement, "SELECT COUNT(n), COUNT(d) FROM aggtest2", true);
 
-      // Don't pushdown SUM/MAX/MIN for NUMERIC/DECIMAL types.
+      // Don't pushdown SUM/MAX/MIN/AVG for NUMERIC/DECIMAL types.
       for (String col : Arrays.asList("n", "d")) {
-        for (String agg : Arrays.asList("SUM", "MAX", "MIN")) {
+        for (String agg : Arrays.asList("SUM", "MAX", "MIN", "AVG")) {
           verifyStatementPushdownMetric(
               statement, "SELECT " + agg + "(" + col + ") FROM aggtest2", false);
         }
@@ -815,8 +442,8 @@ public class TestPgSelect extends BasePgSQLTest {
 
       // Test reverse scan with prefix bounds: r1[2, 4], r2(1,4).
       String select_stmt = "SELECT * FROM test_reverse_scan_multicol WHERE h = 1" +
-                                          "AND r1 >= 2 AND r1 <= 4 AND r2 > 1 and r2 < 4" +
-                                          "ORDER BY r1 DESC, r2 DESC, r3 DESC";
+          " AND r1 >= 2 AND r1 <= 4 AND r2 > 1 and r2 < 4" +
+          " ORDER BY r1 DESC, r2 DESC, r3 DESC";
       ResultSet rs = statement.executeQuery(select_stmt);
 
       for (int r1 = 4; r1 >= 2; r1--) {
@@ -834,8 +461,8 @@ public class TestPgSelect extends BasePgSQLTest {
       // Test reverse scan with non-prefix bounds and LIMIT: r1[2, 4], r3[2, 3].
       // Total 3 * 5 * 2 = 30 rows but set LIMIT to 25.
       select_stmt = "SELECT * FROM test_reverse_scan_multicol WHERE h = 1" +
-              "AND r1 >= 2 AND r1 <= 4 AND r3 > 1 and r3 < 4" +
-              "ORDER BY r1 DESC, r2 DESC, r3 DESC LIMIT 25";
+          " AND r1 >= 2 AND r1 <= 4 AND r3 > 1 and r3 < 4" +
+          " ORDER BY r1 DESC, r2 DESC, r3 DESC LIMIT 25";
       rs = statement.executeQuery(select_stmt);
 
       int idx = 0;
@@ -859,6 +486,8 @@ public class TestPgSelect extends BasePgSQLTest {
     String createIndex = "CREATE INDEX ON %s(b %s)";
 
     try (Statement statement = connection.createStatement()) {
+      // We want to test planner under classical PG nodes.
+      statement.execute("set yb_bnl_batch_size = 1");
       statement.execute(String.format(createTable, "t1", colOrder));
       statement.execute(String.format(createTable, "t2", colOrder));
       statement.execute("insert into t1 values (1,1), (2,2), (3,3)");
@@ -885,7 +514,7 @@ public class TestPgSelect extends BasePgSQLTest {
       assertTrue("Expect pushdown for t1 pkey",
                  explainOutput.contains("Index Cond: (a = 3)"));
       assertTrue("Expect pushdown for t2 pkey",
-                 explainOutput.contains("Index Cond: (t2.b = a)"));
+                 explainOutput.contains("Index Cond: (a = t2.b)"));
       assertFalse("Expect DocDB to filter fully",
                   explainOutput.contains("Rows Removed by"));
 
@@ -928,10 +557,19 @@ public class TestPgSelect extends BasePgSQLTest {
       assertRowSet(statement, query, expectedRows);
 
       explainOutput = getExplainAnalyzeOutput(statement, query);
-      assertTrue("Expect no pushdown for IS NOT NULL",
-                 explainOutput.contains("Filter: (b IS NOT NULL)"));
-      assertTrue("Expect YSQL-level filter",
-                  explainOutput.contains("Rows Removed by Filter: 2"));
+      if (colOrder.equals("HASH")) {
+        assertTrue("Expect SeqScan on t1 when colOrder is HASH",
+                  explainOutput.contains("Seq Scan on t1"));
+        assertTrue("Expect filter pushdown to DocDB",
+                  explainOutput.contains("Storage Filter: (b IS NOT NULL)"));
+      }
+      else {
+        assertTrue("Expect pushdown for IS NOT NULL when colOrder is ASC or DESC",
+                  explainOutput.contains("Index Cond: (b IS NOT NULL)"));
+        assertFalse("Expect DocDB to filter fully",
+                  explainOutput.contains("Rows Removed by"));
+      }
+
 
       // Test IN with NULL (should not match null row because null == null is not true).
       query = "select * from t1 where b IN (NULL, 2, 3)";
@@ -941,7 +579,7 @@ public class TestPgSelect extends BasePgSQLTest {
       assertRowSet(statement, query, expectedRows);
 
       explainOutput = getExplainAnalyzeOutput(statement, query);
-      assertTrue("Expect pushdown for IN condition",
+      assertTrue("Expect index pushdown for IN condition",
                  explainOutput.contains("Index Cond: (b = ANY ('{NULL,2,3}'::integer[]))"));
       assertFalse("Expect DocDB to filter fully",
                  explainOutput.contains("Rows Removed by"));
@@ -952,10 +590,8 @@ public class TestPgSelect extends BasePgSQLTest {
       assertRowSet(statement, query, expectedRows);
 
       explainOutput = getExplainAnalyzeOutput(statement, query);
-      assertTrue("Expect no pushdown for NOT IN condition",
-                 explainOutput.contains("Filter: (b <> ALL ('{NULL,2}'::integer[]))"));
-      assertTrue("Expect YSQL-level filtering",
-                 explainOutput.contains("Rows Removed by Filter: 5"));
+      assertTrue("Expect expression pushdown for NOT IN condition",
+                 explainOutput.contains("Storage Filter: (b <> ALL ('{NULL,2}'::integer[]))"));
 
       // Test BETWEEN.
       query = "select * from t1 where b between 1 and 3";
@@ -967,10 +603,10 @@ public class TestPgSelect extends BasePgSQLTest {
       assertRowSet(statement, query, expectedRows);
 
       if (colOrder.equals("HASH")) {
-        assertTrue("Expect no pushdown for BETWEEN condition on HASH",
-                   explainOutput.contains("Filter: ((b >= 1) AND (b <= 3))"));
-        assertTrue("Expect YSQL-level filtering for HASH",
-                    explainOutput.contains("Rows Removed by Filter: 2"));
+        assertTrue("Expect SeqScan on t1 when colOrder is HASH",
+                  explainOutput.contains("Seq Scan on t1"));
+        assertTrue("Expect filter pushdown to DocDB",
+                  explainOutput.contains("Storage Filter: ((b >= 1) AND (b <= 3))"));
       } else {
         assertTrue("Expect pushdown for BETWEEN condition on ASC/DESC",
                    explainOutput.contains("Index Cond: ((b >= 1) AND (b <= 3))"));
@@ -990,9 +626,6 @@ public class TestPgSelect extends BasePgSQLTest {
 
       //--------------------------------------------------------------------------------------------
       // Test join where one join column is null *and* the other table has null rows for it.
-      // TODO This should not matter because null == null is false per SQL semantics, but in DocDB
-      //      null == null is true, so we still require filtering here (but only for rows where the
-      //      respective column is null, not for the rest.
 
       // Inner join (on t1.b this time), expect no rows.
       query = "select * from t2 inner join t1 on t2.b = t1.b where t2.a = 3";
@@ -1002,8 +635,8 @@ public class TestPgSelect extends BasePgSQLTest {
                  explainOutput.contains("Index Cond: (a = 3)"));
       assertTrue("Expect pushdown for t2 pkey",
                  explainOutput.contains("Index Cond: (b = t2.b)"));
-      assertTrue("Expect to filter only the 2 null rows",
-                 explainOutput.contains("Rows Removed by Index Recheck: 2"));
+      assertFalse("Expect not to filter any rows by Index Recheck",
+                 explainOutput.contains("Rows Removed by Index Recheck"));
 
       // Outer join (on t1.b this time), expect one row.
       query = "select * from t2 full outer join t1 on t2.b = t1.b where t2.a = 3";
@@ -1012,9 +645,9 @@ public class TestPgSelect extends BasePgSQLTest {
       assertTrue("Expect pushdown for t1 pkey",
                  explainOutput.contains("Index Cond: (a = 3)"));
       assertTrue("Expect pushdown for t2 pkey",
-                 explainOutput.contains("Index Cond: (t2.b = b)"));
-      assertTrue("Expect to filter only the 2 null rows",
-                  explainOutput.contains("Rows Removed by Index Recheck: 2"));
+                 explainOutput.contains("Index Cond: (b = t2.b)"));
+      assertFalse("Expect not to filter any rows by Index Recheck",
+                 explainOutput.contains("Rows Removed by Index Recheck"));
 
       statement.execute("DROP TABLE t1");
       statement.execute("DROP TABLE t2");
@@ -1112,10 +745,8 @@ public class TestPgSelect extends BasePgSQLTest {
 
       explainOutput = getExplainAnalyzeOutput(statement, query);
       assertTrue("Expect pushdown for IS NULL" + explainOutput,
-                 explainOutput.contains("Filter: ((vh1 IS NULL) AND (vr1 IS NULL) " +
+                 explainOutput.contains("Storage Filter: ((vh1 IS NULL) AND (vr1 IS NULL) " +
                                                 "AND (vr2 IS NULL))"));
-      assertTrue("Expect YSQL-layer filtering",
-                  explainOutput.contains("Rows Removed by Filter: 9"));
 
       // Test hash key + partly set range key (should push down).
       query = "SELECT * FROM test WHERE vh1 IS NULL AND vh2 IS NULL" +
@@ -1168,16 +799,16 @@ public class TestPgSelect extends BasePgSQLTest {
 
         Set<Row> allRows = new HashSet<>();
         for (int i = 1; i <= 100000; i++) {
-            allRows.add(new Row(i/1000, (i/100)%10, (i/10)%10, i%10, i));
+          allRows.add(new Row(i/1000, (i/100)%10, (i/10)%10, i%10, i));
         }
 
         // Select where hash code is specified and one range constraint
         query = "SELECT * FROM sample_table WHERE h = 1 AND r3 < 6";
 
         Set<Row> expectedRows = allRows.stream()
-                                .filter(r -> r.getInt(0) == 1
-                                        && r.getInt(3) < 6)
-                                .collect(Collectors.toSet());
+                                       .filter(r -> r.getInt(0) == 1 &&
+                                               r.getInt(3) < 6)
+                                       .collect(Collectors.toSet());
         assertRowSet(statement, query, expectedRows);
 
         RocksDBMetrics metrics = assertFullDocDBFilter(statement, query, "sample_table");
@@ -1195,7 +826,10 @@ public class TestPgSelect extends BasePgSQLTest {
         // Seek(SubDocKey(DocKey(0x1210, [1], [1, 0, 6]), []))
         // ...
         // Seek(SubDocKey(DocKey(0x1210, [1], [9, 9, 6]), []))
-        assertEquals(101, metrics.seekCount);
+
+        // Actual number of seeks could be lower because there is Next instead of Seek optimisation
+        // in DocDB (see SeekPossiblyUsingNext).
+        assertLessThanOrEqualTo(metrics.seekCount, 101);
 
         // Select where hash code is specified, one range constraint
         // and one option constraint on two separate columns.
@@ -1207,18 +841,18 @@ public class TestPgSelect extends BasePgSQLTest {
         r3Filter.addAll(Arrays.asList(r3FilterArray));
 
         expectedRows = allRows.stream()
-                                .filter(r -> r.getInt(0) == 1
-                                        && r.getInt(1) < 2
-                                        && r3Filter.contains(r.getInt(3)))
-                                .collect(Collectors.toSet());
+                              .filter(r -> r.getInt(0) == 1 &&
+                                      r.getInt(1) < 2 &&
+                                      r3Filter.contains(r.getInt(3)))
+                              .collect(Collectors.toSet());
         assertRowSet(statement, query, expectedRows);
 
         metrics = assertFullDocDBFilter(statement, query, "sample_table");
-        // For each of the 3 * 10 possible pairs of (r1, r2) we seek through
+        // For each of the 2 * 10 possible pairs of (r1, r2) we seek through
         // 4 values of r3 (8, 7, 2, kHighest). We must have that seek to
         // r3 = kHighest in order to get to the next value of (r1,r2).
         // We also have one initial seek into the hash key, making the total
-        // number of seeks 3 * 10 * 4 + 1 = 121
+        // number of seeks 2 * 10 * 4 + 1 = 81
         // Seek(SubDocKey(DocKey(0x1210, [1], [kLowest]), []))
         // Seek(SubDocKey(DocKey(0x1210, [1], [0, 0, 8]), []))
         // Seek(SubDocKey(DocKey(0x1210, [1], [0, 0, 7]), []))
@@ -1226,9 +860,11 @@ public class TestPgSelect extends BasePgSQLTest {
         // Seek(SubDocKey(DocKey(0x1210, [1], [0, 0, kHighest]), []))
         // Seek(SubDocKey(DocKey(0x1210, [1], [0, 1, 8]), []))
         // ...
-        // Seek(SubDocKey(DocKey(0x1210, [1], [2, 9, 2]), []))
-        // Seek(SubDocKey(DocKey(0x1210, [1], [2, 9, kHighest]), []))
-        assertEquals(121, metrics.seekCount);
+        // Seek(SubDocKey(DocKey(0x1210, [1], [1, 9, 2]), []))
+        // Seek(SubDocKey(DocKey(0x1210, [1], [1, 9, kHighest]), []))
+        // Actual number of seeks could be lower because there is Next instead of Seek optimisation
+        // in DocDB (see SeekPossiblyUsingNext).
+        assertLessThanOrEqualTo(metrics.seekCount, 81);
 
         // Select where all keys have some sort of discrete constraint
         // on them
@@ -1237,13 +873,13 @@ public class TestPgSelect extends BasePgSQLTest {
                 "AND r3 IN (2, 25, 8, 7, 23, 18)";
 
         expectedRows = allRows.stream()
-                                .filter(r -> r.getInt(0) == 1
-                                        && (r.getInt(1) == 1
-                                            || r.getInt(1) == 2)
-                                        && (r.getInt(2) == 2
-                                            || r.getInt(2) == 3)
-                                        && r3Filter.contains(r.getInt(3)))
-                                .collect(Collectors.toSet());
+                              .filter(r -> r.getInt(0) == 1 &&
+                                      (r.getInt(1) == 1 ||
+                                       r.getInt(1) == 2) &&
+                                      (r.getInt(2) == 2 ||
+                                       r.getInt(2) == 3) &&
+                                      r3Filter.contains(r.getInt(3)))
+                              .collect(Collectors.toSet());
         assertRowSet(statement, query, expectedRows);
 
         metrics = assertFullDocDBFilter(statement, query, "sample_table");
@@ -1269,7 +905,9 @@ public class TestPgSelect extends BasePgSQLTest {
         // Seek(SubDocKey(DocKey(0x1210, [1], [2, 3, 8]), []))
         // Seek(SubDocKey(DocKey(0x1210, [1], [2, 3, 7]), []))
         // Seek(SubDocKey(DocKey(0x1210, [1], [2, 3, 2]), []))
-        assertEquals(16, metrics.seekCount);
+        // Actual number of seeks could be lower because there is Next instead of Seek optimisation
+        // in DocDB (see SeekPossiblyUsingNext).
+        assertLessThanOrEqualTo(metrics.seekCount, 16);
 
 
         // Select where two out of three columns have discrete constraints
@@ -1278,11 +916,11 @@ public class TestPgSelect extends BasePgSQLTest {
                 "h = 1 AND r2 IN (2,3) AND r3 IN (2, 25, 8, 7, 23, 18)";
 
         expectedRows = allRows.stream()
-                                .filter(r -> r.getInt(0) == 1
-                                        && (r.getInt(2) == 2
-                                            || r.getInt(2) == 3)
-                                        && r3Filter.contains(r.getInt(3)))
-                                .collect(Collectors.toSet());
+                              .filter(r -> r.getInt(0) == 1 &&
+                                      (r.getInt(2) == 2 ||
+                                       r.getInt(2) == 3) &&
+                                      r3Filter.contains(r.getInt(3)))
+                              .collect(Collectors.toSet());
         assertRowSet(statement, query, expectedRows);
 
         metrics = assertFullDocDBFilter(statement, query, "sample_table");
@@ -1310,7 +948,9 @@ public class TestPgSelect extends BasePgSQLTest {
         // Seek(SubDocKey(DocKey(0x1210, [1], [1, 2, 25]), []))
         // ...
         // Seek(SubDocKey(DocKey(0x1210, [1], [9, kHighest]), []))
-        assertEquals(91, metrics.seekCount);
+        // Actual number of seeks could be lower because there is Next instead of Seek optimisation
+        // in DocDB (see SeekPossiblyUsingNext).
+        assertLessThanOrEqualTo(metrics.seekCount, 91);
 
         // Select where we have options for the hash code and discrete
         // filters on two out of three range columns
@@ -1318,12 +958,12 @@ public class TestPgSelect extends BasePgSQLTest {
                 "h IN (1,5) AND r2 IN (2,3) AND r3 IN (2, 25, 8, 7, 23, 18)";
 
         expectedRows = allRows.stream()
-                                .filter(r -> (r.getInt(0) == 1
-                                            || r.getInt(0) == 5)
-                                        && (r.getInt(2) == 2
-                                            || r.getInt(2) == 3)
-                                        && r3Filter.contains(r.getInt(3)))
-                                .collect(Collectors.toSet());
+                              .filter(r -> (r.getInt(0) == 1 ||
+                                            r.getInt(0) == 5) &&
+                                      (r.getInt(2) == 2 ||
+                                       r.getInt(2) == 3) &&
+                                      r3Filter.contains(r.getInt(3)))
+                              .collect(Collectors.toSet());
         assertRowSet(statement, query, expectedRows);
 
         metrics = assertFullDocDBFilter(statement, query, "sample_table");
@@ -1333,7 +973,731 @@ public class TestPgSelect extends BasePgSQLTest {
         // SELECT * FROM sample_table WHERE h = 1 AND r2 IN (2,3)
         // AND r3 IN (2, 25, 8, 7, 23, 18)
         // We have 91 * 2 = 182 seeks
-        assertEquals(182, metrics.seekCount);
+        assertLessThanOrEqualTo(metrics.seekCount, 182);
+    }
+  }
+
+  @Test
+  public void testIndexDistinctRangeScan() throws Exception {
+    String query = "CREATE TABLE t(r1 INT, r2 INT, PRIMARY KEY(r1 ASC, r2 ASC))";
+    try (Statement statement = connection.createStatement()) {
+      statement.execute(query);
+
+      query = "INSERT INTO t (SELECT 1, i FROM GENERATE_SERIES(1, 10) AS i)";
+      statement.execute(query);
+
+      query = "INSERT INTO t (SELECT 2, i FROM GENERATE_SERIES(1, 10) AS i)";
+      statement.execute(query);
+
+      query = "INSERT INTO t (SELECT 3, i FROM GENERATE_SERIES(1, 10) AS i)";
+      statement.execute(query);
+
+      Set<Row> expectedRows = new HashSet<>();
+      expectedRows.add(new Row(1));
+      expectedRows.add(new Row(2));
+      expectedRows.add(new Row(3));
+      query = "/*+Set(enable_hashagg false)*/ SELECT DISTINCT r1 FROM t WHERE r1 <= 3";
+      assertRowSet(statement, query, expectedRows);
+
+      // With DISTINCT pushed down to DocDB, we only to scan three keys:
+      // 1. From kLowest, seek to 1.
+      // 2. From 1, seek to 2.
+      // 3. From 2, seek to 3.
+      RocksDBMetrics metrics = assertFullDocDBFilter(statement, query, "t");
+      assertEquals(3, metrics.seekCount);
+    }
+  }
+
+  @Test
+  public void testIndexDistinctMulticolumnsScan() throws Exception {
+    String query = "CREATE TABLE t(r1 INT, r2 INT, r3 INT, PRIMARY KEY(r1 ASC, r2 ASC, r3 ASC))";
+    try (Statement statement = connection.createStatement()) {
+      statement.execute(query);
+
+      query = "INSERT INTO t (SELECT 1, 1, i FROM GENERATE_SERIES(1, 100) AS i)";
+      statement.execute(query);
+
+      query = "INSERT INTO t (SELECT 2, 2, i FROM GENERATE_SERIES(1, 100) AS i)";
+      statement.execute(query);
+
+      query = "INSERT INTO t (SELECT 3, 1, i FROM GENERATE_SERIES(1, 100) AS i)";
+      statement.execute(query);
+
+      query = "INSERT INTO t (SELECT 3, 2, i FROM GENERATE_SERIES(1, 100) AS i)";
+      statement.execute(query);
+
+      query = "INSERT INTO t (SELECT 3, 3, i FROM GENERATE_SERIES(1, 100) AS i)";
+      statement.execute(query);
+
+      Set<Row> expectedRows = new HashSet<>();
+      expectedRows.add(new Row(1, 1));
+      expectedRows.add(new Row(2, 2));
+      expectedRows.add(new Row(3, 1));
+      expectedRows.add(new Row(3, 2));
+      expectedRows.add(new Row(3, 3));
+      query = "/*+Set(enable_hashagg false)*/ SELECT DISTINCT r1, r2 FROM t WHERE r1 <= 3";
+      assertRowSet(statement, query, expectedRows);
+
+      // We need to do 6 seeks here:
+      // 1. Seek from (kLowest, kLowest), found (1, 1).
+      // 2. Seek from (1, 1), found (2, 2).
+      // 3. Seek from (2, 2), found (3, 1).
+      // 4. Seek from (3, 1), found (3, 2).
+      // 5. Seek from (3, 2), found (3, 3).
+      // 6. Seek from (3, 3), found no more key.
+      // Note that we need the last seek, since under the condition r1 <= 3, we don't know whether
+      // there are more items to be scanned.
+      RocksDBMetrics metrics = assertFullDocDBFilter(statement, query, "t");
+      assertEquals(6, metrics.seekCount);
+    }
+  }
+
+  @Test
+  public void testIndexDistinctSkipColumnScan() throws Exception {
+    String query = "CREATE TABLE t(r1 INT, r2 INT, r3 INT, r4 INT, " +
+                    " PRIMARY KEY(r1 ASC, r2 ASC, r3 ASC, r4 ASC))";
+
+    try (Statement statement = connection.createStatement()) {
+      statement.execute(query);
+
+      query = "INSERT INTO t (SELECT 1, 1, 1, i FROM GENERATE_SERIES(1, 100) AS i)";
+      statement.execute(query);
+
+      query = "INSERT INTO t (SELECT 2, 2, 2, i FROM GENERATE_SERIES(1, 100) AS i)";
+      statement.execute(query);
+
+      query = "INSERT INTO t (SELECT 3, 3, 3, i FROM GENERATE_SERIES(1, 100) AS i)";
+      statement.execute(query);
+
+      Set<Row> expectedRows = new HashSet<>();
+      expectedRows.add(new Row(1, 1));
+      expectedRows.add(new Row(2, 2));
+      expectedRows.add(new Row(3, 3));
+      query = "/*+Set(enable_hashagg false)*/ SELECT DISTINCT r1, r3 FROM t WHERE r3 <= 3";
+      assertRowSet(statement, query, expectedRows);
+
+      RocksDBMetrics metrics = assertFullDocDBFilter(statement, query, "t");
+      assertEquals(4, metrics.seekCount);
+    }
+  }
+
+  @Test
+  public void testIndexDistinctScanWithNonConsecutiveColumns() throws Exception {
+    String query = "CREATE TABLE t(r1 INT, r2 INT, r3 INT, r4 INT, r5 INT," +
+                    " PRIMARY KEY(r1 ASC, r3 ASC, r5 ASC))";
+
+    try (Statement statement = connection.createStatement()) {
+      statement.execute(query);
+
+      query = "INSERT INTO t (SELECT 1, i, i, i, i FROM GENERATE_SERIES(1, 100) AS i)";
+      statement.execute(query);
+
+      query = "INSERT INTO t (SELECT 2, i, i, i, i FROM GENERATE_SERIES(1, 100) AS i)";
+      statement.execute(query);
+
+      query = "INSERT INTO t (SELECT 3, i, i, i, i FROM GENERATE_SERIES(1, 100) AS i)";
+      statement.execute(query);
+
+      Set<Row> expectedRows = new HashSet<>();
+      expectedRows.add(new Row(1));
+      expectedRows.add(new Row(2));
+      expectedRows.add(new Row(3));
+      query = "/*+Set(enable_hashagg false)*/ SELECT DISTINCT r1 FROM t WHERE r3 <= 1 AND r5 <= 1";
+      assertRowSet(statement, query, expectedRows);
+
+      RocksDBMetrics metrics = assertFullDocDBFilter(statement, query, "t");
+      assertEquals(4, metrics.seekCount);
+    }
+  }
+
+  @Test
+  public void testDistinctScanHashColumn() throws Exception {
+    String query = "CREATE TABLE t(r1 INT, r2 INT, r3 INT, PRIMARY KEY(r1 HASH, r2 ASC, r3 ASC))";
+    try (Statement statement = connection.createStatement()) {
+      statement.execute(query);
+
+      query = "INSERT INTO t (SELECT i, i, i FROM GENERATE_SERIES(1, 100) AS i)";
+      statement.execute(query);
+
+      {
+        Set<Row> expectedRows = new HashSet<>();
+        for (int i = 1; i <= 100; i++) {
+          expectedRows.add(new Row(i));
+        }
+
+        query = "/*+Set(enable_hashagg false)*/ SELECT DISTINCT r1 FROM t WHERE r1 <= 100";
+        assertRowSet(statement, query, expectedRows);
+
+        // Here we do a sequential scan.
+        RocksDBMetrics metrics = assertFullDocDBFilter(statement, query, "t");
+        assertEquals(3, metrics.seekCount);
+      }
+
+      {
+        Set<Row> expectedRows = new HashSet<>();
+        expectedRows.add(new Row(100));
+
+        query = "/*+Set(enable_hashagg false)*/ SELECT DISTINCT r1 FROM t WHERE r1 = 100";
+        assertRowSet(statement, query, expectedRows);
+
+        // Here we do an index scan.
+        RocksDBMetrics metrics = assertFullDocDBFilter(statement, query, "t");
+        assertEquals(1, metrics.seekCount);
+      }
+    }
+  }
+
+  @Test
+  public void testDistinctMultiHashColumns() throws Exception {
+    String query = "CREATE TABLE t(h1 INT, h2 INT, r INT, PRIMARY KEY((h1, h2) HASH, r ASC))";
+    try (Statement statement = connection.createStatement()) {
+      statement.execute(query);
+
+      query = "INSERT INTO t (SELECT i, i, i FROM GENERATE_SERIES(1, 100) AS i)";
+      statement.execute(query);
+
+      {
+        Set<Row> expectedRows = new HashSet<>();
+        expectedRows.add(new Row(1, 1));
+
+        query = "/*+Set(enable_hashagg false)*/ " +
+                "SELECT DISTINCT h1, h2 FROM t WHERE h1 = 1 AND h2 = 1";
+        assertRowSet(statement, query, expectedRows);
+
+        RocksDBMetrics metrics = assertFullDocDBFilter(statement, query, "t");
+        assertEquals(1, metrics.seekCount);
+      }
+    }
+  }
+
+  @Test
+  public void testDistinctOnNonPrefixScan() throws Exception {
+    String query = "CREATE TABLE t(r1 INT, r2 INT, r3 INT)";
+    try (Statement statement = connection.createStatement()) {
+      statement.execute(query);
+
+      query = "CREATE INDEX idx on t(r3 ASC)";
+      statement.execute(query);
+
+      query = "INSERT INTO t (SELECT i, 1, 1 FROM GENERATE_SERIES(1, 100) AS i)";
+      statement.execute(query);
+
+      {
+        Set<Row> expectedRows = new HashSet<>();
+        expectedRows.add(new Row(1));
+
+        query = "/*+Set(enable_hashagg false)*/ SELECT DISTINCT r3 FROM t WHERE r3 <= 10";
+        assertRowSet(statement, query, expectedRows);
+
+        RocksDBMetrics metrics = assertFullDocDBFilter(statement, query, "t");
+        assertEquals(0, metrics.seekCount);
+
+        metrics = assertFullDocDBFilter(statement, query, "idx");
+        assertEquals(1, metrics.seekCount);
+      }
+    }
+  }
+
+  /**
+   * DISTINCT pushdown must behave correctly even in the presence of non-index predicates
+   * Guard against scenarios where we incorrectly de-duplicate rows that may be filtered out
+   * later on
+   * Here we consider a query where the predicate is pushed down to DocDB
+   */
+  @Test
+  public void testDistinctRemoteFilter() throws Exception {
+    String query = "CREATE TABLE t(r1 INT, r2 INT, v INT, PRIMARY KEY(r1 ASC, r2 ASC))";
+    try (Statement statement = connection.createStatement()) {
+      statement.execute(query);
+
+      query = "INSERT INTO t (SELECT 1, i, i FROM GENERATE_SERIES(1, 1000) AS i)";
+      statement.execute(query);
+
+      {
+        Set<Row> expectedRows = new HashSet<>();
+        expectedRows.add(new Row(1));
+
+        query = "/*+Set(enable_hashagg false)*/ " +
+                "SELECT DISTINCT r1 FROM t WHERE v = 500 AND r1 <= 10";
+        assertRowSet(statement, query, expectedRows);
+      }
+    }
+  }
+
+  /**
+   * Here we consider a query where the predicate is local to postgres
+   * and not pushed down to DocDB
+   */
+  @Test
+  public void testDistinctLocalFilter() throws Exception {
+    String query = "CREATE TABLE t(r1 INT, r2 INT, v INT, PRIMARY KEY(r1 ASC, r2 ASC))";
+    try (Statement statement = connection.createStatement()) {
+      statement.execute(query);
+
+      query = "INSERT INTO t (SELECT 1, i, i FROM GENERATE_SERIES(1, 1000) AS i)";
+      statement.execute(query);
+
+      {
+        Set<Row> expectedRows = new HashSet<>();
+        expectedRows.add(new Row(1));
+
+        // The join clause is not pushed down to DocDB
+        // Manually verified that the condition t1.v + t2.v = 500 is not pushed down
+        // by looking at the request to DocDB
+        query = "/*+Set(enable_hashagg false)*/ " +
+                "SELECT DISTINCT t1.r1 FROM t AS t1, t AS t2 " +
+                "WHERE t1.r1 <= 10 AND t2.r1 <= 10 AND t1.v + t2.v = 500";
+        assertRowSet(statement, query, expectedRows);
+      }
+    }
+  }
+
+  /**
+   * DISTINCT pushdown must behave correctly even in the presence of agg functions
+   * Guard against scenarios where we incorrectly de-duplicate rows even before agg
+   */
+  @Test
+  public void testDistinctAgg() throws Exception {
+    String query = "CREATE TABLE t(r1 INT, r2 INT, PRIMARY KEY(r1 ASC, r2 ASC))";
+    try (Statement statement = connection.createStatement()) {
+      statement.execute(query);
+
+      for (int r1 = 0; r1 < 2; r1++) {
+        query = String.format(
+          "INSERT INTO t (SELECT %d, i FROM GENERATE_SERIES(1, 1000) AS i)", r1);
+        statement.execute(query);
+      }
+
+      // We refer to a system column `tableoid` to avoid a postgres optimization that
+      // requests the complete tuple from lower layers. This optimization is not
+      // necessarily accurate in the presence of remote storage layers such as DocDB
+      {
+        Set<Row> expectedRows = new HashSet<>();
+        expectedRows.add(new Row(1000));
+
+        query = "/*+Set(enable_hashagg false)*/ " +
+                "SELECT DISTINCT COUNT(tableoid) FROM t WHERE r1 <= 10 GROUP BY r1";
+        assertRowSet(statement, query, expectedRows);
+      }
+
+      // Guard against any future changes to the above mentioned "optimization"
+      {
+        Set<Row> expectedRows = new HashSet<>();
+        expectedRows.add(new Row(1000));
+
+        query = "/*+Set(enable_hashagg false)*/ " +
+                "SELECT DISTINCT COUNT(r1) FROM t WHERE r1 <= 10 GROUP BY r1";
+        assertRowSet(statement, query, expectedRows);
+      }
+    }
+  }
+
+  @Test
+  public void testStrictInequalities() throws Exception {
+    String query = "CREATE TABLE sample_table(h INT, r1 INT, r2 INT, r3 INT, " +
+                   "v INT, PRIMARY KEY(h HASH, r1 ASC, r2 ASC, r3 DESC))";
+    try (Statement statement = connection.createStatement()) {
+      statement.execute(query);
+
+      // v has values from 1 to 100000 and the other columns are
+      // various digits of v as such
+      // h    r1  r2  r3      v
+      // 0    0   0   0       0
+      // 0    0   0   1       1
+      // ...
+      // 12   4   9   3      12493
+      // ...
+      // 100  0   0   0      100000
+      query = "INSERT INTO sample_table SELECT i/1000, (i/100)%10, " +
+              "(i/10)%10, i%10, i FROM generate_series(1, 100000) i";
+      statement.execute(query);
+
+      Set<Row> allRows = new HashSet<>();
+      for (int i = 1; i <= 100000; i++) {
+        allRows.add(new Row(i/1000, (i/100)%10, (i/10)%10, i%10, i));
+      }
+
+      {
+        // Select where hash code is specified and three range constraints
+        query = "SELECT * FROM sample_table WHERE h = 1 AND " +
+                "r1 IN (1,4,6)AND r2 < 3 AND r3 IN (1,3,5,7)";
+
+        Set<Row> expectedRows = allRows.stream()
+                                       .filter(r -> r.getInt(0) == 1 &&
+                                               (r.getInt(1) == 1 ||
+                                                r.getInt(1) == 4 ||
+                                                r.getInt(1) == 6) &&
+                                               r.getInt(2) < 3 &&
+                                               (r.getInt(3) % 2 == 1) &&
+                                               r.getInt(3) < 9 &&
+                                               r.getInt(3) > 0)
+                                       .collect(Collectors.toSet());
+        assertRowSet(statement, query, expectedRows);
+
+        RocksDBMetrics metrics = assertFullDocDBFilter(statement, query, "sample_table");
+        // There are m = 3 values of r1 to look at, n = 3 values of r2 and
+        // p = 4 values of r3 to look at. For each (r1,r2) we seek to each
+        // value of r3 along with (+Inf) to get to the next value of r2,
+        // resulting in p + 1 seeks.
+        // For each r1, there are n * (p+1) + 1 seeks. The +1 is needed
+        // at the start of an r1 value to determine what r2 value to start
+        // with using a seek to (r1, -Inf)
+        // So there are m*(n*(p+1) + 1) = 48 seeks
+        // Actual number of seeks could be lower because there is Next instead of Seek optimisation
+        // in DocDB (see SeekPossiblyUsingNext).
+        assertLessThanOrEqualTo(metrics.seekCount, 48);
+      }
+
+      {
+        // Select where hash code is specified and three range constraints
+        query = "SELECT * FROM sample_table WHERE h = 1 AND "
+                + "r1 IN (1,4,6) AND r2 < 5 AND r2 > 1 AND r3 IN (1,3,5,7)";
+
+        Set<Row> expectedRows = allRows.stream()
+                                       .filter(r -> r.getInt(0) == 1 &&
+                                               (r.getInt(1) == 1 ||
+                                                r.getInt(1) == 4 ||
+                                                r.getInt(1) == 6) &&
+                                               r.getInt(2) < 5 &&
+                                               r.getInt(2) > 1 &&
+                                               (r.getInt(3) % 2 == 1) &&
+                                               r.getInt(3) < 9 &&
+                                               r.getInt(3) > 0)
+                                       .collect(Collectors.toSet());
+        assertRowSet(statement, query, expectedRows);
+
+        RocksDBMetrics metrics = assertFullDocDBFilter(statement, query, "sample_table");
+        // There are m = 3 values of r1 to look at, n = 3 values of r2 and
+        // p = 4 values of r3 to look at. For each (r1,r2) we seek to each
+        // value of r3 along with (+Inf) to get to the next value of r2,
+        // resulting in p + 1 seeks.
+        // For each r1, there are n * (p+1) + 1 seeks. The +1 is needed
+        // at the start of an r1 value to determine what r2 value to start
+        // with using a seek to (r1, 1, +Inf)
+        // So there are m*(n*(p+1) + 1) = 48 seeks
+        // Actual number of seeks could be lower because there is Next instead of Seek optimisation
+        // in DocDB (see SeekPossiblyUsingNext).
+        assertLessThanOrEqualTo(metrics.seekCount, 48);
+      }
+
+      {
+        // Select where hash code is specified and three range constraints
+        query = "SELECT * FROM sample_table WHERE h = 1 AND r1 " +
+                "IN (1,4,6) AND r2 < 5 AND r2 >= 1 AND r3 IN (1,3,5,7)";
+
+        Set<Row> expectedRows = allRows.stream()
+                                       .filter(r -> r.getInt(0) == 1 &&
+                                               (r.getInt(1) == 1 ||
+                                                r.getInt(1) == 4 ||
+                                                r.getInt(1) == 6) &&
+                                               r.getInt(2) < 5 &&
+                                               r.getInt(2) >= 1 &&
+                                               (r.getInt(3) % 2 == 1) &&
+                                               r.getInt(3) < 9 &&
+                                               r.getInt(3) > 0)
+                                       .collect(Collectors.toSet());
+        assertRowSet(statement, query, expectedRows);
+
+        RocksDBMetrics metrics = assertFullDocDBFilter(statement, query, "sample_table");
+        // There are m = 3 values of r1 to look at, n = 4 values of r2 and
+        // p = 4 values of r3 to look at. For each (r1,r2) we seek to each
+        // value of r3 along with (+Inf) to get to the next value of r2,
+        // resulting in p + 1 seeks.
+        // For each r1, there are n * (p+1) seeks.
+        // So there are m*(n*(p+1)) = 60 seeks
+        // Actual number of seeks could be lower because there is Next instead of Seek optimisation
+        // in DocDB (see SeekPossiblyUsingNext).
+        assertLessThanOrEqualTo(metrics.seekCount, 60);
+      }
+
+      {
+        // Select where hash code is specified and three range constraints
+        query = "SELECT * FROM sample_table WHERE h = 1 AND " +
+                "r1 IN (1,4,6) AND r2 <= 5 AND r2 > 1 AND r3 IN (1,3,5,7)";
+
+        Set<Row> expectedRows = allRows.stream()
+                                       .filter(r -> r.getInt(0) == 1 &&
+                                               (r.getInt(1) == 1 ||
+                                                r.getInt(1) == 4 ||
+                                                r.getInt(1) == 6) &&
+                                               r.getInt(2) <= 5 &&
+                                               r.getInt(2) > 1 &&
+                                               (r.getInt(3) % 2 == 1) &&
+                                               r.getInt(3) < 9 &&
+                                               r.getInt(3) > 0)
+                                       .collect(Collectors.toSet());
+        assertRowSet(statement, query, expectedRows);
+
+        RocksDBMetrics metrics = assertFullDocDBFilter(statement, query, "sample_table");
+        // There are m = 3 values of r1 to look at, n = 4 values of r2 and
+        // p = 4 values of r3 to look at. For each (r1,r2) we seek to each
+        // value of r3 along with (+Inf) to get to the next value of r2,
+        // resulting in p + 1 seeks in most cases.
+        // (Note: This extra + 1 doesn't occur when r2 = 5)
+        // For each r1, there are n * (p+1) + 1 - n seeks. The + 1 is needed
+        // at the start of an r1 value to determine what r2 value to start
+        // with using a seek to (r1, 1, +Inf). The -n is to account for the
+        // above note.
+        // So there are m*(n*(p+1) + 1 - n) = 60 seeks
+        // Actual number of seeks could be lower because there is Next instead of Seek optimisation
+        // in DocDB (see SeekPossiblyUsingNext).
+        assertLessThanOrEqualTo(metrics.seekCount, 60);
+      }
+
+      {
+        // Select where hash code is specified and three range constraints
+        query = "SELECT * FROM sample_table WHERE h = 1 AND " +
+                "r1 > 1 AND r1 < 6 AND r2 < 5 AND r2 > 1 AND " +
+                "r3 > 4 AND r3 <= 8 ORDER BY r1 DESC, r2 DESC, r3 ASC";
+
+        Set<Row> expectedRows = allRows.stream()
+                                       .filter(r -> r.getInt(0) == 1 &&
+                                               r.getInt(1) > 1 &&
+                                               r.getInt(1) < 6 &&
+                                               r.getInt(2) > 1 &&
+                                               r.getInt(2) < 5 &&
+                                               r.getInt(3) > 4 &&
+                                               r.getInt(3) <= 8)
+                                       .collect(Collectors.toSet());
+        assertRowSet(statement, query, expectedRows);
+
+        RocksDBMetrics metrics = assertFullDocDBFilter(statement, query, "sample_table");
+        // There are m = 4 values of r1 to look at, n = 3 values of r2 and
+        // p = 4 values of r3 to look at. For each (r1,r2) we seek to each
+        // value of r3 along with (-Inf) to get to the next value of r2,
+        // resulting in p + 1 seeks.
+        // For each r1, there are n * (p+1) + 2 seeks.
+        // The + 2 is needed for two special seeks.
+        // One at the start of an r1 value to determine
+        // what r2 value to start by using a seek to (r1, 1, +Inf)/
+        // Another one at the end of each r1 value to determine the next
+        // r1 value via a seek to (r1, -Inf)
+        // There is also one seek at the beginning of the entire scan
+        // to (6, -Inf) to determine the first r1 value
+        // So there are m*(n*(p+1) + 2) + 1 = 69 seeks
+        // Each seek during a reverse scan is implemented with two seeks,
+        // so in total there are 69 * 2 = 138 seeks.
+        // Actual number of seeks could be lower because there is Next instead of Seek optimisation
+        // in DocDB (see SeekPossiblyUsingNext).
+        assertLessThanOrEqualTo(metrics.seekCount, 138);
+      }
+    }
+  }
+
+  @Test
+  public void testIsNotNull() throws Exception {
+    String query = "CREATE TABLE sample_table(k INT PRIMARY KEY, v INT, v2 INT)";
+    try (Statement statement = connection.createStatement()) {
+      statement.execute(query);
+      query = "CREATE INDEX sample_table_v_idx ON sample_table(v ASC)";
+      statement.execute(query);
+
+      // There are 10 rows with v IS NOT NULL, 100 rows with v IS NULL.
+      query = "INSERT INTO sample_table SELECT i, NULL, i + 1000 FROM generate_series(1, 100) i";
+      statement.execute(query);
+      query = "INSERT INTO sample_table SELECT i, i, i + 1000 FROM generate_series(101, 110) i";
+      statement.execute(query);
+
+      query = "SELECT v2 FROM sample_table WHERE v IS NOT NULL";
+      Set<Row> expectedRows = new HashSet<>();
+      for (int i = 101; i <= 110; ++i) {
+        expectedRows.add(new Row(i + 1000));
+      }
+      assertRowSet(statement, query, expectedRows);
+
+      RocksDBMetrics metrics = assertFullDocDBFilter(statement, query, "sample_table");
+      // The index on sample_table means that each IS NOT NULL row can be found by key,
+      // but the "SELECT v2" query requires referencing sample_table for each of these
+      // rows. Running an experiment without pushdown code, the number of seeks is 113
+      // (regardless of whether max_nexts_to_avoid_seek is set to 0, though nextCount
+      // does change in that case). With pushdown code, it's 13. Setting the assert to be
+      // below 26 (2*13) to allow for some extra seeks to occur without being flaky, but
+      // still likely to catch the pushdown failing.
+      assertLessThanOrEqualTo(metrics.seekCount, 26);
+
+      // Now do the same thing with a descending index.
+      query = "DROP INDEX sample_table_v_idx";
+      statement.execute(query);
+      query = "CREATE INDEX sample_table_v_idx ON sample_table(v DESC)";
+      statement.execute(query);
+
+      query = "SELECT v2 FROM sample_table WHERE v IS NOT NULL";
+      assertRowSet(statement, query, expectedRows);
+
+      metrics = assertFullDocDBFilter(statement, query, "sample_table");
+      // Same numbers of seeks between code with/without pushdown for a descending index.
+      assertLessThanOrEqualTo(metrics.seekCount, 26);
+
+      // To ensure nothing breaks in the future, force an index scan using a hash index.
+      query = "DROP INDEX sample_table_v_idx";
+      statement.execute(query);
+      query = "CREATE INDEX sample_table_v_idx ON sample_table(v HASH)";
+      statement.execute(query);
+
+      query = "/*+Set(enable_seqscan false)*/ SELECT v FROM sample_table WHERE v IS NOT NULL";
+      expectedRows = new HashSet<>();
+      for (int i = 101; i <= 110; ++i) {
+        expectedRows.add(new Row(i));
+      }
+      assertRowSet(statement, query, expectedRows);
+      // In practice, only sample_table_v_idx is touched. Its seek count is 3, and its
+      // next count is 110. However, this part of the test is only about making sure the
+      // results aren't broken, so there is no assertion on performance.
+    }
+  }
+
+  @Test
+  public void testInequalitiesRangePartitioned() throws Exception {
+      setConnMgrWarmupModeAndRestartCluster(ConnectionManagerWarmupMode.ROUND_ROBIN);
+      String query = "CREATE TABLE sample (key int, val int, primary key(key asc) ) " +
+                     "SPLIT AT VALUES ((65535), (2000000000), (2100000000) )";
+      try (Statement statement = connection.createStatement()) {
+        statement.execute(query);
+
+        // Insert stuff into the table
+        statement.execute("INSERT INTO sample VALUES(1,1)");
+        statement.execute("INSERT INTO sample VALUES(60000,60000)");
+        statement.execute("INSERT INTO sample VALUES(120000,120000)");
+        statement.execute("INSERT INTO sample VALUES(150000,150000)");
+        statement.execute("INSERT INTO sample VALUES(2000000001,2000000001)");
+        statement.execute("INSERT INTO sample VALUES(2000000005,2000000005)");
+
+
+        //     key     |    val
+        // ------------+------------        ________
+        //           1 |          1         |Tablet|
+        //       60000 |      60000         |___1__|
+        // ___________________________
+        //                                  ________
+        //      120000 |     120000         |Tablet|
+        //      150000 |     150000         |___2__|
+        // ____________________________
+        //                                  ________
+        //  2000000001 | 2000000001         |Tablet|
+        //  2000000005 | 2000000005         |___3__|
+        // ____________________________
+        //                                  ________
+        //             |                    |Tablet|
+        //             |                    |___4__|
+
+        // Test 1
+        // When the same qualifying conditions that fits within 4 byte integers are passed as int
+        // and bigint, both ends up being pushed in to docDB since they are both lesser than 4 byte
+        // integer values.
+        query = "SELECT * FROM sample WHERE key ";
+
+        // Num requests are 1 as it just searches tablet 1.
+        assertEquals(1, getNumDocdbRequests(statement, query + "< 65534"));
+
+        // Test 2
+        assertEquals(1, getNumDocdbRequests(statement, query + "< 65534::bigint"));
+
+        // Test 3
+        // 2147483648 is an actual bigint value. Hence, we end up perfroming a scan on all the
+        // tablets as we cannot push an actual bigint value to an integer column. Though the number
+        // of rows returned are equal when the qualifying condition is 2147483648 as compared to
+        // 20999999999, the former condition ends up scanning all the 4 tablets while the later
+        // condition scans just 3 tablets.
+        assertEquals(4, getNumDocdbRequests(statement, query + "< 2147483648"));
+
+        // Test 4
+        assertEquals(3, getNumDocdbRequests(statement, query + "< 2099999999"));
+    }
+  }
+
+  @Test
+  public void testINQueriesRangePartitioned() throws Exception {
+      setConnMgrWarmupModeAndRestartCluster(ConnectionManagerWarmupMode.ROUND_ROBIN);
+
+      // Creating a table with the same schema that is created for the previous test
+      // testInequalitiesRangePartitioned.
+      String query = "CREATE TABLE sample (key int, val int, primary key(key asc) ) " +
+                     "SPLIT AT VALUES ((65535), (2000000000), (2100000000) )";
+      try (Statement statement = connection.createStatement()) {
+        statement.execute(query);
+
+        statement.execute("INSERT INTO sample VALUES(1,1)");
+        statement.execute("INSERT INTO sample VALUES(60000,60000)");
+        statement.execute("INSERT INTO sample VALUES(120000,120000)");
+        statement.execute("INSERT INTO sample VALUES(150000,150000)");
+        statement.execute("INSERT INTO sample VALUES(2000000001,2000000001)");
+        statement.execute("INSERT INTO sample VALUES(2000000005,2000000005)");
+
+        query = "SELECT * FROM sample WHERE key ";
+
+        // Test 5
+        // Remove IN queries that contain values that are out of bounds.
+        // All the elements present in the IN list are out of the 32 bit integer range. Hence, they
+        // should not be pushed down as a part of search array. Subsequently the number of RPCs
+        // should be 0.
+        assertEquals(
+          0, getNumDocdbRequests(statement, query + "IN (3000000005, 3000000006, 3000000007)"));
+
+        // Test 6
+        // Fails with the following error in prior to this diff
+        // expected:<[Row[java.lang.Integer::1,java.lang.Integer::1]]> but was:<[]>
+        //
+        // This happens because the docDB RPC that is sent for the following request tries to push
+        // 3000000005 down. However, 3000000005 does not fit into a 4-byte integer and hence it is
+        // overflown to -1294967291.
+        // DocDB batches IN queries on range keys. It also expects that the list of search keys as a
+        // part of the search array in the IN queries are sorted and hence chooses the first element
+        // as the lower bound and the last element as the upper bound. In this scenario, -1294967291
+        // is the upper bound and 1 is the lower bound. There are no elements between these values
+        // and hence docDB returns 0 rows.
+        Set<Row> expectedRows = new HashSet<>();
+        expectedRows.add(new Row(1, 1));
+        assertRowSet(statement, query + "IN (1, 3000000005)", expectedRows);
+    }
+  }
+
+  @Test
+  public void testFilteringUsingIN() throws Exception {
+    try (Statement statement = connection.createStatement()) {
+      statement.execute("CREATE TABLE test(h int, r int, v int, PRIMARY KEY (h, r))");
+
+      statement.execute("INSERT INTO test (h,r,v) values (1,1,1)");
+      statement.execute("INSERT INTO test (h,r,v) values (1,2,2)");
+      statement.execute("INSERT INTO test (h,r,v) values (1,3,3)");
+      statement.execute("INSERT INTO test (h,r,v) values (2,1,2)");
+      statement.execute("INSERT INTO test (h,r,v) values (2,2,3)");
+      statement.execute("INSERT INTO test (h,r,v) values (2,3,1)");
+      statement.execute("INSERT INTO test (h,r,v) values (3,1,3)");
+      statement.execute("INSERT INTO test (h,r,v) values (3,2,1)");
+      statement.execute("INSERT INTO test (h,r,v) values (3,3,2)");
+
+      // Filter by hash & range columns.
+      assertQuery(statement, "SELECT * FROM test WHERE h IN (1,2) AND r IN (1,2)",
+          new Row(1, 1, 1),
+          new Row(1, 2, 2),
+          new Row(2, 1, 2),
+          new Row(2, 2, 3));
+      // Filter by hash & non-key columns.
+      assertQuery(statement, "SELECT * FROM test WHERE h IN (1,2) AND v IN (1,2)",
+          new Row(1, 1, 1),
+          new Row(1, 2, 2),
+          new Row(2, 1, 2),
+          new Row(2, 3, 1));
+      assertQuery(statement, "SELECT * FROM test WHERE h IN (1,2) AND v = 2",
+          new Row(1, 2, 2),
+          new Row(2, 1, 2));
+      // Filter by range & non-key columns.
+      assertQuery(statement, "SELECT * FROM test WHERE r IN (1,2) AND v IN (1,2)",
+          new Row(1, 1, 1),
+          new Row(1, 2, 2),
+          new Row(2, 1, 2),
+          new Row(3, 2, 1));
+      assertQuery(statement, "SELECT * FROM test WHERE r IN (1,2) AND v = 2",
+          new Row(1, 2, 2),
+          new Row(2, 1, 2));
+      // Filter by hash & range & non-key columns.
+      assertQuery(statement, "SELECT * FROM test WHERE h IN (1,2) AND r IN (1,2) AND v IN (1,2)",
+          new Row(1, 1, 1),
+          new Row(1, 2, 2),
+          new Row(2, 1, 2));
+      assertQuery(statement, "SELECT * FROM test WHERE h IN (1,2) AND r IN (1,2) AND v = 2",
+          new Row(1, 2, 2),
+          new Row(2, 1, 2));
     }
   }
 

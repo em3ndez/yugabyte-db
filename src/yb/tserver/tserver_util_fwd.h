@@ -11,8 +11,9 @@
 // under the License.
 //
 
-#ifndef YB_TSERVER_TSERVER_UTIL_FWD_H
-#define YB_TSERVER_TSERVER_UTIL_FWD_H
+#pragma once
+
+#include <map>
 
 namespace yb {
 
@@ -24,7 +25,9 @@ namespace tserver {
 class TServerSharedData;
 typedef SharedMemoryObject<TServerSharedData> TServerSharedObject;
 
+struct CatalogVersionInfo;
+// Use ordered map to make computing fingerprint of the map easier.
+using DbOidToCatalogVersionInfoMap = std::map<uint32_t, CatalogVersionInfo>;
+
 } // namespace tserver
 } // namespace yb
-
-#endif // YB_TSERVER_TSERVER_UTIL_FWD_H

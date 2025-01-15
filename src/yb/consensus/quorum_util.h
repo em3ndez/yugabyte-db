@@ -30,12 +30,12 @@
 // under the License.
 //
 
-#ifndef YB_CONSENSUS_QUORUM_UTIL_H_
-#define YB_CONSENSUS_QUORUM_UTIL_H_
+#pragma once
 
 #include <string>
 
 #include "yb/common/common_types.pb.h"
+#include "yb/common/common_consensus_util.h"
 
 #include "yb/consensus/consensus_fwd.h"
 #include "yb/consensus/metadata.pb.h"
@@ -53,30 +53,27 @@ enum RaftConfigState {
   COMMITTED_QUORUM,
 };
 
-bool IsRaftConfigMember(const std::string& uuid, const RaftConfigPB& config);
-bool IsRaftConfigVoter(const std::string& uuid, const RaftConfigPB& config);
-
 // Get the specified member of the config.
 // Returns Status::NotFound if a member with the specified uuid could not be
 // found in the config.
-CHECKED_STATUS GetRaftConfigMember(const RaftConfigPB& config,
-                                   const std::string& uuid,
-                                   RaftPeerPB* peer_pb);
+Status GetRaftConfigMember(const RaftConfigPB& config,
+                           const std::string& uuid,
+                           RaftPeerPB* peer_pb);
 
 // Return an host/port for the uuid in the given config. Error out if not found.
-CHECKED_STATUS GetHostPortFromConfig(const RaftConfigPB& config,
-                                     const std::string& uuid,
-                                     const CloudInfoPB& from,
-                                     HostPort* hp);
+Status GetHostPortFromConfig(const RaftConfigPB& config,
+                             const std::string& uuid,
+                             const CloudInfoPB& from,
+                             HostPort* hp);
 
-CHECKED_STATUS GetMutableRaftConfigMember(RaftConfigPB* config,
-                                          const std::string& uuid,
-                                          RaftPeerPB** peer_pb);
+Status GetMutableRaftConfigMember(RaftConfigPB* config,
+                                  const std::string& uuid,
+                                  RaftPeerPB** peer_pb);
 
 // Get the leader of the consensus configuration.
 // Returns STATUS(NotFound, "") if the leader RaftPeerPB could not be found in
 // the config, or if there is no leader defined.
-CHECKED_STATUS GetRaftConfigLeader(const ConsensusStatePB& cstate, RaftPeerPB* peer_pb);
+Status GetRaftConfigLeader(const ConsensusStatePB& cstate, RaftPeerPB* peer_pb);
 
 // Modifies 'config' to remove the peer with the specified 'uuid', unless use_host is set
 // within the request, when it uses req.server.host.
@@ -102,11 +99,6 @@ size_t CountServersInTransition(const RaftConfigPB& config, const std::string& i
 // Calculates size of a configuration majority based on # of voters.
 size_t MajoritySize(size_t num_voters);
 
-// Determines the role that the peer with uuid 'uuid' plays in the cluster.
-// If the peer uuid is not a voter in the configuration, this function will return
-// NON_PARTICIPANT, regardless of whether it is listed as leader in cstate.
-PeerRole GetConsensusRole(const std::string& uuid, const ConsensusStatePB& cstate);
-
 // Determines the member type that the peer with uuid 'uuid' plays in the cluster.
 // If the peer uuid is not a voter in the configuration, this function will return
 // UNKNOWN_MEMBER_TYPE.
@@ -115,13 +107,11 @@ PeerMemberType GetConsensusMemberType(const std::string& uuid, const ConsensusSt
 // Verifies that the provided configuration is well formed.
 // If type == COMMITTED_QUORUM, we enforce that opid_index is set.
 // If type == UNCOMMITTED_QUORUM, we enforce that opid_index is NOT set.
-CHECKED_STATUS VerifyRaftConfig(const RaftConfigPB& config, RaftConfigState type);
+Status VerifyRaftConfig(const RaftConfigPB& config, RaftConfigState type);
 
 // Superset of checks performed by VerifyRaftConfig. Also ensures that the
 // leader is a configuration voter, if it is set, and that a valid term is set.
-CHECKED_STATUS VerifyConsensusState(const ConsensusStatePB& cstate, RaftConfigState type);
+Status VerifyConsensusState(const ConsensusStatePB& cstate, RaftConfigState type);
 
 }  // namespace consensus
 }  // namespace yb
-
-#endif /* YB_CONSENSUS_QUORUM_UTIL_H_ */

@@ -1,20 +1,28 @@
 ---
-title: Create VPCs
+title: VPCs
 headerTitle:
 linkTitle: VPCs
-description: Create and manage your cloud VPCs.
+description: Manage your YugabyteDB Aeon VPCs.
+headcontent: Manage your YugabyteDB Aeon VPCs
 menu:
-  preview:
+  preview_yugabyte-cloud:
     identifier: cloud-add-vpc
     parent: cloud-vpcs
-    weight: 30
-isTocNested: true
-showAsideToc: true
+    weight: 20
+type: docs
 ---
 
-The first step in setting up a VPC network in YugabyteDB Managed is to create a VPC to host your clusters. The VPC reserves a range of IP addresses with the cloud provider you select. You must set up a dedicated VPC before deploying your cluster. A VPC must be created before you can configure a peering connection.
+A virtual private cloud (VPC) is a virtual network where you can deploy clusters that you want to connect with services hosted with the same provider. The VPC reserves a range of IP addresses with the cloud provider you select.
 
-**VPCs** on the **VPC Network** tab displays a list of VPCs configured for your cloud that includes the VPC name, provider, region, CIDR, number of peerings, number of clusters deployed in the VPC, and status.
+- To learn about VPCs in YugabyteDB Aeon, refer to [VPC overview](../cloud-vpc-intro/).
+- To learn how to peer VPCs, refer to [Peering connections](../cloud-add-peering/).
+- To learn how to configure a private service endpoint to use with a private link service, refer to [Private service endpoints](../cloud-add-endpoint/).
+
+For lowest latencies, create your VPC in the same region(s) as your applications. If you are connecting to your application via a private service endpoint, your cluster VPC must be located in the same region as the VPC endpoint to which you are linking.
+
+## Manage VPCs
+
+**VPCs** on the **VPC Network** tab of the **Networking** page displays a list of VPCs configured for your cloud that includes the VPC name, provider, region, CIDR, number of peering connections, number of clusters deployed in the VPC, and status.
 
 ![VPCs](/images/yb-cloud/cloud-vpc.png)
 
@@ -22,56 +30,68 @@ To view VPC details, select a VPC in the list to display the **VPC Details** she
 
 To terminate a VPC, click the **Delete** icon for the VPC in the list you want to terminate, and then click **Terminate**. You can also terminate a VPC by clicking **Terminate VPC** in the **VPC Details** sheet. You can't terminate a VPC with active peering connections or clusters.
 
-## Prerequisites
-
-To create a VPC in YugabyteDB Managed, you need to specify the following:
-
-- Cloud provider (AWS or GCP).
-- Region in which to deploy the VPC (AWS and GPC custom). For GPC automated, the VPC is deployed in all regions.
-- Preferred CIDR to use for your database VPC.
-
-You'll also need to know the CIDR range for the application VPC with which you want to peer, as the addresses can't overlap. To view the application VPC CIDR address:
-
-- For AWS, navigate to the [Your VPCs](https://console.aws.amazon.com/vpc/home?#vpcs) page for the region hosting the VPC you want to peer.
-- For GCP, navigate to the [VPC networks](https://console.cloud.google.com/networking/networks) page.
-
 ## Create a VPC
 
 To create a VPC, do the following:
 
-1. On the **Network Access** page, select **VPC Network**, then **VPCs**.
+{{< tabpane text=true >}}
+
+  {{% tab header="AWS" lang="aws" %}}
+
+1. On the **Networking** page, select **VPC Network**, then **VPCs**.
 1. Click **Create VPC** to display the **Create VPC** sheet.
 1. Enter a name for the VPC.
-1. Choose the provider (AWS or GCP).
-1. If you selected **GCP**, choose one of the following options:
-    - **Automated** - VPCs are created globally and assigned to all regions supported by YugabyteDB Managed.
-    - **Custom** - Select a region and [specify the CIDR address](../cloud-vpc-intro/#setting-the-cidr-and-sizing-your-vpc). Click **Add Region** to add additional regions. CIDR addresses in different regions cannot overlap.
-1. If you selected **AWS**, select the region and specify the CIDR address.
+1. Choose the provider (AWS).
+1. Select the [region](../cloud-vpc-intro/#choose-the-region-for-your-vpc).
+1. [Specify the CIDR address](../cloud-vpc-intro/#set-the-cidr-and-size-your-vpc). Ensure the following:
+    - the address _does not overlap_ with that of any application VPC you want to peer.
+    - the address _does not overlap_ with VPCs that will be used for other regions of a multi-region cluster.
+    - for production clusters, use network sizes of /24 or /25.
 1. Click **Save**.
 
-YugabyteDB Managed adds the VPC to the VPCs list with a status of _Creating_. If successful, after a minute or two, the status will change to _Active_.
+  {{% /tab %}}
 
-The VPC's network name and project ID are automatically assigned. You'll need these details when configuring the peering in GCP.
+  {{% tab header="Azure" lang="azure" %}}
 
-## Deploy a cluster in a VPC
+1. On the **Networking** page, select **VPC Network**, then **VPCs**.
+1. Click **Create VPC** to display the **Create VPC** sheet.
+1. Enter a name for the VPC.
+1. Choose the provider (Azure).
+1. Select the [region](../cloud-vpc-intro/#choose-the-region-for-your-vpc).
+1. Click **Save**.
 
-You can deploy your cluster in a VPC any time after it has been created.
+  {{% /tab %}}
 
-To deploy a cluster in a VPC:
+  {{% tab header="GCP" lang="gcp" %}}
 
-1. On the **Clusters** page, click **Add Cluster**.
-1. Choose **YugabyteDB Managed** and click **Next**.
-1. Choose the provider you used for your VPC.
-1. Enter a name for the cluster.
-1. Select the **Region**. For AWS or GCP custom, select the region where the VPC is deployed.
-1. Set the Fault Tolerance. For production clusters, typically this will be Availability Zone Level.
-1. Under **Network Access**, choose **Deploy this cluster in a dedicated VPC**, and select your VPC.
-1. Click **Create Cluster**.
+1. On the **Networking** page, select **VPC Network**, then **VPCs**.
+1. Click **Create VPC** to display the **Create VPC** sheet.
+1. Enter a name for the VPC.
+1. Choose the provider (GCP).
+1. Choose one of the following options:
+    - **Automated** - VPCs are created globally and GCP assigns network blocks to each region supported by YugabyteDB Aeon. (Not recommended for production, refer to [Considerations for auto mode VPC networks](https://cloud.google.com/vpc/docs/vpc#auto-mode-considerations) in the GCP documentation.)
+    - **Custom** - Select a region. Click **Add Region** to add additional regions. If the VPC is to be used for a multi-region cluster, add a region for each of the regions in the cluster.
+1. [Specify the CIDR address](../cloud-vpc-intro/#set-the-cidr-and-size-your-vpc). CIDR addresses in different regions can't overlap.
+    - For Automated, use network sizes of /16, /17, or /18.
+    - For Custom, use network sizes of /24, /25, or /26.
 
-For more information on creating clusters, refer to [Create a cluster](../../create-clusters/).
+    Ensure the address _does not overlap_ with that of the application VPC.
 
-## Next steps
+1. Click **Save**.
 
-- [Create a peering connection](../cloud-add-peering/)
-- [Configure your cloud provider](../cloud-configure-provider/)
-- [Add the application VPC CIDR to the cluster IP allow list](../../../cloud-secure-clusters/add-connections/)
+  {{% /tab %}}
+
+{{< /tabpane >}}
+
+YugabyteDB Aeon adds the VPC to the VPCs list with a status of _Creating_. If successful, after a minute or two, the status will change to _Active_.
+
+## Limitations
+
+- You assign a VPC when you create a cluster. You can't switch VPCs after cluster creation.
+- You can't change the size of your VPC once it is created.
+- You can't peer VPCs with overlapping ranges with the same application VPC.
+- You can create a maximum of 3 AWS VPCs per region.
+- You can create a maximum of 3 GCP VPCs.
+- VPCs are not supported on Sandbox clusters.
+
+If you need additional VPCs, contact {{% support-cloud %}}.

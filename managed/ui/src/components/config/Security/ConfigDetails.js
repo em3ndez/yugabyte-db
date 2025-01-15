@@ -1,6 +1,7 @@
-import React from 'react';
-import moment from 'moment';
 import { YBModal } from '../../common/forms/fields';
+import { PROTECTION_LEVELS } from './KeyManagementConfiguration';
+import { GCP_KMS_REGIONS_FLATTENED } from '../PublicCloud/views/providerRegionsData';
+import { ybFormatDate } from '../../../redesign/helpers/DateUtils';
 
 export const ConfigDetails = ({ data, visible, onHide }) => {
   const {
@@ -59,8 +60,12 @@ export const ConfigDetails = ({ data, visible, onHide }) => {
 
   const getForHashicorp = () => {
     const {
+      HC_VAULT_KEY_NAME,
       HC_VAULT_ADDRESS,
       HC_VAULT_TOKEN,
+      HC_VAULT_AUTH_NAMESPACE,
+      HC_VAULT_ROLE_ID,
+      HC_VAULT_SECRET_ID,
       HC_VAULT_ENGINE,
       HC_VAULT_MOUNT_PATH,
       HC_VAULT_TTL,
@@ -68,12 +73,28 @@ export const ConfigDetails = ({ data, visible, onHide }) => {
     } = credentials;
     const data = [
       {
+        label: 'Key Name',
+        value: HC_VAULT_KEY_NAME
+      },
+      {
         label: 'Vault Address',
         value: HC_VAULT_ADDRESS
       },
       {
         label: 'Secret Token',
         value: HC_VAULT_TOKEN
+      },
+      {
+        label: 'Role ID',
+        value: HC_VAULT_ROLE_ID
+      },
+      {
+        label: 'Secret ID',
+        value: HC_VAULT_SECRET_ID
+      },
+      {
+        label: 'Auth Namespace',
+        value: HC_VAULT_AUTH_NAMESPACE
       },
       {
         label: 'Secret Engine',
@@ -86,9 +107,83 @@ export const ConfigDetails = ({ data, visible, onHide }) => {
       {
         label: 'Expiry',
         value:
-          HC_VAULT_TTL && HC_VAULT_TTL_EXPIRY
-            ? moment(HC_VAULT_TTL_EXPIRY).format('DD MMMM YYYY')
-            : 'Wont Expire'
+          HC_VAULT_TTL && HC_VAULT_TTL_EXPIRY ? ybFormatDate(HC_VAULT_TTL_EXPIRY) : 'Wont Expire'
+      }
+    ];
+    return data;
+  };
+
+  const getForGCP = () => {
+    const {
+      CRYPTO_KEY_ID,
+      KEY_RING_ID,
+      LOCATION_ID,
+      GCP_CONFIG: { client_email },
+      PROTECTION_LEVEL
+    } = credentials;
+    const data = [
+      {
+        label: 'Service Account Email',
+        value: client_email
+      },
+      {
+        label: 'Location',
+        value: GCP_KMS_REGIONS_FLATTENED.find((region) => region.value === LOCATION_ID)?.label
+      },
+      {
+        label: 'Key Ring Name',
+        value: KEY_RING_ID
+      },
+      {
+        label: 'Crypto Key Name',
+        value: CRYPTO_KEY_ID
+      },
+      {
+        label: 'Protection Level',
+        value: PROTECTION_LEVELS.find((protection) => protection.value === PROTECTION_LEVEL)?.label
+      }
+    ];
+    return data;
+  };
+
+  const getForAzure = () => {
+    const {
+      CLIENT_ID,
+      CLIENT_SECRET,
+      TENANT_ID,
+      AZU_VAULT_URL,
+      AZU_KEY_NAME,
+      AZU_KEY_ALGORITHM,
+      AZU_KEY_SIZE
+    } = credentials;
+    const data = [
+      {
+        label: 'Client ID',
+        value: CLIENT_ID
+      },
+      {
+        label: 'Client Secret',
+        value: CLIENT_SECRET
+      },
+      {
+        label: 'Tenant ID',
+        value: TENANT_ID
+      },
+      {
+        label: 'Key Vault URL',
+        value: AZU_VAULT_URL
+      },
+      {
+        label: 'Key Name',
+        value: AZU_KEY_NAME
+      },
+      {
+        label: 'Key Algorithm',
+        value: AZU_KEY_ALGORITHM
+      },
+      {
+        label: 'Key Size (bits)',
+        value: AZU_KEY_SIZE
       }
     ];
     return data;
@@ -97,6 +192,8 @@ export const ConfigDetails = ({ data, visible, onHide }) => {
   const getDetails = () => {
     if (provider === 'AWS') return getForAWS();
     if (provider === 'SMARTKEY') return getForSmartKey();
+    if (provider === 'GCP') return getForGCP();
+    if (provider === 'AZU') return getForAzure();
 
     return getForHashicorp();
   };

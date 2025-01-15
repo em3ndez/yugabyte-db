@@ -38,8 +38,8 @@
 #include <thread>
 #include <vector>
 
-#include <gflags/gflags.h>
-#include <glog/logging.h>
+#include "yb/util/flags.h"
+#include "yb/util/logging.h"
 #include <gtest/gtest.h>
 
 #include "yb/gutil/atomicops.h"
@@ -53,22 +53,16 @@
 #include "yb/util/threadpool.h"
 
 using std::atomic;
-using std::shared_ptr;
 using std::string;
-using std::thread;
 using std::unique_ptr;
-using std::vector;
 
-using strings::Substitute;
 DECLARE_bool(enable_tracing);
-
-using std::shared_ptr;
 
 namespace yb {
 
 namespace {
 
-static CHECKED_STATUS BuildMinMaxTestPool(
+static Status BuildMinMaxTestPool(
     int min_threads, int max_threads, std::unique_ptr<ThreadPool> *pool) {
   return ThreadPoolBuilder("test").set_min_threads(min_threads)
       .set_max_threads(max_threads)
@@ -80,7 +74,7 @@ static CHECKED_STATUS BuildMinMaxTestPool(
 class TestTaskStream : public ::testing::Test {
  public:
   TestTaskStream() {
-    FLAGS_enable_tracing = true;
+    ANNOTATE_UNPROTECTED_WRITE(FLAGS_enable_tracing) = true;
   }
  protected:
   const int32_t kTaskstreamQueueMaxSize = 100000;

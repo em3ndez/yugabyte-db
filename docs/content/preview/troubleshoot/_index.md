@@ -2,52 +2,56 @@
 title: Troubleshoot YugabyteDB
 headerTitle: Troubleshoot YugabyteDB
 linkTitle: Troubleshoot
-description: Diagnose and solve YugabyteDB cluster and node issues.
-image: /images/section_icons/index/troubleshoot.png
-headcontent:
-section: YUGABYTEDB CORE
+description: Diagnose and solve YugabyteDB cluster and node issues
 menu:
   preview:
     identifier: troubleshoot
-    weight: 1000
+    parent: launch-and-manage
+type: indexpage
+cascade:
+  unversioned: true
 ---
 
-<div class="row">
-  <div class="col-12 col-md-6 col-lg-12 col-xl-6">
-    <a class="section-link icon-offset" href="overview/">
-      <div class="head">
-        <img class="icon" src="/images/section_icons/introduction/overview.png" aria-hidden="true" />
-        <div class="title">Overview</div>
-      </div>
-      <div class="body">
-        Starting point for troubleshooting YugabyteDB issues.
-      </div>
-    </a>
-  </div>
+Typically, troubleshooting involves a number of steps that are rather consistent regardless of the particular situation. These steps include the following:
 
-  <div class="col-12 col-md-6 col-lg-12 col-xl-6">
-    <a class="section-link icon-offset" href="cluster/">
-      <div class="head">
-        <img class="icon" src="/images/section_icons/quick_start/create_cluster.png" aria-hidden="true" />
-        <div class="articles">2 articles</div>
-        <div class="title">Cluster level issues</div>
-      </div>
-      <div class="body">
-        Diagnose and solve common YugabyteDB cluster issues.
-      </div>
-    </a>
-  </div>
+1. Verify that YugabyteDB is running: you need to ensure that the expected YugabyteDB processes are running on the current node. At a minimum, the YB-TServer process must be running to be able to connect to the node with a client or application.
 
-  <div class="col-12 col-md-6 col-lg-12 col-xl-6">
-    <a class="section-link icon-offset" href="nodes/">
-      <div class="head">
-        <img class="icon" src="/images/section_icons/architecture/concepts/universe.png" aria-hidden="true" />
-        <div class="articles">3 articles</div>
-        <div class="title">Node level issues</div>
-      </div>
-      <div class="body">
-        Diagnose and solve issues on an individual YugabyteDB node.
-      </div>
-    </a>
-  </div>
-</div>
+    Additionally, depending on the setup, you might expect a YB-Master process to run on this node.
+
+    For more information, see [Check servers](nodes/check-processes/).
+
+2. Check [cluster-level issues](cluster/) and their solutions.
+
+3. Check logs: you should inspect the YugabyteDB logs for additional details on your issue. For more information, see [Inspect logs](nodes/check-logs/).
+
+4. Explore knowledge base articles: you can find additional troubleshooting resources and information on Yugabyte [Support page](https://support.yugabyte.com/).
+
+5. File an issue: if you can't find a solution to your problem, file a [GitHub issue](https://github.com/yugabyte/yugabyte-db/issues) describing your specific problem.
+
+{{<index/block>}}
+
+  {{<index/item
+    title="Cluster-level issues and performance"
+    body="Troubleshoot common YugabyteDB cluster issues and improve cluster performance."
+    href="cluster/"
+    icon="/images/section_icons/quick_start/create_cluster.png">}}
+
+  {{<index/item
+    title="Node-level issues"
+    body="Diagnose and solve issues on an individual YugabyteDB node."
+    href="nodes/"
+    icon="/images/section_icons/architecture/concepts/universe.png">}}
+
+   {{<index/item
+    title="YSQL issues"
+    body="Solve issues related to YSQL."
+    href="ysql-issues/"
+    icon="/images/section_icons/api/ysql.png">}}
+
+   {{<index/item
+    title="Other issues"
+    body="Understand how to address other issues related to YugabyteDB."
+    href="other-issues/"
+    icon="fa-thin fa-circle-exclamation">}}
+
+{{</index/block>}}

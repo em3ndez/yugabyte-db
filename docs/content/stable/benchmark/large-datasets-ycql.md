@@ -3,34 +3,16 @@ title: Benchmark YCQL performance with large datasets
 headerTitle: Large datasets
 linkTitle: Large datasets
 description: Benchmark YCQL performance with large datasets
-image: /images/section_icons/architecture/concepts.png
-headcontent: Benchmark YugabyteDB with large data sets.
+headcontent: Benchmark YCQL performance with large datasets
 menu:
   stable:
     identifier: large-datasets-1-ycql
     parent: benchmark
     weight: 7
-showAsideToc: true
-isTocNested: true
+type: docs
 ---
 
-<ul class="nav nav-tabs-alt nav-tabs-yb">
-
-  <li >
-    <a href="{{< relref "./large-datasets-ysql.md" >}}" class="nav-link">
-      <i class="icon-postgres" aria-hidden="true"></i>
-      YSQL
-    </a>
-  </li>
-
-  <li >
-    <a href="{{< relref "./large-datasets-ycql.md" >}}" class="nav-link active">
-      <i class="icon-cassandra" aria-hidden="true"></i>
-      YCQL
-    </a>
-  </li>
-
-</ul>
+{{<api-tabs list="ycql">}}
 
 Use this benchmark to understand the performance, failure, and scaling characteristics of YugabyteDB with a massive dataset (multiple TB per node). In order to accomplish that, you will do the following:
 
@@ -100,7 +82,7 @@ The graph below shows the steady growth in `SSTables` size at a node from `Sep 4
 
 ## Final data set size
 
-The figure below is from the `yb-master` Admin UI that shows the tablet servers, number of tablets on each, number of tablet leaders, and size of the on-disk `SSTable` files.
+The following illustration is from the yb-master Admin UI that shows the tablet servers, number of tablets on each, number of tablet leaders, and size of the on-disk `SSTable` files.
 
 {{< note title="Note" >}}
 
@@ -118,21 +100,21 @@ The results you see should be similar to the observations shown below.
 
 ### Load phase results
 
-Name    | Observation
---------|------
-Records inserted   | 30 Billion
-Size of each record | ~ 300 bytes
-Time taken to insert data | 4.4 days
-Sustained insert Rate        | 85K inserts/second
-Final dataset in cluster  | 26TB across 4 nodes
-Final dataset size per node     | 6.5TB / node
+| Name | Observation |
+| :--- | :---------- |
+| Records inserted | 30 Billion |
+| Size of each record | ~ 300 bytes |
+| Time taken to insert data | 4.4 days |
+| Sustained insert Rate | 85K inserts/second |
+| Final dataset in cluster | 26TB across 4 nodes |
+| Final dataset size per node | 6.5TB / node |
 
 ### Read-heavy workload results
 
-Name    | Observation
---------|------
-Random-data read heavy workload | 185K reads/sec and 1K writes/sec
-Recent-data read heavy Workload | 385K reads/sec and 6.5K writes/sec
+| Name | Observation |
+| :--- | :---------- |
+| Random-data read heavy workload | 185K reads/sec and 1K writes/sec |
+| Recent-data read heavy Workload | 385K reads/sec and 6.5K writes/sec |
 
 ### Cluster expansion and induced failures
 

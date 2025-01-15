@@ -20,7 +20,7 @@ public class ScheduleResp {
   int failureCount;
   TaskType taskType;
   State status;
-  String cronExperssion;
+  String cronExpression;
   String scheduleName;
   Date prevCompletedTask;
   Date nextExpectedTask;
@@ -29,6 +29,11 @@ public class ScheduleResp {
   boolean runningState;
   BackupInfo backupInfo;
   JsonNode taskParams;
+  boolean backlogStatus;
+  boolean incrementBacklogStatus;
+  long incrementalBackupFrequency;
+  TimeUnit incrementalBackupFrequencyTimeUnit;
+  Boolean tableByTableBackup;
 
   @Value
   @Builder
@@ -41,5 +46,7 @@ public class ScheduleResp {
     long timeBeforeDelete;
     boolean useTablespaces;
     TimeUnit expiryTimeUnit;
+    long parallelism;
+    boolean pointInTimeRestoreEnabled;
   }
 }

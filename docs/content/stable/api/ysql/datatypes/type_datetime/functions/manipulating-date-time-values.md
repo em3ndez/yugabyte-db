@@ -4,12 +4,11 @@ headerTitle: Functions for manipulating date-time values
 linkTitle: Manipulating date-time values
 description: The semantics of the functions manipulating date-time values. [YSQL]
 menu:
-  stable:
+  stable_api:
     identifier: manipulating-date-time-values
     parent: date-time-functions
     weight: 20
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 ## function date_trunc() returns plain timestamp \| timestamptz \| interval
@@ -42,7 +41,7 @@ century
 millennium
 ```
 
-If a _date_ value is used for the second argument, then the typecasting rules presented in the [summary table](../../typecasting-between-date-time-values/#summary-table) in the section [Typecasting between values of different date-time datatypes](../../typecasting-between-date-time-values/) are used. However, a _date_ value can be typecast either to a plan _timestamp_ value or to a _timestamptz_ value; so a rule governs the data type of the return value. It can be determined by experiment like this:
+If a _date_ value is used for the second argument, then the typecasting rules presented in the [summary table](../../typecasting-between-date-time-values/#summary-table) in the section [Typecasting between values of different date-time data types](../../typecasting-between-date-time-values/) are used. However, a _date_ value can be typecast either to a plan _timestamp_ value or to a _timestamptz_ value; so a rule governs the data type of the return value. It can be determined by experiment like this:
 
 ```plpgsql
 set timezone = 'UTC';
@@ -54,7 +53,7 @@ select pg_typeof(v)::text as "type", v::text from c;
 This is the result:
 
 ```output
-           type           |           v            
+           type           |           v
 --------------------------+------------------------
  timestamp with time zone | 2021-01-01 00:00:00+00
 ```
@@ -70,7 +69,7 @@ select pg_typeof(v)::text as "type", v::text from c;
 This is the result:
 
 ```output
-            type             |          v          
+            type             |          v
 -----------------------------+---------------------
  timestamp without time zone | 2021-01-01 00:00:00
 ```
@@ -86,7 +85,7 @@ select pg_typeof(v)::text as "type", v::text from c;
 This is the result:
 
 ```output
-   type   |    v     
+   type   |    v
 ----------+----------
  interval | 13:00:00
 ```
@@ -103,7 +102,7 @@ select i, date_trunc('years', i)  as "result" from c;
 This is the result:
 
 ```output
-       i       |  result  
+       i       |  result
 ---------------+----------
  5000000:00:00 | 00:00:00
 ```

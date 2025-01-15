@@ -12,6 +12,8 @@
 //
 package org.yb.pgsql;
 
+import java.util.Map;
+
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.slf4j.Logger;
@@ -20,7 +22,7 @@ import org.yb.util.YBTestRunnerNonTsanOnly;
 
 // Runs the pg_regress test suite on YB code.
 @RunWith(value=YBTestRunnerNonTsanOnly.class)
-public class TestPgRegressIndex extends BasePgSQLTest {
+public class TestPgRegressIndex extends BasePgRegressTest {
   private static final Logger LOG = LoggerFactory.getLogger(TestPgRegressIndex.class);
 
   @Override
@@ -28,8 +30,26 @@ public class TestPgRegressIndex extends BasePgSQLTest {
     return 1800;
   }
 
+  @Override
+  protected Map<String, String> getMasterFlags() {
+    Map<String, String> flagMap = super.getMasterFlags();
+    flagMap.put("TEST_ysql_suppress_ybctid_corruption_details", "true");
+    return flagMap;
+  }
+
+  @Override
+  protected Map<String, String> getTServerFlags() {
+    Map<String, String> flagMap = super.getTServerFlags();
+    // TODO (#19975): Enable read committed isolation
+    flagMap.put("yb_enable_read_committed_isolation", "false");
+    return flagMap;
+  }
+
   @Test
-  public void testPgRegressIndex() throws Exception {
-    runPgRegressTest("yb_index_serial_schedule");
+  public void schedule() throws Exception {
+    // (DB-13032) This test touches system tables, so enable stickiness for
+    // superuser connections when Connection Manager is enabled.
+    enableStickySuperuserConnsAndRestartCluster();
+    runPgRegressTest("yb_index_schedule");
   }
 }

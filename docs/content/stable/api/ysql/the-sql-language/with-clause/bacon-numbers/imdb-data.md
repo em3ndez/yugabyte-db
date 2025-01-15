@@ -4,12 +4,11 @@ headerTitle: Computing Bacon Numbers for real IMDb data
 linkTitle: Bacon numbers for IMDb data
 description: This section shows how to compute Bacon Numbers for real IMDb data.
 menu:
-  stable:
+  stable_api:
     identifier: imdb-data
     parent: bacon-numbers
     weight: 20
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 {{< tip title="Download a zip of scripts that include all the code examples that implement this case study" >}}
@@ -49,9 +48,9 @@ Alec Guinness|Lovesick (1983)
 ...
 ```
 
-The information content is identical to what the _"cast_members"_ table was designed to represent. (See the [`cr-actors-movies-cast-members-tables.sql`](../../bacon-numbers#cr-actors-movies-cast-members-tables-sql) script.) This means that the `ysqlsh` metacommand `\COPY` can be used, straightforwardly, to ingest the downloaded data.
+The information content is identical to what the _"cast_members"_ table was designed to represent. (See the [`cr-actors-movies-cast-members-tables.sql`](../../bacon-numbers#cr-actors-movies-cast-members-tables-sql) script.) This means that the `ysqlsh` meta-command `\COPY` can be used, straightforwardly, to ingest the downloaded data.
 
-However, as this script creates it, the _"actors"_ and _"movies"_ tables must be populated first so that the foreign key constraints to these from the _"cast_members"_ table will be satisfied when it its populated. Use this script to do the steps in the proper order and display the resulting table counts:
+However, as this script creates it, the _"actors"_ and _"movies"_ tables must be populated first so that the foreign key constraints to these from the _"cast_members"_ table will be satisfied when it's populated. Use this script to do the steps in the proper order and display the resulting table counts:
 
 ##### `insert-imdb-data.sql`
 
@@ -146,7 +145,7 @@ limit 10;
 Here are the results of all the queries:
 
 ```
-      actor       
+      actor
 ------------------
  Adam Sandler (I)
  Al Pacino
@@ -159,7 +158,7 @@ Here are the results of all the queries:
  Andy Dick
  Ann Pala
 
-                       movie                        
+                       movie
 ----------------------------------------------------
  180: Christopher Nolan Interviews Al Pacino (2002)
  Actor's Notebook: Christopher Lee (2002)
@@ -172,7 +171,7 @@ Here are the results of all the queries:
  Being John Malkovich (1999)
  Big Parade of Comedy, The (1964)
 
-      node_1      |       node_2       |                                        movies                                         
+      node_1      |       node_2       |                                        movies
 ------------------+--------------------+---------------------------------------------------------------------------------------
  Adam Sandler (I) | Allen Covert       | Adam Sandler Goes to Hell (2001)
  Adam Sandler (I) | Ann Pala           | Adam Sandler Goes to Hell (2001)
@@ -185,7 +184,7 @@ Here are the results of all the queries:
  Adam Sandler (I) | Dana Carvey        | Adam Sandler Goes to Hell (2001)
  Adam Sandler (I) | David Sosalla      | Adam Sandler Goes to Hell (2001)
 
-       node_1       |      node_2      |                                        movies                                         
+       node_1       |      node_2      |                                        movies
 --------------------+------------------+---------------------------------------------------------------------------------------
  Allen Covert       | Adam Sandler (I) | Adam Sandler Goes to Hell (2001)
  Ann Pala           | Adam Sandler (I) | Adam Sandler Goes to Hell (2001)

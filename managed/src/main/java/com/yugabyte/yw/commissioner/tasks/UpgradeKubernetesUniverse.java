@@ -13,46 +13,75 @@ package com.yugabyte.yw.commissioner.tasks;
 import com.yugabyte.yw.commissioner.BaseTaskDependencies;
 import com.yugabyte.yw.commissioner.UserTaskDetails.SubTaskGroupType;
 import com.yugabyte.yw.commissioner.tasks.subtasks.KubernetesCommandExecutor.CommandType;
-import com.yugabyte.yw.common.PlacementInfoUtil;
+import com.yugabyte.yw.common.KubernetesUtil;
+import com.yugabyte.yw.common.operator.OperatorStatusUpdater;
+import com.yugabyte.yw.common.operator.OperatorStatusUpdater.UniverseState;
+import com.yugabyte.yw.common.operator.OperatorStatusUpdaterFactory;
+import com.yugabyte.yw.forms.KubernetesUpgradeParams;
 import com.yugabyte.yw.forms.UniverseDefinitionTaskParams;
+import com.yugabyte.yw.forms.UniverseDefinitionTaskParams.ClusterType;
 import com.yugabyte.yw.forms.UniverseDefinitionTaskParams.UserIntent;
-import com.yugabyte.yw.forms.UpgradeParams;
 import com.yugabyte.yw.forms.UpgradeTaskParams;
 import com.yugabyte.yw.models.Provider;
 import com.yugabyte.yw.models.Universe;
+import com.yugabyte.yw.models.helpers.NodeDetails;
 import com.yugabyte.yw.models.helpers.PlacementInfo;
+import com.yugabyte.yw.models.helpers.TaskType;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import javax.inject.Inject;
 import lombok.extern.slf4j.Slf4j;
 
 @Slf4j
 public class UpgradeKubernetesUniverse extends KubernetesTaskBase {
+  private final OperatorStatusUpdater kubernetesStatus;
 
   @Inject
-  protected UpgradeKubernetesUniverse(BaseTaskDependencies baseTaskDependencies) {
+  protected UpgradeKubernetesUniverse(
+      BaseTaskDependencies baseTaskDependencies,
+      OperatorStatusUpdaterFactory operatorStatusUpdaterFactory) {
     super(baseTaskDependencies);
+    this.kubernetesStatus = operatorStatusUpdaterFactory.create();
   }
 
-  public static class Params extends UpgradeParams {}
+  public static class Params extends KubernetesUpgradeParams {}
 
   @Override
-  protected UpgradeParams taskParams() {
-    return (UpgradeParams) taskParams;
+  protected KubernetesUpgradeParams taskParams() {
+    return (KubernetesUpgradeParams) taskParams;
   }
 
   @Override
   public void run() {
+    Throwable th = null;
     try {
       checkUniverseVersion();
 
       // Update the universe DB with the update to be performed and set the 'updateInProgress' flag
       // to prevent other updates from happening.
-      Universe universe = lockUniverseForUpdate(taskParams().expectedUniverseVersion);
+      Universe universe =
+          lockAndFreezeUniverseForUpdate(
+              taskParams().expectedUniverseVersion, null /* Txn callback */);
+      kubernetesStatus.startYBUniverseEventStatus(
+          universe,
+          taskParams().getKubernetesResourceDetails(),
+          TaskType.UpgradeKubernetesUniverse.name(),
+          getUserTaskUUID(),
+          UniverseState.EDITING);
 
       taskParams().rootCA = universe.getUniverseDetails().rootCA;
 
+      // This value is used by subsequent calls to helper methods for
+      // creating KubernetesCommandExecutor tasks. This value cannot
+      // be changed once set during the Universe creation, so we don't
+      // allow users to modify it later during edit, upgrade, etc.
+      taskParams().useNewHelmNamingStyle = universe.getUniverseDetails().useNewHelmNamingStyle;
+
       UserIntent userIntent = universe.getUniverseDetails().getPrimaryCluster().userIntent;
-      PlacementInfo pi = universe.getUniverseDetails().getPrimaryCluster().placementInfo;
+      PlacementInfo primaryPI = universe.getUniverseDetails().getPrimaryCluster().placementInfo;
 
       if (taskParams().taskType == UpgradeTaskParams.UpgradeTaskType.Software) {
         if (taskParams().ybSoftwareVersion == null || taskParams().ybSoftwareVersion.isEmpty()) {
@@ -67,28 +96,63 @@ public class UpgradeKubernetesUniverse extends KubernetesTaskBase {
 
       preTaskActions();
 
-      switch (taskParams().taskType) {
-        case Software:
-          log.info(
-              "Upgrading software version to {} in universe {}",
-              taskParams().ybSoftwareVersion,
-              universe.name);
+      KubernetesPlacement primaryPlacement = new KubernetesPlacement(primaryPI, false);
+      Provider provider =
+          Provider.getOrBadRequest(
+              UUID.fromString(taskParams().getPrimaryCluster().userIntent.provider));
+      UniverseDefinitionTaskParams universeDetails = universe.getUniverseDetails();
+      boolean newNamingStyle = taskParams().useNewHelmNamingStyle;
+      String masterAddresses =
+          KubernetesUtil.computeMasterAddresses(
+              primaryPI,
+              primaryPlacement.masters,
+              taskParams().nodePrefix,
+              universe.getName(),
+              provider,
+              universeDetails.communicationPorts.masterRpcPort,
+              newNamingStyle);
 
-          createUpgradeTask(userIntent, universe, pi);
+      for (UniverseDefinitionTaskParams.Cluster cluster : taskParams().clusters) {
+        PlacementInfo pi = cluster.placementInfo;
+        switch (taskParams().taskType) {
+          case Software:
+            log.info(
+                "Upgrading software version to {} in universe {}",
+                taskParams().ybSoftwareVersion,
+                universe.getName());
 
-          createRunYsqlUpgradeTask(taskParams().ybSoftwareVersion)
-              .setSubTaskGroupType(getTaskSubGroupType());
+            createUpgradeTask(
+                cluster.userIntent,
+                universe,
+                pi,
+                cluster.clusterType == ClusterType.ASYNC,
+                masterAddresses,
+                taskParams().isEnableYbc(),
+                taskParams().getYbcSoftwareVersion());
 
-          createUpdateSoftwareVersionTask(taskParams().ybSoftwareVersion)
-              .setSubTaskGroupType(getTaskSubGroupType());
-          break;
-        case GFlags:
-          log.info("Upgrading GFlags in universe {}", universe.name);
-          updateGFlagsPersistTasks(taskParams().masterGFlags, taskParams().tserverGFlags)
-              .setSubTaskGroupType(getTaskSubGroupType());
+            if (taskParams().upgradeSystemCatalog) {
+              createRunYsqlUpgradeTask(taskParams().ybSoftwareVersion)
+                  .setSubTaskGroupType(getTaskSubGroupType());
+            }
 
-          createUpgradeTask(userIntent, universe, pi);
-          break;
+            createUpdateSoftwareVersionTask(taskParams().ybSoftwareVersion)
+                .setSubTaskGroupType(getTaskSubGroupType());
+            break;
+          case GFlags:
+            log.info("Upgrading GFlags in universe {}", universe.getName());
+            updateGFlagsPersistTasks(taskParams().masterGFlags, taskParams().tserverGFlags)
+                .setSubTaskGroupType(getTaskSubGroupType());
+
+            createUpgradeTask(
+                userIntent,
+                universe,
+                pi,
+                cluster.clusterType == ClusterType.ASYNC,
+                masterAddresses,
+                taskParams().isEnableYbc(),
+                taskParams().getYbcSoftwareVersion());
+            break;
+        }
       }
 
       // Marks update of this universe as a success only if all the tasks before it succeeded.
@@ -100,16 +164,22 @@ public class UpgradeKubernetesUniverse extends KubernetesTaskBase {
     } catch (Throwable t) {
       log.error("Error executing task {} with error={}.", getName(), t);
 
-      // Clear previous subtasks if any.
-      getRunnableTask().reset();
       // If the task failed, we don't want the loadbalancer to be disabled,
       // so we enable it again in case of errors.
-      createLoadBalancerStateChangeTask(true /*enable*/).setSubTaskGroupType(getTaskSubGroupType());
-
-      getRunnableTask().runSubTasks();
-
+      setTaskQueueAndRun(
+          () ->
+              createLoadBalancerStateChangeTask(true /*enable*/)
+                  .setSubTaskGroupType(getTaskSubGroupType()));
+      th = t;
       throw t;
     } finally {
+      kubernetesStatus.updateYBUniverseStatus(
+          getUniverse(),
+          taskParams().getKubernetesResourceDetails(),
+          TaskType.UpgradeKubernetesUniverse.name(),
+          getUserTaskUUID(),
+          (th != null) ? UniverseState.ERROR_UPDATING : UniverseState.READY,
+          th);
       unlockUniverseForUpdate();
     }
     log.info("Finished {} task.", getName());
@@ -122,56 +192,75 @@ public class UpgradeKubernetesUniverse extends KubernetesTaskBase {
       case GFlags:
         return SubTaskGroupType.UpdatingGFlags;
       default:
-        return SubTaskGroupType.Invalid;
+        return SubTaskGroupType.Configuring;
     }
   }
 
-  private void createUpgradeTask(UserIntent userIntent, Universe universe, PlacementInfo pi) {
+  private void createUpgradeTask(
+      UserIntent userIntent,
+      Universe universe,
+      PlacementInfo pi,
+      boolean isReadOnlyCluster,
+      String masterAddresses,
+      boolean enableYbc,
+      String ybcSoftwareVersion) {
     String ybSoftwareVersion = null;
     boolean masterChanged = false;
     boolean tserverChanged = false;
     if (taskParams().taskType == UpgradeTaskParams.UpgradeTaskType.Software) {
       ybSoftwareVersion = taskParams().ybSoftwareVersion;
-      masterChanged = true;
+      if (!isReadOnlyCluster) {
+        masterChanged = true;
+      }
       tserverChanged = true;
     } else {
       ybSoftwareVersion = userIntent.ybSoftwareVersion;
       if (!taskParams().masterGFlags.equals(userIntent.masterGFlags)) {
-        masterChanged = true;
+        if (!isReadOnlyCluster) {
+          masterChanged = true;
+        }
       }
       if (!taskParams().tserverGFlags.equals(userIntent.tserverGFlags)) {
         tserverChanged = true;
       }
     }
 
-    createSingleKubernetesExecutorTask(CommandType.POD_INFO, pi);
+    createSingleKubernetesExecutorTask(
+        universe.getName(), CommandType.POD_INFO, pi, isReadOnlyCluster);
 
-    KubernetesPlacement placement = new KubernetesPlacement(pi);
+    KubernetesPlacement placement = new KubernetesPlacement(pi, isReadOnlyCluster);
 
-    Provider provider =
-        Provider.get(UUID.fromString(taskParams().getPrimaryCluster().userIntent.provider));
+    boolean newNamingStyle = taskParams().useNewHelmNamingStyle;
 
-    UniverseDefinitionTaskParams universeDetails = universe.getUniverseDetails();
-
-    String masterAddresses =
-        PlacementInfoUtil.computeMasterAddresses(
-            pi,
-            placement.masters,
-            taskParams().nodePrefix,
-            provider,
-            universeDetails.communicationPorts.masterRpcPort);
+    String universeOverrides =
+        universe.getUniverseDetails().getPrimaryCluster().userIntent.universeOverrides;
+    Map<String, String> azOverrides =
+        universe.getUniverseDetails().getPrimaryCluster().userIntent.azOverrides;
+    if (azOverrides == null) {
+      azOverrides = new HashMap<String, String>();
+    }
 
     if (masterChanged) {
       userIntent.masterGFlags = taskParams().masterGFlags;
       upgradePodsTask(
+          universe.getName(),
           placement,
           masterAddresses,
           null,
           ServerType.MASTER,
           ybSoftwareVersion,
-          taskParams().sleepAfterMasterRestartMillis,
+          universeOverrides,
+          azOverrides,
           masterChanged,
-          tserverChanged);
+          tserverChanged,
+          newNamingStyle,
+          /*isReadOnlyCluster*/ false,
+          CommandType.HELM_UPGRADE,
+          enableYbc,
+          ybcSoftwareVersion,
+          PodUpgradeParams.builder()
+              .delayAfterStartup(taskParams().sleepAfterMasterRestartMillis)
+              .build());
     }
     if (tserverChanged) {
       createLoadBalancerStateChangeTask(false /*enable*/)
@@ -179,14 +268,51 @@ public class UpgradeKubernetesUniverse extends KubernetesTaskBase {
 
       userIntent.tserverGFlags = taskParams().tserverGFlags;
       upgradePodsTask(
+          universe.getName(),
           placement,
           masterAddresses,
           null,
           ServerType.TSERVER,
           ybSoftwareVersion,
-          taskParams().sleepAfterTServerRestartMillis,
+          universeOverrides,
+          azOverrides,
           false /* master change is false since it has already been upgraded.*/,
-          tserverChanged);
+          tserverChanged,
+          newNamingStyle,
+          isReadOnlyCluster,
+          CommandType.HELM_UPGRADE,
+          enableYbc,
+          ybcSoftwareVersion,
+          PodUpgradeParams.builder()
+              .rollMaxBatchSize(getCurrentRollBatchSize(universe, taskParams().rollMaxBatchSize))
+              .delayAfterStartup(taskParams().sleepAfterTServerRestartMillis)
+              .build());
+
+      if (enableYbc) {
+        if (isReadOnlyCluster) {
+          Set<NodeDetails> replicaTservers =
+              new HashSet<NodeDetails>(
+                  universe.getNodesInCluster(taskParams().getReadOnlyClusters().get(0).uuid));
+          installYbcOnThePods(
+              replicaTservers,
+              true,
+              ybcSoftwareVersion,
+              taskParams().getReadOnlyClusters().get(0).userIntent.ybcFlags);
+          performYbcAction(replicaTservers, true, "stop");
+          createWaitForYbcServerTask(replicaTservers);
+        } else {
+          Set<NodeDetails> primaryTservers =
+              new HashSet<NodeDetails>(
+                  universe.getNodesInCluster(taskParams().getPrimaryCluster().uuid));
+          installYbcOnThePods(
+              primaryTservers,
+              false,
+              ybcSoftwareVersion,
+              universe.getUniverseDetails().getPrimaryCluster().userIntent.ybcFlags);
+          performYbcAction(primaryTservers, true, "stop");
+          createWaitForYbcServerTask(primaryTservers);
+        }
+      }
 
       createLoadBalancerStateChangeTask(true /*enable*/).setSubTaskGroupType(getTaskSubGroupType());
     }

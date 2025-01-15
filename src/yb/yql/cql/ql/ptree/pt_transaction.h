@@ -15,8 +15,7 @@
 // Tree node definitions for TRANSACTION statements.
 //--------------------------------------------------------------------------------------------------
 
-#ifndef YB_YQL_CQL_QL_PTREE_PT_TRANSACTION_H_
-#define YB_YQL_CQL_QL_PTREE_PT_TRANSACTION_H_
+#pragma once
 
 #include "yb/common/transaction.pb.h"
 
@@ -57,7 +56,7 @@ class PTStartTransaction : public TreeNode {
   }
 
   // Node semantics analysis.
-  virtual CHECKED_STATUS Analyze(SemContext *sem_context) override;
+  virtual Status Analyze(SemContext *sem_context) override;
 
   // Node type.
   virtual TreeNodeOpcode opcode() const override {
@@ -87,7 +86,7 @@ class PTCommit : public TreeNode {
   }
 
   // Node semantics analysis.
-  virtual CHECKED_STATUS Analyze(SemContext *sem_context) override;
+  virtual Status Analyze(SemContext *sem_context) override;
 
   // Node type.
   virtual TreeNodeOpcode opcode() const override {
@@ -97,5 +96,3 @@ class PTCommit : public TreeNode {
 
 }  // namespace ql
 }  // namespace yb
-
-#endif  // YB_YQL_CQL_QL_PTREE_PT_TRANSACTION_H_

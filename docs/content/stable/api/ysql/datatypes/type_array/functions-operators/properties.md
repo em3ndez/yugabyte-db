@@ -4,11 +4,10 @@ linkTitle: Array properties
 headerTitle: Functions for reporting the geometric properties of an array
 description: Functions for reporting the geometric properties of an array
 menu:
-  stable:
+  stable_api:
     identifier: array-properties
     parent: array-functions-operators
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 These functions return the various dimensional properties that jointly characterize an array. These three together completely specify the shape and size:

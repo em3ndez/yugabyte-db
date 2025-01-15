@@ -11,15 +11,15 @@
 // under the License.
 //
 
-#ifndef YB_MASTER_SYS_CATALOG_INITIALIZATION_H
-#define YB_MASTER_SYS_CATALOG_INITIALIZATION_H
+#pragma once
 
 #include <vector>
 #include <string>
 
-#include <gflags/gflags.h>
+#include "yb/util/flags.h"
 
 #include "yb/master/master_fwd.h"
+#include "yb/master/table_index.h"
 
 #include "yb/tablet/tablet_fwd.h"
 
@@ -29,12 +29,14 @@
 #include "yb/util/status_fwd.h"
 
 DECLARE_string(initial_sys_catalog_snapshot_path);
-DECLARE_bool(use_initial_sys_catalog_snapshot);
 DECLARE_bool(enable_ysql);
 DECLARE_bool(create_initial_sys_catalog_snapshot);
 
 namespace yb {
 namespace master {
+
+struct LeaderEpoch;
+class YsqlManagerIf;
 
 // Used by the catalog manager to prepare an initial sys catalog snapshot.
 class InitialSysCatalogSnapshotWriter {
@@ -46,7 +48,7 @@ class InitialSysCatalogSnapshotWriter {
   // when creating a new cluster (to avoid running initdb).
   void AddMetadataChange(tablet::ChangeMetadataRequestPB metadata_change);
 
-  CHECKED_STATUS WriteSnapshot(
+  Status WriteSnapshot(
       tablet::Tablet* sys_catalog_tablet,
       const std::string& dest_path);
 
@@ -54,7 +56,7 @@ class InitialSysCatalogSnapshotWriter {
   std::vector<tablet::ChangeMetadataRequestPB> initdb_metadata_changes_;
 };
 
-CHECKED_STATUS RestoreInitialSysCatalogSnapshot(
+Status RestoreInitialSysCatalogSnapshot(
     const std::string& initial_snapshot_path,
     tablet::TabletPeer* sys_catalog_tablet_peer,
     int64_t term);
@@ -63,16 +65,9 @@ void SetDefaultInitialSysCatalogSnapshotFlags();
 
 // A one-time migration procedure for existing clusters to set is_ysql_catalog_table and
 // is_transactional flags to true on YSQL system catalog tables.
-CHECKED_STATUS MakeYsqlSysCatalogTablesTransactional(
-    TableInfoMap* table_ids_map,
-    SysCatalogTable* sys_catalog,
-    SysConfigInfo* ysql_catalog_config,
-    int64_t term);
-
-// Master's logic to decide whether to auto-run initdb on leader initialization.
-bool ShouldAutoRunInitDb(SysConfigInfo* ysql_catalog_config, bool pg_proc_exists);
+Status MakeYsqlSysCatalogTablesTransactional(
+    TableIndex::TablesRange tables, SysCatalogTable* sys_catalog,
+    YsqlManagerIf& ysql_manager, const LeaderEpoch& epoch);
 
 }  // namespace master
 }  // namespace yb
-
-#endif  // YB_MASTER_SYS_CATALOG_INITIALIZATION_H

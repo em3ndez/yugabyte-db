@@ -1,8 +1,7 @@
 ---
-title: Cluster level issues
-linkTitle: Cluster level issues
-description: Cluster level issues
-image: /images/section_icons/quick_start/create_cluster.png
+title: Cluster-level issues
+linkTitle: Cluster-level issues
+description: Cluster-level issues
 headcontent: Diagnostics and solutions for typical YugabyteDB cluster issues.
 aliases:
   - /troubleshoot/cluster/
@@ -10,45 +9,52 @@ menu:
   preview:
     identifier: troubleshoot-cluster
     parent: troubleshoot
-    weight: 820
+    weight: 100
+type: indexpage
 ---
 
-<div class="row">
-  <div class="col-12 col-md-6 col-lg-12 col-xl-6">
-    <a class="section-link icon-offset" href="connect-ycql/">
-      <div class="head">
-        <img class="icon" src="/images/section_icons/troubleshoot/troubleshoot.png" aria-hidden="true" />
-        <div class="title">Cannot connect to YCQL API</div>
-      </div>
-      <div class="body">
-        Troubleshoot connecting to the Cassandra-compatible YCQL API service.
-      </div>
-    </a>
-  </div>
+{{<index/block>}}
 
-  <div class="col-12 col-md-6 col-lg-12 col-xl-6">
-    <a class="section-link icon-offset" href="connect-yedis/">
-      <div class="head">
-        <img class="icon" src="/images/section_icons/troubleshoot/troubleshoot.png" aria-hidden="true" />
-        <div class="title">Cannot connect to YEDIS API</div>
-      </div>
-      <div class="body">
-        Troubleshoot connecting to the Redis-compatible YEDIS API service.
-      </div>
-    </a>
-  </div>
-</div>
+  {{<index/item
+    title="YCQL API connection problems"
+    body="Troubleshoot issues related to connecting to the Cassandra-compatible YCQL API service."
+    href="connect-ycql/"
+    icon="/images/section_icons/troubleshoot/troubleshoot.png">}}
 
-<div class="row">
-  <div class="col-12 col-md-6 col-lg-12 col-xl-6">
-    <a class="section-link icon-offset" href="recover_server/">
-      <div class="head">
-        <img class="icon" src="/images/section_icons/troubleshoot/troubleshoot.png" aria-hidden="true" />
-        <div class="title">Recover failed tserver/master/node</div>
-      </div>
-      <div class="body">
-        Recovering failed nodes to get the cluster back on optimal settings.
-      </div>
-    </a>
-  </div>
-</div>
+  {{<index/item
+    title="Recover YB-TServer, YB-Master, and node"
+    body="Recover failed nodes to get the cluster back on optimal settings."
+    href="recover_server/"
+    icon="/images/section_icons/troubleshoot/troubleshoot.png">}}
+
+  {{<index/item
+    title="Replace a failed YB-TServer"
+    body="Replace a failed YB-TServer in a YugabyteDB cluster."
+    href="replace_tserver/"
+    icon="/images/section_icons/troubleshoot/troubleshoot.png">}}
+
+  {{<index/item
+    title="Replace a failed YB-Master"
+    body="Replace a failed YB-Master in a YugabyteDB cluster."
+    href="replace_master/"
+    icon="/images/section_icons/troubleshoot/troubleshoot.png">}}
+
+  {{<index/item
+    title="Replace failed peers"
+    body="Perform manual remote bootstrap of failed peers."
+    href="replace_failed_peers/"
+    icon="/images/section_icons/troubleshoot/troubleshoot.png">}}
+
+   {{<index/item
+    title="Recover YB-TServer from crash loop"
+    body="Find faulty tablets and their data on disk, and then remove it."
+    href="failed_tablets/"
+    icon="/images/section_icons/troubleshoot/troubleshoot.png">}}
+
+   {{<index/item
+    title="Troubleshoot performance issues"
+    body="Investigate and troubleshoot performance of your YugabyteDB clusters."
+    href="performance-troubleshooting/"
+    icon="/images/section_icons/troubleshoot/troubleshoot.png">}}
+
+{{</index/block>}}

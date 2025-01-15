@@ -32,7 +32,7 @@
 
 #include <limits>
 
-#include <gflags/gflags.h>
+#include "yb/util/flags.h"
 
 #include "yb/common/wire_protocol.h"
 
@@ -57,6 +57,9 @@
 #include "yb/util/stopwatch.h"
 #include "yb/util/test_util.h"
 
+using std::string;
+using std::vector;
+
 #define ASSERT_REMOTE_ERROR(status, err, code, str) \
     ASSERT_NO_FATALS(AssertRemoteError(status, err, code, str))
 
@@ -66,9 +69,6 @@ DECLARE_uint64(remote_bootstrap_timeout_poll_period_ms);
 namespace yb {
 namespace tserver {
 
-using consensus::MaximumOpId;
-using consensus::MinimumOpId;
-using consensus::OpIdEquals;
 using env_util::ReadFully;
 using log::ReadableLogSegment;
 using rpc::ErrorStatusPB;
@@ -78,7 +78,7 @@ class RemoteBootstrapServiceTest : public RemoteBootstrapTest {
  public:
   RemoteBootstrapServiceTest() {
     // Poll for session expiration every 10 ms for the session timeout test.
-    FLAGS_remote_bootstrap_timeout_poll_period_ms = 10;
+    ANNOTATE_UNPROTECTED_WRITE(FLAGS_remote_bootstrap_timeout_poll_period_ms) = 10;
   }
 
  protected:
@@ -129,7 +129,8 @@ class RemoteBootstrapServiceTest : public RemoteBootstrapTest {
     CheckRemoteBootstrapSessionActiveRequestPB req;
     req.set_session_id(session_id);
     return UnwindRemoteError(
-        remote_bootstrap_proxy_->CheckSessionActive(req, resp, controller), controller);
+        remote_bootstrap_proxy_->CheckRemoteBootstrapSessionActive(req, resp, controller),
+        controller);
   }
 
   Status DoFetchData(const string& session_id, const DataIdPB& data_id,
@@ -365,7 +366,7 @@ TEST_F(RemoteBootstrapServiceTest, TestFetchLog) {
   ASSERT_EQ(segment_seqno, first_seg_seqno)
       << "Expected equal sequence numbers: " << segment_seqno
       << " and " << first_seg_seqno;
-  const scoped_refptr<ReadableLogSegment>& segment = local_segments[0];
+  const scoped_refptr<ReadableLogSegment>& segment = ASSERT_RESULT(local_segments.front());
   faststring scratch;
   int64_t size = ASSERT_RESULT(segment->readable_file_checkpoint()->Size());
   scratch.resize(size);
@@ -379,7 +380,8 @@ TEST_F(RemoteBootstrapServiceTest, TestFetchLog) {
 TEST_F(RemoteBootstrapServiceTest, TestSessionTimeout) {
   // This flag should be seen by the service due to TSO.
   // We have also reduced the timeout polling frequency in SetUp().
-  FLAGS_remote_bootstrap_idle_timeout_ms = 1; // Expire the session almost immediately.
+  // Expire the session almost immediately.
+  ANNOTATE_UNPROTECTED_WRITE(FLAGS_remote_bootstrap_idle_timeout_ms) = 1;
 
   // Start session.
   string session_id;

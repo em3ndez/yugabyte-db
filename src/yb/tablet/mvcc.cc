@@ -35,14 +35,21 @@
 #include <boost/circular_buffer.hpp>
 #include <boost/variant.hpp>
 
+#include "yb/ash/wait_state.h"
+
 #include "yb/gutil/macros.h"
 
 #include "yb/util/atomic.h"
+#include "yb/util/callsite_profiling.h"
 #include "yb/util/compare_util.h"
 #include "yb/util/enums.h"
-#include "yb/util/flag_tags.h"
+#include "yb/util/flags.h"
 #include "yb/util/format.h"
 #include "yb/util/logging.h"
+#include "yb/util/to_stream.h"
+#include "yb/util/trace.h"
+
+using std::ostream;
 
 using namespace std::literals;
 
@@ -262,7 +269,7 @@ void MvccManager::Replicated(HybridTime ht, const OpId& op_id) {
   CHECK(!op_id.empty());
 
   {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard lock(mutex_);
     if (op_trace_) {
       op_trace_->Add(ReplicatedTraceItem { .ht = ht, .op_id = op_id });
     }
@@ -272,14 +279,14 @@ void MvccManager::Replicated(HybridTime ht, const OpId& op_id) {
     queue_.pop_front();
     last_replicated_ = ht;
   }
-  cond_.notify_all();
+  YB_PROFILE(cond_.notify_all());
 }
 
 void MvccManager::Aborted(HybridTime ht, const OpId& op_id) {
   VLOG_WITH_PREFIX(1) << __func__ << "(" << ht << ", " << op_id << ")";
 
   {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard lock(mutex_);
     if (op_trace_) {
       op_trace_->Add(AbortedTraceItem { .ht = ht, .op_id = op_id });
     }
@@ -289,7 +296,7 @@ void MvccManager::Aborted(HybridTime ht, const OpId& op_id) {
         << InvariantViolationLogPrefix() << "It is allowed to abort only last operation";
     queue_.pop_back();
   }
-  cond_.notify_all();
+  YB_PROFILE(cond_.notify_all());
 }
 
 bool BadNextOpId(const OpId& prev, const OpId& next) {
@@ -303,7 +310,7 @@ bool BadNextOpId(const OpId& prev, const OpId& next) {
 }
 
 HybridTime MvccManager::AddLeaderPending(const OpId& op_id) {
-  std::lock_guard<std::mutex> lock(mutex_);
+  std::lock_guard lock(mutex_);
   auto ht = clock_->Now();
   AtomicFlagSleepMs(&FLAGS_TEST_inject_mvcc_delay_add_leader_pending_ms);
   VLOG_WITH_PREFIX(1) << __func__ << "(" << op_id << "), time: " << ht;
@@ -320,7 +327,7 @@ HybridTime MvccManager::AddLeaderPending(const OpId& op_id) {
 }
 
 void MvccManager::AddFollowerPending(HybridTime ht, const OpId& op_id) {
-  std::lock_guard<std::mutex> lock(mutex_);
+  std::lock_guard lock(mutex_);
   VLOG_WITH_PREFIX(1) << __func__ << "(" << ht << ", " << op_id << ")";
 
   AddPending(ht, op_id, /* is_follower_side= */ true);
@@ -351,11 +358,11 @@ void MvccManager::AddPending(HybridTime ht, const OpId& op_id, bool is_follower_
     auto get_details_msg = [&](bool drain_aborted) {
       std::ostringstream ss;
 #define LOG_INFO_FOR_HT_LOWER_BOUND_IMPL(full, safe_time) \
-             "\n  " << EXPR_VALUE_FOR_LOG(full) \
-          << "\n  " << (ht <= safe_time ? "!!! " : "") << EXPR_VALUE_FOR_LOG(ht <= safe_time) \
-          << "\n  " << EXPR_VALUE_FOR_LOG( \
+             "\n  " << YB_EXPR_TO_STREAM(full) \
+          << "\n  " << (ht <= safe_time ? "!!! " : "") << YB_EXPR_TO_STREAM(ht <= safe_time) \
+          << "\n  " << YB_EXPR_TO_STREAM( \
                            static_cast<int64_t>(ht.ToUint64() - safe_time.ToUint64())) \
-          << "\n  " << EXPR_VALUE_FOR_LOG(ht.PhysicalDiff(safe_time)) \
+          << "\n  " << YB_EXPR_TO_STREAM(ht.PhysicalDiff(safe_time)) \
           << "\n  "
 
 #define LOG_INFO_FOR_HT_LOWER_BOUND_WITH_SOURCE(t) LOG_INFO_FOR_HT_LOWER_BOUND_IMPL(t, t.safe_time)
@@ -368,8 +375,8 @@ void MvccManager::AddPending(HybridTime ht, const OpId& op_id, bool is_follower_
          << LOG_INFO_FOR_HT_LOWER_BOUND(last_replicated_)
          << LOG_INFO_FOR_HT_LOWER_BOUND(last_ht_in_queue)
          << LOG_INFO_FOR_HT_LOWER_BOUND(propagated_safe_time_)
-         << "\n  " << EXPR_VALUE_FOR_LOG(queue_.size())
-         << "\n  " << EXPR_VALUE_FOR_LOG(queue_);
+         << "\n  " << YB_EXPR_TO_STREAM(queue_.size())
+         << "\n  " << YB_EXPR_TO_STREAM(queue_);
       return ss.str();
 #undef LOG_INFO_FOR_HT_LOWER_BOUND
     };
@@ -409,20 +416,20 @@ void MvccManager::SetLastReplicated(HybridTime ht) {
   VLOG_WITH_PREFIX(1) << __func__ << "(" << ht << ")";
 
   {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard lock(mutex_);
     if (op_trace_) {
       op_trace_->Add(SetLastReplicatedTraceItem { .ht = ht });
     }
     last_replicated_ = ht;
   }
-  cond_.notify_all();
+  YB_PROFILE(cond_.notify_all());
 }
 
 void MvccManager::SetPropagatedSafeTimeOnFollower(HybridTime ht) {
   VLOG_WITH_PREFIX(1) << __func__ << "(" << ht << ")";
 
   {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard lock(mutex_);
     if (op_trace_) {
       op_trace_->Add(SetPropagatedSafeTimeOnFollowerTraceItem { .ht = ht });
     }
@@ -435,7 +442,7 @@ void MvccManager::SetPropagatedSafeTimeOnFollower(HybridTime ht) {
           << "is elected.";
     }
   }
-  cond_.notify_all();
+  YB_PROFILE(cond_.notify_all());
 }
 
 // NO_THREAD_SAFETY_ANALYSIS because this analysis does not work with unique_lock.
@@ -460,7 +467,7 @@ void MvccManager::UpdatePropagatedSafeTimeOnLeader(const FixedHybridTimeLease& h
     // Do not crash in production.
     if (safe_time < propagated_safe_time_) {
       YB_LOG_EVERY_N_SECS(ERROR, 5) << LogPrefix()
-          << "Previously saw " << EXPR_VALUE_FOR_LOG(propagated_safe_time_)
+          << "Previously saw " << YB_EXPR_TO_STREAM(propagated_safe_time_)
           << ", but now safe time is " << safe_time;
     } else {
       propagated_safe_time_ = safe_time;
@@ -474,11 +481,11 @@ void MvccManager::UpdatePropagatedSafeTimeOnLeader(const FixedHybridTimeLease& h
       });
     }
   }
-  cond_.notify_all();
+  YB_PROFILE(cond_.notify_all());
 }
 
 void MvccManager::SetLeaderOnlyMode(bool leader_only) {
-  std::lock_guard<std::mutex> lock(mutex_);
+  std::lock_guard lock(mutex_);
   if (op_trace_) {
     op_trace_->Add(SetLeaderOnlyModeTraceItem {
       .leader_only = leader_only
@@ -514,8 +521,11 @@ HybridTime MvccManager::SafeTimeForFollower(
       result.safe_time = last_replicated_;
       result.source = SafeTimeSource::kLastReplicated;
     }
+    VTRACE(3, "Current safe time $0. Source $1", yb::ToString(result.safe_time),
+           yb::ToString(result.source));
     return result.safe_time >= min_allowed;
   };
+  SCOPED_WAIT_STATUS(MVCC_WaitForSafeTime);
   if (deadline == CoarseTimePoint::max()) {
     cond_.wait(lock, predicate);
   } else if (!cond_.wait_until(lock, deadline, predicate)) {
@@ -528,6 +538,9 @@ HybridTime MvccManager::SafeTimeForFollower(
       << "result: " << result.ToString()
       << ", max_safe_time_returned_for_follower_: "
       << max_safe_time_returned_for_follower_.ToString();
+  VTRACE(2, "Min requested safe time was $0", yb::ToString(min_allowed));
+  VTRACE(2, "Returning safe time $0. Source $1", yb::ToString(result.safe_time),
+         yb::ToString(result.source));
   max_safe_time_returned_for_follower_ = result;
   if (op_trace_) {
     op_trace_->Add(SafeTimeForFollowerTraceItem {
@@ -599,12 +612,15 @@ HybridTime MvccManager::DoGetSafeTime(const HybridTime min_allowed,
     // This function could be invoked at a follower, so it has a very old ht_lease. In this case it
     // is safe to read at least at last_replicated_.
     result = std::max(result, last_replicated_);
+    VTRACE(3, "Current safe time $0. Source $1", yb::ToString(result),
+           yb::ToString(source));
 
     return result >= min_allowed;
   };
 
   // In the case of an empty queue, the safe hybrid time to read at is only limited by hybrid time
   // ht_lease, which is by definition higher than min_allowed, so we would not get blocked.
+  SCOPED_WAIT_STATUS(MVCC_WaitForSafeTime);
   if (deadline == CoarseTimePoint::max()) {
     cond_.wait(*lock, predicate);
   } else if (!cond_.wait_until(*lock, deadline, predicate)) {
@@ -617,25 +633,29 @@ HybridTime MvccManager::DoGetSafeTime(const HybridTime min_allowed,
                                      : max_safe_time_returned_without_lease_.safe_time;
   CHECK_GE(result, enforced_min_time)
       << InvariantViolationLogPrefix()
-      << ": " << EXPR_VALUE_FOR_LOG(has_lease)
-      << ", " << EXPR_VALUE_FOR_LOG(enforced_min_time.ToUint64() - result.ToUint64())
-      << ", " << EXPR_VALUE_FOR_LOG(ht_lease)
-      << ", " << EXPR_VALUE_FOR_LOG(last_replicated_)
-      << ", " << EXPR_VALUE_FOR_LOG(clock_->Now())
-      << ", " << EXPR_VALUE_FOR_LOG(ToString(deadline))
-      << ", " << EXPR_VALUE_FOR_LOG(queue_.size())
-      << ", " << EXPR_VALUE_FOR_LOG(queue_);
+      << ": "
+      << YB_EXPR_TO_STREAM_COMMA_SEPARATED(
+          has_lease,
+          enforced_min_time.ToUint64() - result.ToUint64(),
+          ht_lease,
+          last_replicated_,
+          clock_->Now(),
+          ToString(deadline),
+          queue_.size(),
+          queue_);
 
   if (has_lease) {
     max_safe_time_returned_with_lease_ = { result, source };
   } else {
     max_safe_time_returned_without_lease_ = { result, source };
   }
+  VTRACE(2, "Returning safe time $0. Source $1. Min requested safe time was $2",
+         yb::ToString(result), yb::ToString(source), yb::ToString(min_allowed));
   return result;
 }
 
 HybridTime MvccManager::LastReplicatedHybridTime() const {
-  std::lock_guard<std::mutex> lock(mutex_);
+  std::lock_guard lock(mutex_);
   VLOG_WITH_PREFIX(1) << __func__ << "(), result = " << last_replicated_;
   if (op_trace_) {
     op_trace_->Add(LastReplicatedHybridTimeTraceItem {

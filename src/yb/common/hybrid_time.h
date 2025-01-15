@@ -32,8 +32,7 @@
 
 // Portions Copyright (c) YugaByte, Inc.
 
-#ifndef YB_COMMON_HYBRID_TIME_H_
-#define YB_COMMON_HYBRID_TIME_H_
+#pragma once
 
 #include <inttypes.h>
 
@@ -88,6 +87,8 @@ class HybridTime {
 
   // Hybrid times are converted to debug strings as <this_string_constant>(<hybrid_time_value>).
   static const char* const kHybridTimeDebugStrPrefix;
+
+  static const size_t SizeOfHybridTimeRepr = sizeof(HybridTimeRepr);
 
   // ----------------------------------------------------------------------------------------------
   // Constructors / static factories
@@ -166,7 +167,7 @@ class HybridTime {
   }
 
   // Sets this hybrid time from 'value'
-  CHECKED_STATUS FromUint64(uint64_t value);
+  Status FromUint64(uint64_t value);
 
   static HybridTime FromPB(uint64_t value) {
     return value ? HybridTime(value) : HybridTime();
@@ -210,6 +211,9 @@ class HybridTime {
   inline MicrosTime GetPhysicalValueMicros() const {
     return v >> kBitsForLogicalComponent;
   }
+
+  uint64_t GetPhysicalValueMillis() const;
+  uint64_t GetPhysicalValueNanos() const;
 
   MicrosTime CeilPhysicalValueMicros() const;
 
@@ -270,6 +274,11 @@ inline int HybridTime::CompareTo(const HybridTime &other) const {
   return 0;
 }
 
+// Given two hybrid times, determines whether the delta between end and begin them is higher,
+// lower or equal to the given delta and returns 1, -1 and 0 respectively. Note that if end <
+// begin we return -1.
+int CompareHybridTimesToDelta(HybridTime begin, HybridTime end, MonoDelta delta);
+
 inline std::ostream &operator <<(std::ostream &o, const HybridTime &hybridTime) {
   return o << hybridTime.ToString();
 }
@@ -285,5 +294,3 @@ inline HybridTime operator "" _usec_ht(unsigned long long microseconds) { // NOL
 using hybrid_time_literals::operator"" _usec_ht;
 
 }  // namespace yb
-
-#endif  // YB_COMMON_HYBRID_TIME_H_

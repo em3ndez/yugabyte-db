@@ -26,6 +26,7 @@
 #include "yb/rocksdb/table/internal_iterator.h"
 
 #include "yb/util/status_log.h"
+#include "yb/util/logging.h"
 
 namespace rocksdb {
 
@@ -72,7 +73,7 @@ CompactionIterator::CompactionIterator(
 void CompactionIterator::AddLiveRanges(const std::vector<std::pair<Slice, Slice>>& ranges) {
   for (auto it = ranges.rbegin(); it != ranges.rend(); ++it) {
     const auto& range = *it;
-    DCHECK(range.first.Less(range.second));
+    DCHECK(range.second.empty() || range.first.Less(range.second)) << AsString(range);
     if (!live_key_ranges_stack_.empty()) {
       DCHECK(live_key_ranges_stack_.back().first.GreaterOrEqual(range.second));
     }
@@ -139,9 +140,13 @@ void CompactionIterator::NextFromInput() {
   at_next_ = false;
   valid_ = false;
 
-  while (!valid_ && input_->Valid()) {
-    key_ = input_->key();
-    value_ = input_->value();
+  while (!valid_) {
+    const auto& entry = input_->Entry();
+    if (!entry) {
+      return;
+    }
+    key_ = entry.key;
+    value_ = entry.value;
     iter_stats_.num_input_records++;
 
     if (!ParseInternalKey(key_, &ikey_)) {
@@ -425,8 +430,11 @@ void CompactionIterator::NextFromInput() {
       // have hit (A)
       // We encapsulate the merge related state machine in a different
       // object to minimize change to the existing flow.
-      WARN_NOT_OK(merge_helper_->MergeUntil(input_, prev_snapshot, bottommost_level_),
-                  "Merge until failed");
+      auto merge_until_result = merge_helper_->MergeUntil(input_, prev_snapshot, bottommost_level_);
+      if (PREDICT_FALSE(!merge_until_result.ok())) {
+        YB_LOG_EVERY_N_SECS(WARNING, 100) << "Merge until failed: "
+          << merge_until_result.ToString();
+      }
       merge_out_iter_.SeekToFirst();
 
       if (merge_out_iter_.Valid()) {

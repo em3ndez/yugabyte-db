@@ -3,8 +3,7 @@ title: Deploy YugabyteDB clusters on Kubernetes
 headerTitle: Deploy on Kubernetes
 linkTitle: Kubernetes
 description: Deploy YugabyteDB clusters natively on Kubernetes with various providers
-headcontent: This section describes how to deploy YugabyteDB natively on Kubernetes.
-image: /images/section_icons/deploy/kubernetes.png
+headcontent: Deploy YugabyteDB natively on Kubernetes
 aliases:
   - /deploy/kubernetes/
 menu:
@@ -12,8 +11,8 @@ menu:
     identifier: deploy-kubernetes
     parent: deploy
     weight: 620
+type: indexpage
 ---
-
 <div class="row">
 
   <div class="col-12 col-md-6 col-lg-12 col-xl-6">

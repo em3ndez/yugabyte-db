@@ -30,8 +30,7 @@
 // under the License.
 //
 
-#ifndef YB_UTIL_ATOMIC_H
-#define YB_UTIL_ATOMIC_H
+#pragma once
 
 #include <algorithm>
 #include <atomic>
@@ -39,7 +38,7 @@
 
 #include <boost/atomic.hpp>
 #include <boost/type_traits/make_signed.hpp>
-#include <glog/logging.h>
+#include "yb/util/logging.h"
 
 #include "yb/gutil/atomicops.h"
 #include "yb/gutil/macros.h"
@@ -394,7 +393,7 @@ void SetAtomicFlag(U value, T* flag) {
 template <class T>
 void AtomicFlagSleepMs(T* flag) {
   auto value = GetAtomicFlag(flag);
-  if (value != 0) {
+  if (PREDICT_FALSE(value != 0)) {
     std::this_thread::sleep_for(std::chrono::milliseconds(value));
   }
 }
@@ -417,6 +416,12 @@ template<typename T>
 void UpdateAtomicMax(std::atomic<T>* max_holder, T new_value) {
   auto current_max = max_holder->load(std::memory_order_acquire);
   while (new_value > current_max && !max_holder->compare_exchange_weak(current_max, new_value)) {}
+}
+
+template<typename T>
+void UpdateAtomicMin(std::atomic<T>* min_holder, T value) {
+  auto current_min = min_holder->load(std::memory_order_acquire);
+  while (value < current_min && !min_holder->compare_exchange_weak(current_min, value)) {}
 }
 
 class AtomicTryMutex {
@@ -473,4 +478,3 @@ bool IsAcceptableAtomicImpl(const std::atomic<T>& atomic_variable) {
 }
 
 } // namespace yb
-#endif /* YB_UTIL_ATOMIC_H */

@@ -5,12 +5,12 @@ linkTitle: Miscellaneous
 description: The semantics of the miscellaneous date-time functions. [YSQL]
 image: /images/section_icons/api/subsection.png
 menu:
-  preview:
+  preview_api:
     identifier: miscellaneous
     parent: date-time-functions
     weight: 60
-isTocNested: true
-showAsideToc: true
+type: indexpage
+showRightNav: true
 ---
 
 ## function isfinite() returns boolean

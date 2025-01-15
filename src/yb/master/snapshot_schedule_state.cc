@@ -14,12 +14,14 @@
 #include "yb/master/snapshot_schedule_state.h"
 
 #include "yb/docdb/docdb.pb.h"
-#include "yb/docdb/key_bytes.h"
-#include "yb/docdb/value_type.h"
+#include "yb/dockv/key_bytes.h"
+#include "yb/dockv/value_type.h"
 
 #include "yb/master/catalog_entity_info.h"
 #include "yb/master/master_error.h"
 #include "yb/master/snapshot_coordinator_context.h"
+
+#include "yb/server/clock.h"
 
 #include "yb/util/pb_util.h"
 #include "yb/util/result.h"
@@ -30,9 +32,10 @@ DECLARE_uint64(snapshot_coordinator_cleanup_delay_ms);
 namespace yb {
 namespace master {
 
-SnapshotScheduleState::SnapshotScheduleState(
-    SnapshotCoordinatorContext* context, const CreateSnapshotScheduleRequestPB &req)
-    : context_(*context), id_(SnapshotScheduleId::GenerateRandom()), options_(req.options()) {
+Result<SnapshotScheduleState> SnapshotScheduleState::Create(
+    SnapshotCoordinatorContext* context, const SnapshotScheduleOptionsPB& options) {
+  RETURN_NOT_OK(ValidateOptions(options));
+  return SnapshotScheduleState(context, options);
 }
 
 SnapshotScheduleState::SnapshotScheduleState(
@@ -41,29 +44,63 @@ SnapshotScheduleState::SnapshotScheduleState(
     : context_(*context), id_(id), options_(options) {
 }
 
-Result<docdb::KeyBytes> SnapshotScheduleState::EncodedKey(
+SnapshotScheduleState::SnapshotScheduleState(
+    SnapshotCoordinatorContext* context, const SnapshotScheduleOptionsPB& options)
+    : context_(*context), id_(SnapshotScheduleId::GenerateRandom()), options_(options) {
+}
+
+Result<dockv::KeyBytes> SnapshotScheduleState::EncodedKey(
     const SnapshotScheduleId& schedule_id, SnapshotCoordinatorContext* context) {
   return master::EncodedKey(SysRowEntryType::SNAPSHOT_SCHEDULE, schedule_id.AsSlice(), context);
 }
 
-Result<docdb::KeyBytes> SnapshotScheduleState::EncodedKey() const {
+Result<dockv::KeyBytes> SnapshotScheduleState::EncodedKey() const {
   return EncodedKey(id_, &context_);
 }
 
 Status SnapshotScheduleState::StoreToWriteBatch(docdb::KeyValueWriteBatchPB* out) const {
+  return StoreToWriteBatch(options_, out);
+}
+
+Status SnapshotScheduleState::StoreToWriteBatch(
+    const SnapshotScheduleOptionsPB& options, docdb::KeyValueWriteBatchPB* out) const {
   auto encoded_key = VERIFY_RESULT(EncodedKey());
   auto pair = out->add_write_pairs();
   pair->set_key(encoded_key.AsSlice().cdata(), encoded_key.size());
   auto* value = pair->mutable_value();
-  value->push_back(docdb::ValueEntryTypeAsChar::kString);
-  pb_util::AppendPartialToString(options_, value);
-  return Status::OK();
+  value->push_back(dockv::ValueEntryTypeAsChar::kString);
+  return pb_util::AppendPartialToString(options, value);
 }
 
 Status SnapshotScheduleState::ToPB(SnapshotScheduleInfoPB* pb) const {
   pb->set_id(id_.data(), id_.size());
   *pb->mutable_options() = options_;
   return Status::OK();
+}
+
+Result<SnapshotScheduleOptionsPB> SnapshotScheduleState::GetUpdatedOptions(
+    const EditSnapshotScheduleRequestPB& edit_request) const {
+  SnapshotScheduleOptionsPB updated_options = options_;
+  if (edit_request.has_interval_sec()) {
+    updated_options.set_interval_sec(edit_request.interval_sec());
+  }
+  if (edit_request.has_retention_duration_sec()) {
+    updated_options.set_retention_duration_sec(edit_request.retention_duration_sec());
+  }
+  RETURN_NOT_OK(ValidateOptions(updated_options));
+  return updated_options;
+}
+
+Status SnapshotScheduleState::ValidateOptions(const SnapshotScheduleOptionsPB& options) {
+  if (options.interval_sec() == 0) {
+    return STATUS(InvalidArgument, "Zero interval");
+  } else if (options.retention_duration_sec() == 0) {
+    return STATUS(InvalidArgument, "Zero retention");
+  } else if (options.interval_sec() >= options.retention_duration_sec()) {
+    return STATUS(InvalidArgument, "Interval must be strictly less than retention");
+  } else {
+    return Status::OK();
+  }
 }
 
 std::string SnapshotScheduleState::ToString() const {
@@ -92,6 +129,8 @@ void SnapshotScheduleState::PrepareOperations(
         .type = SnapshotScheduleOperationType::kCleanup,
         .schedule_id = id_,
         .snapshot_id = TxnSnapshotId::Nil(),
+        .filter = {},
+        .previous_snapshot_hybrid_time = {},
       });
     }
     return;

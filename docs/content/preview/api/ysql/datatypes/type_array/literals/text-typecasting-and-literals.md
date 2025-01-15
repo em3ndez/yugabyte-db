@@ -4,12 +4,11 @@ linkTitle: Text typecasting and literals
 headerTitle: The text typecast of a value, the literal for that value, and how they are related
 description: The text typecast of a value, the literal for that value, and how they are related
 menu:
-  preview:
+  preview_api:
     identifier: text-typecasting-and-literals
     parent: array-literals
     weight: 5
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 This section establishes some basic notions that have a much broader scope of applicability than just arrays. But, because using array literals rests on these notions, they are summarized here.

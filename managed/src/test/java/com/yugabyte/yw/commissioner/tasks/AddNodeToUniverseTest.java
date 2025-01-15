@@ -2,6 +2,7 @@
 
 package com.yugabyte.yw.commissioner.tasks;
 
+import static com.yugabyte.yw.commissioner.tasks.UniverseTaskBase.VersionCheckMode.HA_ONLY;
 import static com.yugabyte.yw.common.AssertHelper.assertJsonEqual;
 import static com.yugabyte.yw.common.ModelFactory.createUniverse;
 import static com.yugabyte.yw.models.TaskInfo.State.Failure;
@@ -11,6 +12,8 @@ import static org.hamcrest.MatcherAssert.assertThat;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertThrows;
+import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
@@ -27,9 +30,14 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
+import com.google.common.net.HostAndPort;
 import com.yugabyte.yw.commissioner.tasks.params.NodeTaskParams;
 import com.yugabyte.yw.common.ApiUtils;
 import com.yugabyte.yw.common.NodeActionType;
+import com.yugabyte.yw.common.PlatformServiceException;
+import com.yugabyte.yw.common.TestUtils;
+import com.yugabyte.yw.common.config.impl.SettableRuntimeConfigFactory;
+import com.yugabyte.yw.controllers.UniverseControllerRequestBinder;
 import com.yugabyte.yw.forms.UniverseDefinitionTaskParams;
 import com.yugabyte.yw.forms.UniverseDefinitionTaskParams.Cluster;
 import com.yugabyte.yw.models.AvailabilityZone;
@@ -61,7 +69,8 @@ import org.mockito.junit.MockitoRule;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.yb.client.ChangeMasterClusterConfigResponse;
-import org.yb.client.ListMastersResponse;
+import org.yb.client.ListMasterRaftPeersResponse;
+import org.yb.client.ListTabletServersResponse;
 import play.libs.Json;
 
 @RunWith(JUnitParamsRunner.class)
@@ -83,13 +92,22 @@ public class AddNodeToUniverseTest extends UniverseModifyBaseTest {
     setDefaultNodeState(defaultUniverse, NodeState.Removed, DEFAULT_NODE_NAME);
     setDefaultNodeState(onPremUniverse, NodeState.Removed, DEFAULT_NODE_NAME);
 
+    // WaitForTServerHeartBeats mock.
+    ListTabletServersResponse mockResponse = mock(ListTabletServersResponse.class);
+    when(mockResponse.getTabletServersCount()).thenReturn(7);
+
     try {
       when(mockClient.waitForMaster(any(), anyLong())).thenReturn(true);
       when(mockClient.changeMasterClusterConfig(any())).thenReturn(ccr);
       when(mockClient.setFlag(any(), anyString(), anyString(), anyBoolean())).thenReturn(true);
-      ListMastersResponse listMastersResponse = mock(ListMastersResponse.class);
-      when(listMastersResponse.getMasters()).thenReturn(Collections.emptyList());
-      when(mockClient.listMasters()).thenReturn(listMastersResponse);
+      when(mockClient.listTabletServers()).thenReturn(mockResponse);
+      ListMasterRaftPeersResponse listMastersResponse = mock(ListMasterRaftPeersResponse.class);
+      when(listMastersResponse.getPeersList()).thenReturn(Collections.emptyList());
+      when(mockClient.listMasterRaftPeers()).thenReturn(listMastersResponse);
+      mockClockSyncResponse(mockNodeUniverseManager);
+      mockLocaleCheckResponse(mockNodeUniverseManager);
+
+      when(mockClient.getLeaderMasterHostAndPort()).thenReturn(HostAndPort.fromHost("10.0.0.1"));
     } catch (Exception e) {
       fail();
     }
@@ -97,6 +115,9 @@ public class AddNodeToUniverseTest extends UniverseModifyBaseTest {
     mockWaits(mockClient, 4);
     when(mockClient.waitForLoadBalance(anyLong(), anyInt())).thenReturn(true);
     when(mockYBClient.getClientWithConfig(any())).thenReturn(mockClient);
+
+    setFollowerLagMock();
+    setLeaderlessTabletsMock();
   }
 
   // Updates one of the nodes using a passed consumer.
@@ -117,18 +138,22 @@ public class AddNodeToUniverseTest extends UniverseModifyBaseTest {
   private void setDefaultNodeState(
       Universe universe, final NodeState desiredState, String nodeName) {
     Universe.saveDetails(
-        universe.universeUUID, getNodeUpdater(nodeName, node -> node.state = desiredState));
+        universe.getUniverseUUID(), getNodeUpdater(nodeName, node -> node.state = desiredState));
   }
 
   private void decomissionOnPremNode(String nodeName) {
     Universe.saveDetails(
-        onPremUniverse.universeUUID,
+        onPremUniverse.getUniverseUUID(),
         u -> {
           NodeDetails node = u.getNode(nodeName);
           node.state = NodeState.Decommissioned;
-          NodeInstance nodeInstance = NodeInstance.getOrBadRequest(node.getNodeUuid());
-          nodeInstance.setInUse(false);
-          nodeInstance.save();
+          NodeInstance.maybeGetByName(nodeName)
+              .ifPresent(
+                  nodeInstance -> {
+                    nodeInstance.setState(NodeInstance.State.FREE);
+                    nodeInstance.setNodeName("");
+                    nodeInstance.save();
+                  });
         });
   }
 
@@ -138,18 +163,22 @@ public class AddNodeToUniverseTest extends UniverseModifyBaseTest {
 
   private TaskInfo submitTask(UUID universeUUID, Provider provider, String nodeName, int version) {
     Universe universe = Universe.getOrBadRequest(universeUUID);
-    NodeTaskParams taskParams = new NodeTaskParams();
-    taskParams.clusters.addAll(universe.getUniverseDetails().clusters);
-
+    NodeTaskParams taskParams =
+        UniverseControllerRequestBinder.deepCopy(
+            universe.getUniverseDetails(), NodeTaskParams.class);
     taskParams.expectedUniverseVersion = version;
     taskParams.nodeName = nodeName;
-    taskParams.universeUUID = universe.universeUUID;
-    taskParams.azUuid = AvailabilityZone.getByCode(provider, AZ_CODE).uuid;
+    taskParams.setUniverseUUID(universe.getUniverseUUID());
+    taskParams.azUuid = AvailabilityZone.getByCode(provider, AZ_CODE).getUuid();
+    taskParams.creatingUser = defaultUser;
     try {
       UUID taskUUID = commissioner.submit(TaskType.AddNodeToUniverse, taskParams);
+      // Set http context
+      TestUtils.setFakeHttpContext(defaultUser);
+
       CustomerTask.create(
           defaultCustomer,
-          universe.universeUUID,
+          universe.getUniverseUUID(),
           taskUUID,
           CustomerTask.TargetType.Universe,
           CustomerTask.TaskType.Add,
@@ -163,27 +192,55 @@ public class AddNodeToUniverseTest extends UniverseModifyBaseTest {
 
   private static final List<TaskType> ADD_NODE_TASK_SEQUENCE =
       ImmutableList.of(
-          TaskType.SetNodeState,
-          TaskType.AnsibleConfigureServers,
-          TaskType.SetNodeState,
-          TaskType.AnsibleConfigureServers,
-          TaskType.AnsibleClusterServerCtl,
+          TaskType.InstanceExistCheck, // only if it wasn't decommissioned.
+          TaskType.CheckLeaderlessTablets,
+          TaskType.UpdateConsistencyCheck,
+          TaskType.FreezeUniverse,
+          TaskType.SetNodeState, // to Adding
+          TaskType.SetNodeStatus, // to Adding for 'To Be Added'
+          TaskType.AnsibleCreateServer,
+          TaskType.AnsibleUpdateNodeInfo,
+          TaskType.RunHooks,
+          TaskType.AnsibleSetupServer, // end provisioning
+          TaskType.RunHooks,
+          TaskType.CheckLocale,
+          TaskType.CheckGlibc,
+          TaskType.AnsibleConfigureServers, // Gflags - master
+          TaskType.AnsibleConfigureServers, // Gflags - tServer
+          TaskType.SetNodeStatus, // ToJoinCluster
+          TaskType.WaitForClockSync, // Ensure clock skew is low enough
+          TaskType.AnsibleClusterServerCtl, // start process
           TaskType.UpdateNodeProcess,
           TaskType.WaitForServer,
+          TaskType.WaitForServer, // wait for postgres to be up
           TaskType.SwamperTargetsFileUpdate,
           TaskType.ModifyBlackList,
-          TaskType.WaitForLoadBalance,
+          TaskType.WaitForTServerHeartBeats,
           TaskType.SetNodeState,
           TaskType.UniverseUpdateSucceeded);
 
   private static final List<JsonNode> ADD_NODE_TASK_EXPECTED_RESULTS =
       ImmutableList.of(
+          Json.toJson(ImmutableMap.of()),
+          Json.toJson(ImmutableMap.of()),
+          Json.toJson(ImmutableMap.of()),
+          Json.toJson(ImmutableMap.of()),
           Json.toJson(ImmutableMap.of("state", "Adding")),
           Json.toJson(ImmutableMap.of()),
-          Json.toJson(ImmutableMap.of("state", "ToJoinCluster")),
+          Json.toJson(ImmutableMap.of()),
+          Json.toJson(ImmutableMap.of()),
+          Json.toJson(ImmutableMap.of()), // provisioned
+          Json.toJson(ImmutableMap.of()),
+          Json.toJson(ImmutableMap.of()),
+          Json.toJson(ImmutableMap.of()),
+          Json.toJson(ImmutableMap.of()),
+          Json.toJson(ImmutableMap.of()),
+          Json.toJson(ImmutableMap.of()),
+          Json.toJson(ImmutableMap.of()),
           Json.toJson(ImmutableMap.of()),
           Json.toJson(ImmutableMap.of("process", "tserver", "command", "start")),
           Json.toJson(ImmutableMap.of("processType", "TSERVER", "isAdd", true)),
+          Json.toJson(ImmutableMap.of()),
           Json.toJson(ImmutableMap.of()),
           Json.toJson(ImmutableMap.of()),
           Json.toJson(ImmutableMap.of()),
@@ -193,32 +250,56 @@ public class AddNodeToUniverseTest extends UniverseModifyBaseTest {
 
   private static final List<TaskType> ADD_NODE_TASK_DECOMISSIONED_NODE_SEQUENCE =
       ImmutableList.of(
+          TaskType.CheckLeaderlessTablets,
+          TaskType.PreflightNodeCheck,
+          TaskType.UpdateConsistencyCheck,
+          TaskType.FreezeUniverse,
           TaskType.SetNodeState,
+          TaskType.SetNodeStatus,
           TaskType.AnsibleCreateServer,
           TaskType.AnsibleUpdateNodeInfo,
+          TaskType.RunHooks,
           TaskType.AnsibleSetupServer,
-          TaskType.AnsibleConfigureServers,
-          TaskType.SetNodeState,
-          TaskType.AnsibleConfigureServers,
-          TaskType.AnsibleClusterServerCtl,
-          TaskType.UpdateNodeProcess,
-          TaskType.WaitForServer,
+          TaskType.RunHooks,
+          TaskType.CheckLocale,
+          TaskType.CheckGlibc,
+          TaskType.AnsibleConfigureServers, // Gflags - master
+          TaskType.AnsibleConfigureServers, // Gflags - tServer
+          TaskType.SetNodeStatus, // ToJoinCluster
+          TaskType.WaitForClockSync, // Ensure clock skew is low enough
+          TaskType.AnsibleClusterServerCtl, // start process (master/tServer)
+          TaskType.UpdateNodeProcess, // update process name in DB
+          TaskType.WaitForServer, // wait for process to come up
+          TaskType.WaitForServer, // wait for postgres to be up
           TaskType.SwamperTargetsFileUpdate,
-          TaskType.WaitForLoadBalance,
-          TaskType.SetNodeState,
+          TaskType.ModifyBlackList,
+          TaskType.WaitForTServerHeartBeats,
+          TaskType.SetNodeState, // Live
           TaskType.UniverseUpdateSucceeded);
 
   private static final List<JsonNode> ADD_NODE_TASK_DECOMISSIONED_NODE_EXPECTED_RESULTS =
       ImmutableList.of(
-          Json.toJson(ImmutableMap.of("state", "Adding")),
           Json.toJson(ImmutableMap.of()),
           Json.toJson(ImmutableMap.of()),
           Json.toJson(ImmutableMap.of()),
           Json.toJson(ImmutableMap.of()),
-          Json.toJson(ImmutableMap.of("state", "ToJoinCluster")),
+          Json.toJson(ImmutableMap.of()),
+          Json.toJson(ImmutableMap.of()),
+          Json.toJson(ImmutableMap.of()),
+          Json.toJson(ImmutableMap.of()),
+          Json.toJson(ImmutableMap.of()),
+          Json.toJson(ImmutableMap.of()),
+          Json.toJson(ImmutableMap.of()),
+          Json.toJson(ImmutableMap.of()),
+          Json.toJson(ImmutableMap.of()),
+          Json.toJson(ImmutableMap.of()),
+          Json.toJson(ImmutableMap.of()),
+          Json.toJson(ImmutableMap.of()),
           Json.toJson(ImmutableMap.of()),
           Json.toJson(ImmutableMap.of("process", "tserver", "command", "start")),
           Json.toJson(ImmutableMap.of("processType", "TSERVER", "isAdd", true)),
+          Json.toJson(ImmutableMap.of()),
+          Json.toJson(ImmutableMap.of()),
           Json.toJson(ImmutableMap.of()),
           Json.toJson(ImmutableMap.of()),
           Json.toJson(ImmutableMap.of()),
@@ -227,41 +308,71 @@ public class AddNodeToUniverseTest extends UniverseModifyBaseTest {
 
   private static final List<TaskType> WITH_MASTER_UNDER_REPLICATED =
       ImmutableList.of(
+          TaskType.InstanceExistCheck,
+          TaskType.CheckLeaderlessTablets,
+          TaskType.UpdateConsistencyCheck,
+          TaskType.FreezeUniverse,
           TaskType.SetNodeState,
-          TaskType.AnsibleConfigureServers,
-          TaskType.SetNodeState,
-          TaskType.AnsibleConfigureServers,
+          TaskType.SetNodeStatus,
+          TaskType.AnsibleCreateServer,
+          TaskType.AnsibleUpdateNodeInfo,
+          TaskType.RunHooks,
+          TaskType.AnsibleSetupServer, // provisioned
+          TaskType.RunHooks,
+          TaskType.CheckLocale,
+          TaskType.CheckGlibc,
+          TaskType.AnsibleConfigureServers, // install software, under-replicated
+          TaskType.AnsibleConfigureServers, // GFlags master
+          TaskType.AnsibleConfigureServers, // Gflags tServer
+          TaskType.SetNodeStatus, // To join cluster
+          TaskType.WaitForClockSync, // Ensure clock skew is low enough
+          TaskType.AnsibleClusterServerCtl,
+          TaskType.ChangeMasterConfig, // master done
+          TaskType.CheckFollowerLag, // master done
+          TaskType.WaitForServer,
+          TaskType.UpdateNodeProcess,
           TaskType.AnsibleClusterServerCtl,
           TaskType.UpdateNodeProcess,
-          TaskType.WaitForServer,
-          TaskType.ChangeMasterConfig,
-          TaskType.AnsibleConfigureServers,
-          TaskType.AnsibleClusterServerCtl,
-          TaskType.UpdateNodeProcess,
-          TaskType.WaitForServer,
+          TaskType.WaitForServer, // tServer
+          TaskType.WaitForServer, // wait for postgres to be up
           TaskType.SwamperTargetsFileUpdate,
           TaskType.ModifyBlackList,
-          TaskType.WaitForLoadBalance,
+          TaskType.WaitForTServerHeartBeats,
+          TaskType.AnsibleConfigureServers, // add Master
           TaskType.AnsibleConfigureServers,
           TaskType.SetFlagInMemory,
-          TaskType.AnsibleConfigureServers,
           TaskType.SetFlagInMemory,
           TaskType.SetNodeState,
           TaskType.UniverseUpdateSucceeded);
 
   private static final List<JsonNode> WITH_MASTER_UNDER_REPLICATED_RESULTS =
       ImmutableList.of(
+          Json.toJson(ImmutableMap.of()),
+          Json.toJson(ImmutableMap.of()),
+          Json.toJson(ImmutableMap.of()),
+          Json.toJson(ImmutableMap.of()),
           Json.toJson(ImmutableMap.of("state", "Adding")),
           Json.toJson(ImmutableMap.of()),
-          Json.toJson(ImmutableMap.of("state", "ToJoinCluster")),
+          Json.toJson(ImmutableMap.of()),
+          Json.toJson(ImmutableMap.of()),
+          Json.toJson(ImmutableMap.of()),
+          Json.toJson(ImmutableMap.of()),
+          Json.toJson(ImmutableMap.of()),
+          Json.toJson(ImmutableMap.of()),
+          Json.toJson(ImmutableMap.of()),
+          Json.toJson(ImmutableMap.of()),
+          Json.toJson(ImmutableMap.of()),
+          Json.toJson(ImmutableMap.of()),
+          Json.toJson(ImmutableMap.of()),
           Json.toJson(ImmutableMap.of()),
           Json.toJson(ImmutableMap.of("process", "master", "command", "start")),
+          Json.toJson(ImmutableMap.of()),
+          Json.toJson(ImmutableMap.of()),
+          Json.toJson(ImmutableMap.of()),
           Json.toJson(ImmutableMap.of("processType", "MASTER", "isAdd", true)),
-          Json.toJson(ImmutableMap.of()),
-          Json.toJson(ImmutableMap.of()),
-          Json.toJson(ImmutableMap.of()),
           Json.toJson(ImmutableMap.of("process", "tserver", "command", "start")),
           Json.toJson(ImmutableMap.of("processType", "TSERVER", "isAdd", true)),
+          Json.toJson(ImmutableMap.of()),
           Json.toJson(ImmutableMap.of()),
           Json.toJson(ImmutableMap.of()),
           Json.toJson(ImmutableMap.of()),
@@ -278,24 +389,48 @@ public class AddNodeToUniverseTest extends UniverseModifyBaseTest {
       boolean isNodeDecomissioned,
       boolean masterUnderReplicated) {
     int position = 0;
-    List<TaskType> taskSequence = ADD_NODE_TASK_SEQUENCE;
+    List<TaskType> expectedTaskSequence = ADD_NODE_TASK_SEQUENCE;
     List<JsonNode> taskExpectedResults = ADD_NODE_TASK_EXPECTED_RESULTS;
     if (isNodeDecomissioned) {
-      taskSequence = ADD_NODE_TASK_DECOMISSIONED_NODE_SEQUENCE;
+      expectedTaskSequence = ADD_NODE_TASK_DECOMISSIONED_NODE_SEQUENCE;
       taskExpectedResults = ADD_NODE_TASK_DECOMISSIONED_NODE_EXPECTED_RESULTS;
     } else if (masterUnderReplicated) {
-      taskSequence = WITH_MASTER_UNDER_REPLICATED;
+      expectedTaskSequence = WITH_MASTER_UNDER_REPLICATED;
       taskExpectedResults = WITH_MASTER_UNDER_REPLICATED_RESULTS;
     }
-    for (TaskType taskType : taskSequence) {
+    for (TaskType expectedTaskType : expectedTaskSequence) {
       List<TaskInfo> tasks = subTasksByPosition.get(position);
-      assertEquals("At position: " + position, taskType, tasks.get(0).getTaskType());
+      // For some weird reason, the error interchanges expected and actual if I do not put expected
+      // parameter later.
+      assertEquals("At position: " + position, tasks.get(0).getTaskType(), expectedTaskType);
       JsonNode expectedResults = taskExpectedResults.get(position);
       List<JsonNode> taskDetails =
-          tasks.stream().map(TaskInfo::getTaskDetails).collect(Collectors.toList());
-      assertJsonEqual(expectedResults, taskDetails.get(0));
+          tasks.stream().map(TaskInfo::getTaskParams).collect(Collectors.toList());
+      assertJsonEqual(
+          "At position: " + position + " taskType " + expectedTaskType,
+          expectedResults,
+          taskDetails.get(0));
       position++;
     }
+  }
+
+  private void verifyMasterAddressUpdateAffectedNodes(
+      Map<Integer, List<TaskInfo>> subTasksByPosition, int expectedTotalNodes) {
+    int expectedSubTaskMatchCount = 2;
+    for (Map.Entry<Integer, List<TaskInfo>> entry : subTasksByPosition.entrySet()) {
+      if (entry.getValue().stream().anyMatch(t -> t.getTaskType() == TaskType.SetFlagInMemory)) {
+        JsonNode node = entry.getValue().get(0).getTaskParams().get("serverType");
+        assertTrue(node != null && !node.isNull());
+        if (node.asText().equalsIgnoreCase("TSERVER")) {
+          assertEquals(expectedTotalNodes, entry.getValue().size());
+          expectedSubTaskMatchCount--;
+        } else if (node.asText().equalsIgnoreCase("MASTER")) {
+          assertEquals(expectedTotalNodes, entry.getValue().size());
+          expectedSubTaskMatchCount--;
+        }
+      }
+    }
+    assertEquals(0, expectedSubTaskMatchCount);
   }
 
   @Test
@@ -303,15 +438,18 @@ public class AddNodeToUniverseTest extends UniverseModifyBaseTest {
   public void testAddNodeSuccess(boolean isHAConfig) throws Exception {
 
     if (isHAConfig) {
+      SettableRuntimeConfigFactory factory =
+          app.injector().instanceOf(SettableRuntimeConfigFactory.class);
+      factory.globalRuntimeConf().setValue("yb.universe_version_check_mode", HA_ONLY.name());
       HighAvailabilityConfig.create("clusterKey");
     }
     mockWaits(mockClient, 3);
     when(mockYBClient.getClient(any(), any())).thenReturn(mockClient);
     when(mockYBClient.getClientWithConfig(any())).thenReturn(mockClient);
-    TaskInfo taskInfo = submitTask(defaultUniverse.universeUUID, DEFAULT_NODE_NAME, 3);
+    TaskInfo taskInfo = submitTask(defaultUniverse.getUniverseUUID(), DEFAULT_NODE_NAME, 3);
     assertEquals(Success, taskInfo.getTaskState());
 
-    verify(mockNodeManager, times(4)).nodeCommand(any(), any());
+    verify(mockNodeManager, times(12)).nodeCommand(any(), any());
     List<TaskInfo> subTasks = taskInfo.getSubTasks();
     Map<Integer, List<TaskInfo>> subTasksByPosition =
         subTasks.stream().collect(Collectors.groupingBy(TaskInfo::getPosition));
@@ -320,10 +458,10 @@ public class AddNodeToUniverseTest extends UniverseModifyBaseTest {
     if (isHAConfig) {
       // In HA config mode, we expect any save of universe details to result in
       // a bump on the cluster config version. The actual number depends on the
-      // number of invocations of saveUniverseDetails so it can vary but the
+      // number of invocations of saveUniverseDetails, so it can vary but the
       // important thing is that it is much more than the other case.
       // 7 version increments + 1 modify blacklist.
-      verify(mockClient, times(8)).changeMasterClusterConfig(any());
+      verify(mockClient, times(13)).changeMasterClusterConfig(any());
     } else {
       verify(mockClient, times(1)).changeMasterClusterConfig(any());
     }
@@ -333,10 +471,10 @@ public class AddNodeToUniverseTest extends UniverseModifyBaseTest {
   public void testAddNodeOnPremSuccess() throws Exception {
     mockWaits(mockClient, 3);
     TaskInfo taskInfo =
-        submitTask(onPremUniverse.universeUUID, onPremProvider, DEFAULT_NODE_NAME, 3);
+        submitTask(onPremUniverse.getUniverseUUID(), onPremProvider, DEFAULT_NODE_NAME, 3);
     assertEquals(Success, taskInfo.getTaskState());
 
-    verify(mockNodeManager, times(4)).nodeCommand(any(), any());
+    verify(mockNodeManager, times(12)).nodeCommand(any(), any());
     List<TaskInfo> subTasks = taskInfo.getSubTasks();
     Map<Integer, List<TaskInfo>> subTasksByPosition =
         subTasks.stream().collect(Collectors.groupingBy(TaskInfo::getPosition));
@@ -348,10 +486,10 @@ public class AddNodeToUniverseTest extends UniverseModifyBaseTest {
     mockWaits(mockClient, 4);
     decomissionOnPremNode(DEFAULT_NODE_NAME);
     TaskInfo taskInfo =
-        submitTask(onPremUniverse.universeUUID, onPremProvider, DEFAULT_NODE_NAME, 4);
+        submitTask(onPremUniverse.getUniverseUUID(), onPremProvider, DEFAULT_NODE_NAME, 4);
     assertEquals(Success, taskInfo.getTaskState());
 
-    verify(mockNodeManager, times(8)).nodeCommand(any(), any());
+    verify(mockNodeManager, times(11)).nodeCommand(any(), any());
     List<TaskInfo> subTasks = taskInfo.getSubTasks();
     Map<Integer, List<TaskInfo>> subTasksByPosition =
         subTasks.stream().collect(Collectors.groupingBy(TaskInfo::getPosition));
@@ -364,41 +502,58 @@ public class AddNodeToUniverseTest extends UniverseModifyBaseTest {
     preflightResponse.message = "{\"test\": false}";
     decomissionOnPremNode(DEFAULT_NODE_NAME);
     TaskInfo taskInfo =
-        submitTask(onPremUniverse.universeUUID, onPremProvider, DEFAULT_NODE_NAME, 4);
+        submitTask(onPremUniverse.getUniverseUUID(), onPremProvider, DEFAULT_NODE_NAME, 4);
     assertEquals(Failure, taskInfo.getTaskState());
 
     verify(mockNodeManager, times(1)).nodeCommand(any(), any());
     assertThat(
-        taskInfo.getErrorMessage(),
-        containsString("failed preflight check. Error: {\"test\": false}"));
+        taskInfo.getSubTasks().stream()
+            .filter(t -> t.getTaskType() == TaskType.PreflightNodeCheck)
+            .findFirst()
+            .get()
+            .getErrorMessage(),
+        containsString(
+            "Failed preflight checks for node host-n1. Code: 1. Output: {\"test\": false}"));
 
-    NodeInstance instance = NodeInstance.getByName(DEFAULT_NODE_NAME);
-    assertFalse(instance.isInUse());
+    // Node must not be reserved on failure.
+    assertFalse(NodeInstance.maybeGetByName(DEFAULT_NODE_NAME).isPresent());
   }
 
   @Test
   public void testAddNodeWithUnderReplicatedMaster() {
+    UniverseModifyBaseTest.mockMasterAndPeerRoles(
+        mockClient, ImmutableList.of("10.0.0.1", "10.0.0.2", "10.0.0.3"));
+
     verify(mockNodeManager, never()).nodeCommand(any(), any());
     Universe.saveDetails(
-        defaultUniverse.universeUUID,
-        getNodeUpdater(DEFAULT_NODE_NAME, node -> node.isMaster = false));
+        defaultUniverse.getUniverseUUID(),
+        getNodeUpdater(
+            DEFAULT_NODE_NAME,
+            node -> {
+              node.isMaster = false;
+              node.isTserver = false;
+            }));
 
-    TaskInfo taskInfo = submitTask(defaultUniverse.universeUUID, DEFAULT_NODE_NAME, 4);
+    TaskInfo taskInfo = submitTask(defaultUniverse.getUniverseUUID(), DEFAULT_NODE_NAME, 4);
     assertEquals(Success, taskInfo.getTaskState());
 
     // 5 calls for setting up the server and then 6 calls for setting the conf files.
-    verify(mockNodeManager, times(12)).nodeCommand(any(), any());
+    verify(mockNodeManager, times(20)).nodeCommand(any(), any());
     List<TaskInfo> subTasks = taskInfo.getSubTasks();
     Map<Integer, List<TaskInfo>> subTasksByPosition =
         subTasks.stream().collect(Collectors.groupingBy(TaskInfo::getPosition));
     assertAddNodeSequence(subTasksByPosition, false, true);
+    verifyMasterAddressUpdateAffectedNodes(subTasksByPosition, 3);
   }
 
   @Test
   public void testAddUnknownNode() {
-    TaskInfo taskInfo = submitTask(defaultUniverse.universeUUID, "host-n9", 3);
+    PlatformServiceException exception =
+        assertThrows(
+            PlatformServiceException.class,
+            () -> submitTask(defaultUniverse.getUniverseUUID(), "host-n9", 3));
+    assertEquals("No node host-n9 is found in universe Test Universe", exception.getMessage());
     verify(mockNodeManager, times(0)).nodeCommand(any(), any());
-    assertEquals(Failure, taskInfo.getTaskState());
   }
 
   @Test
@@ -406,16 +561,16 @@ public class AddNodeToUniverseTest extends UniverseModifyBaseTest {
     Universe universe = createUniverse("Demo");
     universe =
         Universe.saveDetails(
-            universe.universeUUID,
+            universe.getUniverseUUID(),
             ApiUtils.mockUniverseUpdaterWithInactiveAndReadReplicaNodes(false, 1));
     setDefaultGFlags(universe);
 
     // Change one of the nodes' state to removed.
     setDefaultNodeState(universe, NodeState.Removed, DEFAULT_NODE_NAME);
 
-    TaskInfo taskInfo = submitTask(universe.universeUUID, DEFAULT_NODE_NAME, 4);
-    assertEquals(Success, taskInfo.getTaskState());
-    verify(mockNodeManager, times(12)).nodeCommand(any(), any());
+    TaskInfo taskInfo = submitTask(universe.getUniverseUUID(), DEFAULT_NODE_NAME, 4);
+    assertEquals(Failure, taskInfo.getTaskState());
+    verify(mockNodeManager, times(3)).nodeCommand(any(), any());
     List<TaskInfo> subTasks = taskInfo.getSubTasks();
     Map<Integer, List<TaskInfo>> subTasksByPosition =
         subTasks.stream().collect(Collectors.groupingBy(TaskInfo::getPosition));
@@ -427,22 +582,22 @@ public class AddNodeToUniverseTest extends UniverseModifyBaseTest {
     Universe universe = createUniverse("Demo");
     universe =
         Universe.saveDetails(
-            universe.universeUUID,
+            universe.getUniverseUUID(),
             univ -> {
               univ.getUniverseDetails().getPrimaryCluster().userIntent.replicationFactor = 5;
             });
     universe =
         Universe.saveDetails(
-            universe.universeUUID,
+            universe.getUniverseUUID(),
             ApiUtils.mockUniverseUpdaterWithInactiveAndReadReplicaNodes(true, 1));
     setDefaultGFlags(universe);
 
     // Change one of the nodes' state to removed.
     setDefaultNodeState(universe, NodeState.Removed, "yb-tserver-0");
 
-    TaskInfo taskInfo = submitTask(universe.universeUUID, "yb-tserver-0", 5);
-    assertEquals(Success, taskInfo.getTaskState());
-    verify(mockNodeManager, times(4)).nodeCommand(any(), any());
+    TaskInfo taskInfo = submitTask(universe.getUniverseUUID(), "yb-tserver-0", 5);
+    assertEquals(Failure, taskInfo.getTaskState());
+    verify(mockNodeManager, times(3)).nodeCommand(any(), any());
     List<TaskInfo> subTasks = taskInfo.getSubTasks();
     Map<Integer, List<TaskInfo>> subTasksByPosition =
         subTasks.stream().collect(Collectors.groupingBy(TaskInfo::getPosition));
@@ -466,27 +621,51 @@ public class AddNodeToUniverseTest extends UniverseModifyBaseTest {
             readOnlyClusters.get(0).userIntent.tserverGFlags = gflags;
           }
         };
-    Universe.saveDetails(universe.universeUUID, updater);
-  }
-
-  @Test
-  public void testAddNodeToJoinClusterState() {
-    mockWaits(mockClient, 3);
-    when(mockYBClient.getClient(any(), any())).thenReturn(mockClient);
-    when(mockYBClient.getClientWithConfig(any())).thenReturn(mockClient);
-    when(mockClient.waitForLoadBalance(anyLong(), anyInt())).thenReturn(false);
-    TaskInfo taskInfo = submitTask(defaultUniverse.universeUUID, DEFAULT_NODE_NAME, 3);
-    assertEquals(Failure, taskInfo.getTaskState());
-
-    Universe universe = Universe.getOrBadRequest(defaultUniverse.universeUUID);
-    assertEquals(NodeDetails.NodeState.ToJoinCluster, universe.getNode(DEFAULT_NODE_NAME).state);
+    Universe.saveDetails(universe.getUniverseUUID(), updater);
   }
 
   @Test
   public void testAddNodeAllowedState() {
     Set<NodeState> allowedStates = NodeState.allowedStatesForAction(NodeActionType.ADD);
     Set<NodeState> expectedStates =
-        ImmutableSet.of(NodeState.Removed, NodeState.BeingDecommissioned, NodeState.Decommissioned);
+        ImmutableSet.of(
+            NodeState.Removed,
+            NodeState.Decommissioned,
+            NodeState.ToBeAdded,
+            NodeState.InstanceCreated,
+            NodeState.ServerSetup,
+            NodeState.ToJoinCluster,
+            NodeState.Provisioned,
+            NodeState.SoftwareInstalled,
+            NodeState.Adding);
     assertEquals(expectedStates, allowedStates);
+  }
+
+  @Test
+  public void testAddNodeRetries() {
+    // This is set up with under-replicated master to execute master addition flow.
+    UniverseModifyBaseTest.mockMasterAndPeerRoles(
+        mockClient, ImmutableList.of("10.0.0.1", "10.0.0.2", "10.0.0.3"));
+    verify(mockNodeManager, never()).nodeCommand(any(), any());
+    Universe universe =
+        Universe.saveDetails(
+            defaultUniverse.getUniverseUUID(),
+            getNodeUpdater(DEFAULT_NODE_NAME, node -> node.isMaster = false));
+
+    NodeTaskParams taskParams = new NodeTaskParams();
+    taskParams.clusters.addAll(universe.getUniverseDetails().clusters);
+    taskParams.expectedUniverseVersion = universe.getVersion();
+    taskParams.nodeName = DEFAULT_NODE_NAME;
+    taskParams.setUniverseUUID(universe.getUniverseUUID());
+    taskParams.azUuid = AvailabilityZone.getByCode(defaultProvider, AZ_CODE).getUuid();
+    taskParams.creatingUser = defaultUser;
+    TestUtils.setFakeHttpContext(defaultUser);
+    super.verifyTaskRetries(
+        defaultCustomer,
+        CustomerTask.TaskType.Add,
+        CustomerTask.TargetType.Universe,
+        universe.getUniverseUUID(),
+        TaskType.AddNodeToUniverse,
+        taskParams);
   }
 }

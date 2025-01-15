@@ -9,19 +9,24 @@ import com.yugabyte.yw.models.helpers.CommonUtils;
 import io.ebean.Finder;
 import io.ebean.Model;
 import io.ebean.annotation.Transactional;
+import jakarta.persistence.EmbeddedId;
+import jakarta.persistence.Entity;
 import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
-import javax.persistence.EmbeddedId;
-import javax.persistence.Entity;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 @Entity
 public class RuntimeConfigEntry extends Model {
+
+  private static final Finder<UUID, RuntimeConfigEntry> find =
+      new Finder<UUID, RuntimeConfigEntry>(RuntimeConfigEntry.class) {};
+
   private static final Logger LOG = LoggerFactory.getLogger(RuntimeConfigEntry.class);
   private static final Set<String> sensitiveKeys =
       ImmutableSet.of("yb.security.ldap.ldap_service_account_password", "yb.security.secret");
@@ -60,6 +65,24 @@ public class RuntimeConfigEntry extends Model {
   @Deprecated
   public static RuntimeConfigEntry get(UUID scope, String path) {
     return findOne.byId(new RuntimeConfigEntryKey(scope, path));
+  }
+
+  public static Optional<RuntimeConfigEntry> maybeGet(UUID scope, String path) {
+    return RuntimeConfigEntry.find
+        .query()
+        .where()
+        .eq("scope_uuid", scope)
+        .eq("path", path)
+        .findOneOrEmpty();
+  }
+
+  public static List<RuntimeConfigEntry> get(UUID scope, List<String> paths) {
+    return RuntimeConfigEntry.find
+        .query()
+        .where()
+        .eq("scope_uuid", scope)
+        .in("path", paths)
+        .findList();
   }
 
   public static RuntimeConfigEntry getOrBadRequest(UUID scope, String path) {
@@ -112,22 +135,24 @@ public class RuntimeConfigEntry extends Model {
 
   @Transactional
   public static RuntimeConfigEntry upsert(Customer customer, String path, String value) {
-    return upsertInternal(customer.uuid, path, value, () -> ScopedRuntimeConfig.ensure(customer));
+    return upsertInternal(
+        customer.getUuid(), path, value, () -> ScopedRuntimeConfig.ensure(customer));
   }
 
   @Transactional
   public static RuntimeConfigEntry upsert(Universe universe, String path, String value) {
     return upsertInternal(
-        universe.universeUUID, path, value, () -> ScopedRuntimeConfig.ensure(universe));
+        universe.getUniverseUUID(), path, value, () -> ScopedRuntimeConfig.ensure(universe));
   }
 
   @Transactional
   public static RuntimeConfigEntry upsert(Provider provider, String path, String value) {
-    return upsertInternal(provider.uuid, path, value, () -> ScopedRuntimeConfig.ensure(provider));
+    return upsertInternal(
+        provider.getUuid(), path, value, () -> ScopedRuntimeConfig.ensure(provider));
   }
 
   @Override
   public String toString() {
-    return "RuntimeConfigEntry{" + "idKey=" + idKey + ", value='" + value + '\'' + '}';
+    return "RuntimeConfigEntry{idKey=" + idKey + ", value='" + value + "\'}";
   }
 }

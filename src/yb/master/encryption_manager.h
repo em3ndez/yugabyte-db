@@ -11,8 +11,7 @@
 // under the License.
 //
 
-#ifndef YB_MASTER_ENCRYPTION_MANAGER_H
-#define YB_MASTER_ENCRYPTION_MANAGER_H
+#pragma once
 
 #include <unordered_set>
 
@@ -45,32 +44,36 @@ class EncryptionManager {
 
   EncryptionManager();
 
-  CHECKED_STATUS AddUniverseKeys(const AddUniverseKeysRequestPB* req,
-                                 AddUniverseKeysResponsePB* resp);
+  Status AddUniverseKeys(const AddUniverseKeysRequestPB* req,
+                         AddUniverseKeysResponsePB* resp);
 
-  CHECKED_STATUS GetUniverseKeyRegistry(const GetUniverseKeyRegistryRequestPB* req,
-                                        GetUniverseKeyRegistryResponsePB* resp);
+  Status GetUniverseKeyRegistry(const GetUniverseKeyRegistryRequestPB* req,
+                                GetUniverseKeyRegistryResponsePB* resp);
 
-  CHECKED_STATUS HasUniverseKeyInMemory(const HasUniverseKeyInMemoryRequestPB* req,
-                                        HasUniverseKeyInMemoryResponsePB* resp);
+  Status GetFullUniverseKeyRegistry(const EncryptionInfoPB& encryption_info,
+                                    GetFullUniverseKeyRegistryResponsePB* resp);
 
-  CHECKED_STATUS ChangeEncryptionInfo(const ChangeEncryptionInfoRequestPB* req,
-                                      EncryptionInfoPB* encryption_info);
 
-  CHECKED_STATUS IsEncryptionEnabled(const EncryptionInfoPB& encryption_info,
-                                     IsEncryptionEnabledResponsePB* resp);
+  Status HasUniverseKeyInMemory(const HasUniverseKeyInMemoryRequestPB* req,
+                                HasUniverseKeyInMemoryResponsePB* resp);
+
+  Status ChangeEncryptionInfo(const ChangeEncryptionInfoRequestPB* req,
+                              EncryptionInfoPB* encryption_info);
+
+  Status IsEncryptionEnabled(const EncryptionInfoPB& encryption_info,
+                             IsEncryptionEnabledResponsePB* resp);
 
   EncryptionState GetEncryptionState(
       const EncryptionInfoPB& encryption_info, IsEncryptionEnabledResponsePB* encryption_resp);
 
-  CHECKED_STATUS FillHeartbeatResponseEncryption(const EncryptionInfoPB& encryption_info,
-                                                 TSHeartbeatResponsePB* resp);
+  Status FillHeartbeatResponseEncryption(const EncryptionInfoPB& encryption_info,
+                                         TSHeartbeatResponsePB* resp);
 
-  CHECKED_STATUS GetUniverseKeyRegistry(rpc::ProxyCache* proxy_cache);
+  Status GetUniverseKeyRegistry(rpc::ProxyCache* proxy_cache);
 
   void PopulateUniverseKeys(const encryption::UniverseKeysPB& universe_key_registry);
 
-  CHECKED_STATUS AddPeersToGetUniverseKeyFrom(const HostPortSet& hps);
+  Status AddPeersToGetUniverseKeyFrom(const HostPortSet& hps);
 
  private:
   Result<std::string> GetLatestUniverseKey(const EncryptionInfoPB* encryption_info);
@@ -90,5 +93,3 @@ class EncryptionManager {
 
 } // namespace master
 } // namespace yb
-
-#endif // YB_MASTER_ENCRYPTION_MANAGER_H

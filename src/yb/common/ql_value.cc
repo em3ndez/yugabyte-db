@@ -15,11 +15,12 @@
 
 #include "yb/common/ql_value.h"
 
-#include <glog/logging.h>
+#include "yb/util/logging.h"
 
 #include "yb/common/jsonb.h"
 #include "yb/common/ql_protocol_util.h"
 #include "yb/common/ql_type.h"
+#include "yb/common/schema.h"
 #include "yb/common/value.messages.h"
 
 #include "yb/gutil/casts.h"
@@ -33,11 +34,12 @@
 #include "yb/util/status_format.h"
 #include "yb/util/status_log.h"
 #include "yb/util/varint.h"
+#include "yb/util/flags.h"
 
 using yb::operator"" _MB;
 
 // Maximumum value size is 64MB
-DEFINE_int32(yql_max_value_size, 64_MB,
+DEFINE_UNKNOWN_int32(yql_max_value_size, 64_MB,
              "Maximum size of a value in the Yugabyte Query Layer");
 
 namespace yb {
@@ -45,6 +47,7 @@ namespace yb {
 using std::string;
 using std::shared_ptr;
 using std::to_string;
+using std::vector;
 using util::Decimal;
 using common::Jsonb;
 
@@ -54,6 +57,9 @@ static int GenericCompare(const T& lhs, const T& rhs) {
   if (lhs > rhs) return 1;
   return 0;
 }
+
+template <class PB>
+int TupleCompare(const PB& lhs, const PB& rhs);
 
 //------------------------- instance methods for abstract QLValue class -----------------------
 
@@ -109,6 +115,8 @@ int QLValue::CompareTo(const QLValue& other) const {
     case InternalType::kFrozenValue: {
       return Compare(frozen_value(), other.frozen_value());
     }
+    case InternalType::kTupleValue:
+      return TupleCompare(tuple_value(), other.tuple_value());
     case InternalType::kMapValue: FALLTHROUGH_INTENDED;
     case InternalType::kSetValue: FALLTHROUGH_INTENDED;
     case InternalType::kListValue:
@@ -240,6 +248,7 @@ void DoAppendToKey(const PB& value_pb, string* bytes) {
     case InternalType::kMapValue: FALLTHROUGH_INTENDED;
     case InternalType::kSetValue: FALLTHROUGH_INTENDED;
     case InternalType::kListValue: FALLTHROUGH_INTENDED;
+    case InternalType::kTupleValue: FALLTHROUGH_INTENDED;
     case InternalType::kJsonbValue:
       LOG(FATAL) << "Runtime error: This datatype("
                  << int(value_pb.value_case())
@@ -285,30 +294,30 @@ Status QLValue::Deserialize(
   }
 
   switch (ql_type->main()) {
-    case INT8:
+    case DataType::INT8:
       return CQLDeserializeNum(
           len, Load8, static_cast<void (QLValue::*)(int8_t)>(&QLValue::set_int8_value), data);
-    case INT16:
+    case DataType::INT16:
       return CQLDeserializeNum(
           len, NetworkByteOrder::Load16,
           static_cast<void (QLValue::*)(int16_t)>(&QLValue::set_int16_value), data);
-    case INT32:
+    case DataType::INT32:
       return CQLDeserializeNum(
           len, NetworkByteOrder::Load32,
           static_cast<void (QLValue::*)(int32_t)>(&QLValue::set_int32_value), data);
-    case INT64:
+    case DataType::INT64:
       return CQLDeserializeNum(
           len, NetworkByteOrder::Load64,
           static_cast<void (QLValue::*)(int64_t)>(&QLValue::set_int64_value), data);
-    case FLOAT:
+    case DataType::FLOAT:
       return CQLDeserializeFloat(
           len, NetworkByteOrder::Load32,
           static_cast<void (QLValue::*)(float)>(&QLValue::set_float_value), data);
-    case DOUBLE:
+    case DataType::DOUBLE:
       return CQLDeserializeFloat(
           len, NetworkByteOrder::Load64,
           static_cast<void (QLValue::*)(double)>(&QLValue::set_double_value), data);
-    case DECIMAL: {
+    case DataType::DECIMAL: {
       string value;
       RETURN_NOT_OK(CQLDecodeBytes(len, data, &value));
       Decimal decimal;
@@ -316,25 +325,25 @@ Status QLValue::Deserialize(
       set_decimal_value(decimal.EncodeToComparable());
       return Status::OK();
     }
-    case VARINT: {
+    case DataType::VARINT: {
       string value;
       RETURN_NOT_OK(CQLDecodeBytes(len, data, &value));
-      util::VarInt varint;
+      VarInt varint;
       RETURN_NOT_OK(varint.DecodeFromTwosComplement(value));
       set_varint_value(varint);
       return Status::OK();
     }
-    case STRING:
+    case DataType::STRING:
       return CQLDecodeBytes(len, data, mutable_string_value());
-    case BOOL: {
+    case DataType::BOOL: {
       uint8_t value = 0;
       RETURN_NOT_OK(CQLDecodeNum(len, Load8, data, &value));
       set_bool_value(value != 0);
       return Status::OK();
     }
-    case BINARY:
+    case DataType::BINARY:
       return CQLDecodeBytes(len, data, mutable_binary_value());
-    case TIMESTAMP: {
+    case DataType::TIMESTAMP: {
       int64_t value = 0;
       RETURN_NOT_OK(CQLDecodeNum(len, NetworkByteOrder::Load64, data, &value));
       value = DateTime::AdjustPrecision(value,
@@ -343,19 +352,19 @@ Status QLValue::Deserialize(
       set_timestamp_value(value);
       return Status::OK();
     }
-    case DATE: {
+    case DataType::DATE: {
       uint32_t value = 0;
       RETURN_NOT_OK(CQLDecodeNum(len, NetworkByteOrder::Load32, data, &value));
       set_date_value(value);
       return Status::OK();
     }
-    case TIME: {
+    case DataType::TIME: {
       int64_t value = 0;
       RETURN_NOT_OK(CQLDecodeNum(len, NetworkByteOrder::Load64, data, &value));
       set_time_value(value);
       return Status::OK();
     }
-    case INET: {
+    case DataType::INET: {
       string bytes;
       RETURN_NOT_OK(CQLDecodeBytes(len, data, &bytes));
       InetAddress addr;
@@ -363,7 +372,7 @@ Status QLValue::Deserialize(
       set_inetaddress_value(addr);
       return Status::OK();
     }
-    case JSONB: {
+    case DataType::JSONB: {
       string json;
       RETURN_NOT_OK(CQLDecodeBytes(len, data, &json));
       Jsonb jsonb;
@@ -371,13 +380,13 @@ Status QLValue::Deserialize(
       set_jsonb_value(jsonb.MoveSerializedJsonb());
       return Status::OK();
     }
-    case UUID: {
+    case DataType::UUID: {
       string bytes;
       RETURN_NOT_OK(CQLDecodeBytes(len, data, &bytes));
       set_uuid_value(VERIFY_RESULT(Uuid::FromSlice(bytes)));
       return Status::OK();
     }
-    case TIMEUUID: {
+    case DataType::TIMEUUID: {
       string bytes;
       RETURN_NOT_OK(CQLDecodeBytes(len, data, &bytes));
       Uuid uuid = VERIFY_RESULT(Uuid::FromSlice(bytes));
@@ -385,7 +394,7 @@ Status QLValue::Deserialize(
       set_timeuuid_value(uuid);
       return Status::OK();
     }
-    case MAP: {
+    case DataType::MAP: {
       const shared_ptr<QLType>& keys_type = ql_type->param_type(0);
       const shared_ptr<QLType>& values_type = ql_type->param_type(1);
       set_map_value();
@@ -403,7 +412,7 @@ Status QLValue::Deserialize(
       }
       return Status::OK();
     }
-    case SET: {
+    case DataType::SET: {
       const shared_ptr<QLType>& elems_type = ql_type->param_type(0);
       set_set_value();
       int32_t nr_elems = 0;
@@ -416,7 +425,7 @@ Status QLValue::Deserialize(
       }
       return Status::OK();
     }
-    case LIST: {
+    case DataType::LIST: {
       const shared_ptr<QLType>& elems_type = ql_type->param_type(0);
       set_list_value();
       int32_t nr_elems = 0;
@@ -430,7 +439,7 @@ Status QLValue::Deserialize(
       return Status::OK();
     }
 
-    case USER_DEFINED_TYPE: {
+    case DataType::USER_DEFINED_TYPE: {
       set_map_value();
       int fields_size = narrow_cast<int>(ql_type->udtype_field_names().size());
       for (int i = 0; i < fields_size; i++) {
@@ -445,11 +454,11 @@ Status QLValue::Deserialize(
       return Status::OK();
     }
 
-    case FROZEN: {
+    case DataType::FROZEN: {
       set_frozen_value();
       const auto& type = ql_type->param_type(0);
       switch (type->main()) {
-        case MAP: {
+        case DataType::MAP: {
           std::map<QLValue, QLValue> map_values;
           const shared_ptr<QLType> &keys_type = type->param_type(0);
           const shared_ptr<QLType> &values_type = type->param_type(1);
@@ -472,7 +481,7 @@ Status QLValue::Deserialize(
 
           return Status::OK();
         }
-        case SET: {
+        case DataType::SET: {
           const shared_ptr<QLType> &elems_type = type->param_type(0);
           int32_t nr_elems = 0;
 
@@ -489,7 +498,7 @@ Status QLValue::Deserialize(
           }
           return Status::OK();
         }
-        case LIST: {
+        case DataType::LIST: {
           const shared_ptr<QLType> &elems_type = type->param_type(0);
           int32_t nr_elems = 0;
           RETURN_NOT_OK(CQLDecodeNum(sizeof(nr_elems), NetworkByteOrder::Load32, data, &nr_elems));
@@ -502,7 +511,7 @@ Status QLValue::Deserialize(
           return Status::OK();
         }
 
-        case USER_DEFINED_TYPE: {
+        case DataType::USER_DEFINED_TYPE: {
           const int fields_size = narrow_cast<int>(type->udtype_field_names().size());
           for (int i = 0; i < fields_size; i++) {
             // TODO (mihnea) default to null if value missing (CQL behavior)
@@ -517,6 +526,19 @@ Status QLValue::Deserialize(
 
       }
       break;
+    }
+
+    case DataType::TUPLE: {
+      set_tuple_value();
+      size_t num_elems = ql_type->params().size();
+      for (size_t i = 0; i < num_elems; ++i) {
+        const shared_ptr<QLType>& elem_type = ql_type->param_type(i);
+        QLValue elem;
+        RETURN_NOT_OK(elem.Deserialize(elem_type, client, data));
+        RETURN_NOT_OK(CheckForNull(elem));
+        *add_tuple_elem() = std::move(*elem.mutable_value());
+      }
+      return Status::OK();
     }
 
     QL_UNSUPPORTED_TYPES_IN_SWITCH:
@@ -635,6 +657,20 @@ string QLValue::ToValueString(const QuotesType quotes_type) const {
       }
     }
 
+    case InternalType::kTupleValue: {
+      std::stringstream ss;
+      QLSeqValuePB tuple = tuple_value();
+      ss << "(";
+      for (int i = 0; i < tuple.elems_size(); i++) {
+        if (i > 0) {
+          ss << ", ";
+        }
+        ss << QLValue(tuple.elems(i)).ToString();
+      }
+      ss << ")";
+      return ss.str();
+    }
+
     case InternalType::VALUE_NOT_SET:
       LOG(FATAL) << "Internal error: value should not be null";
       return "null";
@@ -677,6 +713,7 @@ string QLValue::ToString() const {
     case InternalType::kListValue: res = "list:"; break;
     case InternalType::kFrozenValue: res = "frozen:"; break;
     case InternalType::kVirtualValue: res = ""; break;
+    case InternalType::kTupleValue: res = "tuple:"; break;
 
     case InternalType::VALUE_NOT_SET:
       LOG(FATAL) << "Internal error: value should not be null";
@@ -720,17 +757,17 @@ Uuid QLValue::uuid_value(const LWQLValuePB& pb) {
   return CHECK_RESULT(Uuid::FromSlice(uuid_value_pb(pb)));
 }
 
-util::VarInt QLValue::varint_value(const QLValuePB& pb) {
+VarInt QLValue::varint_value(const QLValuePB& pb) {
   CHECK(pb.has_varint_value()) << "Value: " << pb.ShortDebugString();
-  util::VarInt varint;
+  VarInt varint;
   size_t num_decoded_bytes;
   CHECK_OK(varint.DecodeFromComparable(pb.varint_value(), &num_decoded_bytes));
   return varint;
 }
 
-util::VarInt QLValue::varint_value(const LWQLValuePB& pb) {
+VarInt QLValue::varint_value(const LWQLValuePB& pb) {
   CHECK(pb.has_varint_value()) << "Value: " << pb.ShortDebugString();
-  util::VarInt varint;
+  VarInt varint;
   size_t num_decoded_bytes;
   CHECK_OK(varint.DecodeFromComparable(pb.varint_value(), &num_decoded_bytes));
   return varint;
@@ -762,7 +799,7 @@ void QLValue::set_timeuuid_value(const Uuid& val) {
 }
 
 template<typename num_type, typename data_type>
-CHECKED_STATUS QLValue::CQLDeserializeNum(
+Status QLValue::CQLDeserializeNum(
     size_t len, data_type (*converter)(const void*), void (QLValue::*setter)(num_type),
     Slice* data) {
   num_type value = 0;
@@ -772,7 +809,7 @@ CHECKED_STATUS QLValue::CQLDeserializeNum(
 }
 
 template<typename float_type, typename data_type>
-CHECKED_STATUS QLValue::CQLDeserializeFloat(
+Status QLValue::CQLDeserializeFloat(
     size_t len, data_type (*converter)(const void*), void (QLValue::*setter)(float_type),
     Slice* data) {
   float_type value = 0.0;
@@ -909,6 +946,29 @@ bool BothNull(const QLValuePB& lhs, const QLValue& rhs) {
   return IsNull(lhs) && rhs.IsNull();
 }
 
+template <class PB>
+int TupleCompare(const PB& lhs_tuple, const PB& rhs_tuple) {
+  DCHECK(lhs_tuple.elems().size() == rhs_tuple.elems().size());
+  auto li = lhs_tuple.elems().begin();
+  auto ri = rhs_tuple.elems().begin();
+  for (auto i = lhs_tuple.elems().size(); i > 0; --i, ++li, ++ri) {
+    if (IsNull(*li)) {
+      if (!IsNull(*ri)) {
+        return -1;
+      }
+    } else {
+      if (IsNull(*ri)) {
+        return 1;
+      }
+      int result = Compare(*li, *ri);
+      if (result != 0) {
+        return result;
+      }
+    }
+  }
+  return 0;
+}
+
 template <class Seq>
 int SeqCompare(const Seq& lhs, const Seq& rhs) {
   // Compare elements one by one.
@@ -986,6 +1046,8 @@ int DoCompare(const PB& lhs, const PB& rhs) {
       return GenericCompare(QLValue::timeuuid_value(lhs), QLValue::timeuuid_value(rhs));
     case QLValuePB::kFrozenValue:
       return SeqCompare(lhs.frozen_value(), rhs.frozen_value());
+    case QLValuePB::kTupleValue:
+      return TupleCompare(lhs.tuple_value(), rhs.tuple_value());
     case QLValuePB::kMapValue: FALLTHROUGH_INTENDED;
     case QLValuePB::kSetValue: FALLTHROUGH_INTENDED;
     case QLValuePB::kListValue:
@@ -1011,7 +1073,6 @@ int DoCompare(const PB& lhs, const PB& rhs) {
   LOG(FATAL) << "Internal error: unknown or unsupported type " << lhs.value_case();
   return 0;
 }
-
 
 int Compare(const QLValuePB& lhs, const QLValuePB& rhs) {
   return DoCompare(lhs, rhs);
@@ -1072,6 +1133,8 @@ int Compare(const QLValuePB& lhs, const QLValue& rhs) {
       return GenericCompare(QLValue::timeuuid_value(lhs), rhs.timeuuid_value());
     case QLValuePB::kFrozenValue:
       return Compare(lhs.frozen_value(), rhs.frozen_value());
+    case QLValuePB::kTupleValue:
+      return TupleCompare(lhs.tuple_value(), rhs.tuple_value());
     case QLValuePB::kMapValue: FALLTHROUGH_INTENDED;
     case QLValuePB::kSetValue: FALLTHROUGH_INTENDED;
     case QLValuePB::kListValue:

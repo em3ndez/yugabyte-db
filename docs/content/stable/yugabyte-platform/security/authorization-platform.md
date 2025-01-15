@@ -1,60 +1,83 @@
 ---
-title: Authorization platform
-headerTitle: Authorization platform
-linkTitle: Authorization platform
-description: Use the role-based access control (RBAC) model in the platform to manage users and roles.
+title: Database authorization
+headerTitle: Database authorization
+linkTitle: Database authorization
+description: Use the role-based access control (RBAC) to manage universe users and roles.
 menu:
-  stable:
+  stable_yugabyte-platform:
     parent: security
     identifier: authorization-platform
-    weight: 27
-isTocNested: true
-showAsideToc: true
+    weight: 30
+type: docs
 ---
 
-The role-based access control (RBAC) model in the platform is a collection of privileges on resources given to roles. Thus, the entire RBAC model is built around roles, resources, and privileges. It is essential to understand these concepts in order to understand the RBAC model.
+When you deploy a universe, you can set up the database admin credentials for YSQL and YCQL, which you use to access the YugabyteDB database installed on your universe. Use this account to:
 
-#### Users
+- add more database users
+- assign privileges to users
+- change your password, or the passwords of other users
 
-A platform user can interact with a platform instance using the UI or through a REST API.
+YugabyteDB uses [role-based access control](../../../secure/authorization/) (RBAC) to manage database authorization. A database user's access is determined by the roles they are assigned. You should grant database users only the privileges that they require.
 
-#### Roles
+(For information on managing access to your YugabyteDB Anywhere instance, refer to [Manage account users](../../administer-yugabyte-platform/anywhere-rbac/).)
 
-A role is a set of predefined permissions within the Yugabyte Platform. These are the available roles:
+## Enable database authorization
 
-* **Super Admin:** The [admin user](../../configure-yugabyte-platform/create-admin-user/) is the first user that is created during the tenant registration. This role has the highest level of privilege that allows all read and write actions on all platform resources. There can be only one Super Admin in a tenant:
-  * Manage all resources - Universe, Nodes, Backups, Restore, Cloud Provider
-  * Manage user access control - Create and Manage users
-* **Admin:** This admin user has the same privilege as a Super Admin.
-* **Backup Admin:** Enables a user to access the backup related tasks:
-  * Manage database backups and restore operations.
-  * Create new backups.
-  * Delete any existing backup or backup schedule.
-  * Edit existing backups.
-  * Read-only permissions for all other resources in the platform.
-* **Read-only:** Enables a user to have read-only viewer permission to the UI and API.
+You enable the YSQL and YCQL endpoints and database authentication when deploying a universe.
 
-#### Create and manage users
+On the **Create Universe > Primary Cluster** page, under **Security Configurations > Authentication Settings**, enable the endpoints and authorization for the APIs you want to use, as shown in the following illustration.
 
-As a Super Admin or Admin, you can invite new users and manage existing users for your tenant on the Users Administration page, which you can reach by selecting the drop-down list (the profile icon) in the top-right corner of the Yugabyte Platform console and then click **Profile**.
+![Enable YSQL and YCQL endpoints](/images/yp/security/enable-endpoints.png)
 
-To invite new users to your tenant:
+Enter the password to use for the default database admin superuser (`yugabyte` for YSQL, and `cassandra` for YCQL).
 
-1. Click on the **Users** tab.
-2. Click **Add user**.
-3. Enter the email addresses, password, and role of who you want to invite.
-4. Click **Submit**.
+You can also enable and disable the endpoints and authorization after deployment. Navigate to your universe, click **Actions**, and choose **Edit YSQL Configuration** or **Edit YCQL Configuration**.
 
-![Add User](/images/yp/authorization-platform/add-user.png)
+Note that for universes deployed using YugabyteDB Anywhere, you can't exclusively [enable authentication using flags](../../../secure/enable-authentication/authentication-ysql/). You must enable and disable authentication using the YugabyteDB Anywhere UI.
 
-Now you can share the new credentials with the new users to log in.
+## Default roles and users
 
-#### To edit existing user roles
+The YugabyteDB database on your universe includes a set of default users and roles in YSQL and YCQL.
 
-1. Click **Actions** for a username to edit user role or delete user.
+### YSQL default roles and users
 
-![alt_text](/images/yp/authorization-platform/actions.png)
+To view the YSQL roles in your universe, enter the following command:
 
-2. You can choose a new role from the **Role** drop-down list.
+```sql
+yugabyte=> \du
+```
 
-![Role drop-down list](/images/yp/authorization-platform/role-drop-down.png)
+```output
+                                     List of roles
+  Role name   |                         Attributes                         | Member of
+--------------+------------------------------------------------------------+-----------
+ postgres     | Superuser, Create role, Create DB, Replication, Bypass RLS | {}
+ yb_db_admin  | No inheritance, Cannot login                               | {}
+ yb_extension | Cannot login                                               | {}
+ yb_fdw       | Cannot login                                               | {}
+ yugabyte     | Superuser, Create role, Create DB, Replication, Bypass RLS | {}
+```
+
+For more information, see [YSQL roles](../../../secure/authorization/rbac-model/#roles).
+
+### YCQL default roles and users
+
+In YCQL, there is a single superuser called `cassandra` used during database creation. For more information, see [YCQL roles](../../../secure/authorization/rbac-model-ycql/#roles).
+
+## Create and manage database users and roles
+
+To manage database users, first [connect to your universe](../../create-deployments/connect-to-universe/).
+
+To create and manage database roles and users (users are roles with login privileges), use the following statements:
+
+| I want to | YSQL Statement | YCQL Statement |
+| :--- | :--- | :--- |
+| Create a user or role. | [CREATE ROLE](../../../api/ysql/the-sql-language/statements/dcl_create_role/) | [CREATE ROLE](../../../api/ycql/ddl_create_role/) |
+| Delete a user or role. | [DROP ROLE](../../../api/ysql/the-sql-language/statements/dcl_drop_role/) | [DROP ROLE](../../../api/ycql/ddl_drop_role/) |
+| Assign privileges to a user or role. | [GRANT](../../../api/ysql/the-sql-language/statements/dcl_grant/) | [GRANT ROLE](../../../api/ycql/ddl_grant_role/) |
+| Remove privileges from a user or role. | [REVOKE](../../../api/ysql/the-sql-language/statements/dcl_revoke/) | [REVOKE ROLE](../../../api/ycql/ddl_revoke_role/) |
+| Change your own or another user's password. | [ALTER ROLE](../../../api/ysql/the-sql-language/statements/dcl_alter_role/) | [ALTER ROLE](../../../api/ycql/ddl_alter_role/) |
+
+## Learn more
+
+- [Manage users and roles in YugabyteDB](../../../secure/authorization/create-roles/)
