@@ -4,11 +4,10 @@ headerTitle: DROP TABLE
 linkTitle: DROP TABLE
 description: Use the DROP TABLE statement to remove a table and all of its data from the database.
 menu:
-  stable:
+  stable_api:
     parent: api-cassandra
     weight: 1270
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 ## Synopsis
@@ -23,7 +22,7 @@ Use the `DROP TABLE` statement to remove a table and all of its data from the da
 
 ### Grammar
 
-```
+```ebnf
 drop_table ::= DROP TABLE [ IF EXISTS ] table_name;
 ```
 
@@ -50,7 +49,7 @@ ycqlsh:example> DROP TABLE users;
 
 - [`ALTER TABLE`](../ddl_alter_table)
 - [`CREATE TABLE`](../ddl_create_table)
-- [`DELETE`](../dml_delete)
+- [`DELETE`](../dml_delete/)
 - [`INSERT`](../dml_insert)
-- [`SELECT`](../dml_select)
-- [`UPDATE`](../dml_update)
+- [`SELECT`](../dml_select/)
+- [`UPDATE`](../dml_update/)

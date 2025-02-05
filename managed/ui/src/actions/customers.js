@@ -1,13 +1,17 @@
 // Copyright (c) YugaByte, Inc.
 
 import axios from 'axios';
-import { IN_DEVELOPMENT_MODE, ROOT_URL, USE_SSO } from '../config';
+import { IN_DEVELOPMENT_MODE, isSSOEnabled, ROOT_URL } from '../config';
 import Cookies from 'js-cookie';
 import { getCustomerEndpoint } from './common';
 
 // Get current user(me) from token in localStorage
 export const VALIDATE_FROM_TOKEN = 'VALIDATE_FROM_TOKEN';
 export const VALIDATE_FROM_TOKEN_RESPONSE = 'VALIDATE_FROM_TOKEN_RESPONSE';
+
+// Get OIDC token
+export const FETCH_OIDC_TOKEN = 'FETCH_OIDC_TOKEN';
+export const FETCH_OIDC_TOKEN_RESPONSE = 'FETCH_OIDC_TOKEN_RESPONSE';
 
 // Sign Up Customer
 export const REGISTER = 'REGISTER';
@@ -17,11 +21,13 @@ export const REGISTER_RESPONSE = 'REGISTER_RESPONSE';
 export const FETCH_PASSWORD_POLICY = 'FETCH_PASSWORD_POLICY';
 export const FETCH_PASSWORD_POLICY_RESPONSE = 'FETCH_PASSWORD_POLICY_RESPONSE';
 
+// Validate Customer registration
+export const FETCH_ADMIN_NOTIFICATIONS = 'FETCH_ADMIN_NOTIFICATIONS';
+export const FETCH_ADMIN_NOTIFICATIONS_RESPONSE = 'FETCH_ADMIN_NOTIFICATIONS_RESPONSE';
+
 // Sign In Customer
 export const LOGIN = 'LOGIN';
 export const LOGIN_RESPONSE = 'LOGIN_RESPONSE';
-export const INSECURE_LOGIN = 'INSECURE_LOGIN';
-export const INSECURE_LOGIN_RESPONSE = 'INSECURE_LOGIN_RESPONSE';
 
 export const RESET_CUSTOMER = 'RESET_CUSTOMER';
 
@@ -53,6 +59,10 @@ export const FETCH_USER_FAILURE = 'FETCH_USER_FAILURE';
 export const FETCH_SOFTWARE_VERSIONS = 'FETCH_SOFTWARE_VERSIONS';
 export const FETCH_SOFTWARE_VERSIONS_SUCCESS = 'FETCH_SOFTWARE_VERSIONS_SUCCESS';
 export const FETCH_SOFTWARE_VERSIONS_FAILURE = 'FETCH_SOFTWARE_VERSIONS_FAILURE';
+
+export const FETCH_DB_VERSIONS = 'FETCH_DB_VERSIONS';
+export const FETCH_DB_VERSIONS_SUCCESS = 'FETCH_DB_VERSIONS_SUCCESS';
+export const FETCH_DB_VERSIONS_FAILURE = 'FETCH_DB_VERSIONS_FAILURE';
 
 export const FETCH_HOST_INFO = 'FETCH_HOST_INFO';
 export const FETCH_HOST_INFO_SUCCESS = 'FETCH_HOST_INFO_SUCCESS';
@@ -112,6 +122,18 @@ export const FETCH_CUSTOMER_CONFIGS_RESPONSE = 'FETCH_CUSTOMER_CONFIGS_RESPONSE'
 export const FETCH_RUNTIME_CONFIGS = 'FETCH_RUNTIME_CONFIGS';
 export const FETCH_RUNTIME_CONFIGS_RESPONSE = 'FETCH_RUNTIME_CONFIGS_RESPONSE';
 
+export const FETCH_RUNTIME_CONFIGS_KEY_INFO = 'FETCH_RUNTIME_CONFIGS_KEY_INFO';
+export const FETCH_RUNTIME_CONFIGS_KEY_INFO_RESPONSE = 'FETCH_RUNTIME_CONFIGS_KEY_INFO_RESPONSE';
+
+export const FETCH_CUSTOMER_RUNTIME_CONFIGS = 'FETCH_CUSTOMER_RUNTIME_CONFIGS';
+export const FETCH_CUSTOMER_RUNTIME_CONFIGS_RESPONSE = 'FETCH_CUSTOMER_RUNTIME_CONFIGS_RESPONSE';
+
+export const FETCH_PROVIDER_RUNTIME_CONFIGS = 'FETCH_PROVIDER_RUNTIME_CONFIGS';
+export const FETCH_PROVIDER_RUNTIME_CONFIGS_RESPONSE = 'FETCH_PROVIDER_RUNTIME_CONFIGS_RESPONSE';
+
+export const GET_RUNTIME_CONFIG_KEY = 'GET_RUNTIME_CONFIG_KEY';
+export const GET_RUNTIME_CONFIG_KEY_RESPONSE = 'GET_RUNTIME_CONFIG_KEY_RESPONSE';
+
 export const SET_RUNTIME_CONFIG = 'SET_RUNTIME_CONFIG';
 export const SET_RUNTIME_CONFIG_RESPONSE = 'SET_RUNTIME_CONFIG_RESPONSE';
 
@@ -170,6 +192,10 @@ export const CHANGE_USER_ROLE = 'CHANGE_USER_ROLE';
 
 export const UPDATE_TLS = 'UPDATE_TLS';
 
+export const RESET_RUNTIME_CONFIGS = 'RESET_RUNTIME_CONFIGS';
+
+export const DEFAULT_RUNTIME_GLOBAL_SCOPE = '00000000-0000-0000-0000-000000000000';
+
 export function validateToken() {
   let cUUID = Cookies.get('customerId');
   if (cUUID) {
@@ -178,12 +204,12 @@ export function validateToken() {
     cUUID = localStorage.getItem('customerId');
   }
 
-  // in single sign-on mode authentication happens via PLAY_SESSION cookie and not via headers
-  if (!USE_SSO) {
-    axios.defaults.headers.common['X-AUTH-TOKEN'] =
-      Cookies.get('authToken') || localStorage.getItem('authToken');
+  // we support both sso and user login together
+  const authToken = Cookies.get('authToken') ?? localStorage.getItem('authToken');
+  if (authToken && authToken !== '') {
+    axios.defaults.headers.common['X-AUTH-TOKEN'] = authToken;
   }
-  const apiToken = Cookies.get('apiToken') || localStorage.getItem('apiToken');
+  const apiToken = Cookies.get('apiToken') ?? localStorage.getItem('apiToken');
   if (apiToken && apiToken !== '') {
     axios.defaults.headers.common['X-AUTH-YW-API-TOKEN'] = apiToken;
   }
@@ -226,7 +252,7 @@ export function registerResponse(response) {
 }
 
 export function fetchPasswordPolicy() {
-  const cUUID = localStorage.getItem('customerId');
+  const cUUID = localStorage.getItem('customerId') ?? DEFAULT_RUNTIME_GLOBAL_SCOPE;
   const request = axios.get(`${ROOT_URL}/customers/${cUUID}/password_policy`);
   return {
     type: FETCH_PASSWORD_POLICY,
@@ -237,6 +263,22 @@ export function fetchPasswordPolicy() {
 export function fetchPasswordPolicyResponse(response) {
   return {
     type: FETCH_PASSWORD_POLICY_RESPONSE,
+    payload: response
+  };
+}
+
+export function fetchAdminNotifications() {
+  const cUUID = localStorage.getItem('customerId');
+  const request = axios.get(`${ROOT_URL}/customers/${cUUID}/admin_notifications`);
+  return {
+    type: FETCH_ADMIN_NOTIFICATIONS,
+    payload: request
+  };
+}
+
+export function fetchAdminNotificationsResponse(response) {
+  return {
+    type: FETCH_ADMIN_NOTIFICATIONS_RESPONSE,
     payload: response
   };
 }
@@ -256,24 +298,15 @@ export function loginResponse(response) {
   };
 }
 
-export function insecureLogin() {
-  const request = axios.get(`${ROOT_URL}/insecure_login`);
-  return {
-    type: INSECURE_LOGIN,
-    payload: request
-  };
-}
-
-export function insecureLoginResponse(response) {
-  return {
-    type: INSECURE_LOGIN_RESPONSE,
-    payload: response.payload
-  };
-}
-
 export function logout() {
-  const url = USE_SSO ? `${ROOT_URL}/third_party_logout` : `${ROOT_URL}/logout`;
-  const request = axios.get(url);
+  const logout_url = `${ROOT_URL}/logout`;
+  const request = axios.get(logout_url);
+
+  if (isSSOEnabled()) {
+    const sso_logout = `${ROOT_URL}/third_party_logout`;
+    axios.get(sso_logout);
+  }
+
   return {
     type: LOGOUT,
     payload: request
@@ -356,35 +389,12 @@ export function updateProfileFailure(error) {
   };
 }
 
-export function updatePassword(user, values) {
+export function updatePassword(_user, values) {
   const cUUID = localStorage.getItem('customerId');
-  const userUUID = user.uuid;
   const data = {
-    ...values,
-    role: user.role
+    ...values
   };
-  const request = axios.put(
-    `${ROOT_URL}/customers/${cUUID}/users/${userUUID}/change_password`,
-    data
-  );
-  return {
-    type: UPDATE_PROFILE,
-    payload: request
-  };
-}
-
-export function updatePasswordSuccess(response) {
-  return {
-    type: UPDATE_PROFILE_SUCCESS,
-    payload: response
-  };
-}
-
-export function updatePasswordFailure(error) {
-  return {
-    type: UPDATE_PROFILE_FAILURE,
-    payload: error
-  };
+  return axios.put(`${ROOT_URL}/customers/${cUUID}/reset_password`, data);
 }
 
 export function updateUserProfile(user, values) {
@@ -418,6 +428,7 @@ export function updateUserProfileFailure(error) {
   };
 }
 
+// TODO: Remove - 2024.2
 export function fetchSoftwareVersions() {
   const cUUID = localStorage.getItem('customerId');
   const request = axios.get(`${ROOT_URL}/customers/${cUUID}/releases`, {
@@ -429,19 +440,69 @@ export function fetchSoftwareVersions() {
   };
 }
 
+// TODO: Remove - 2024.2
 export function fetchSoftwareVersionsSuccess(result) {
-  const activeReleases = Object.entries(result?.data)
-    .filter((e) => e[1]?.state === 'ACTIVE')
-    .map((e) => e[0]);
+  const activeReleasesMap = {};
+  const activeReleases = Object.entries(result?.data).filter((e) => {
+    if (e[1]?.state === 'ACTIVE') {
+      activeReleasesMap[e[0]] = e[1];
+      return true;
+    } else return false;
+  });
+
   return {
     type: FETCH_SOFTWARE_VERSIONS_SUCCESS,
-    payload: { ...result, data: activeReleases }
+    payload: {
+      ...result,
+      data: activeReleases.map((e) => e[0]),
+      releasesWithMetadata: activeReleasesMap
+    }
   };
 }
 
+// TODO: Remove - 2024.2
 export function fetchSoftwareVersionsFailure(error) {
   return {
     type: FETCH_SOFTWARE_VERSIONS_FAILURE,
+    payload: error
+  };
+}
+
+export function fetchDBVersions() {
+  const cUUID = localStorage.getItem('customerId');
+  const request = axios.get(`${ROOT_URL}/customers/${cUUID}/ybdb_release`, {
+    params: { includeMetadata: true }
+  });
+  return {
+    type: FETCH_DB_VERSIONS,
+    payload: request
+  };
+}
+
+export function fetchDBVersionsSuccess(result) {
+  const activeReleasesMap = {};
+
+  const activeReleasesNew = result?.data?.filter((release) => {
+    const isActiveRelease = release.state === 'ACTIVE';
+    if (isActiveRelease) {
+      activeReleasesMap[release.version] = release;
+    }
+    return isActiveRelease;
+  });
+
+  return {
+    type: FETCH_DB_VERSIONS_SUCCESS,
+    payload: {
+      ...result,
+      data: activeReleasesNew.map((release) => release.version),
+      releasesWithMetadata: activeReleasesMap
+    }
+  };
+}
+
+export function fetchDBVersionsFailure(error) {
+  return {
+    type: FETCH_DB_VERSIONS_FAILURE,
     payload: error
   };
 }
@@ -892,9 +953,14 @@ export function fetchCustomerConfigsResponse(response) {
   };
 }
 
-export function fetchRunTimeConfigs(scope = '00000000-0000-0000-0000-000000000000', includeInherited = false) {
+export function fetchRunTimeConfigs(
+  scope = DEFAULT_RUNTIME_GLOBAL_SCOPE,
+  includeInherited = false
+) {
   const cUUID = localStorage.getItem('customerId');
-  const request = axios.get(`${ROOT_URL}/customers/${cUUID}/runtime_config/${scope}?includeInherited=${includeInherited}`);
+  const request = axios.get(
+    `${ROOT_URL}/customers/${cUUID}/runtime_config/${scope}?includeInherited=${includeInherited}`
+  );
   return {
     type: FETCH_RUNTIME_CONFIGS,
     payload: request
@@ -908,7 +974,74 @@ export function fetchRunTimeConfigsResponse(response) {
   };
 }
 
-export function setRunTimeConfig({ key, value, scope = '00000000-0000-0000-0000-000000000000' }) {
+export function fetchRunTimeConfigsKeyInfo() {
+  const request = axios.get(`${ROOT_URL}/runtime_config/mutable_key_info`);
+  return {
+    type: FETCH_RUNTIME_CONFIGS_KEY_INFO,
+    payload: request
+  };
+}
+
+export function fetchRunTimeConfigsKeyInfoResponse(response) {
+  return {
+    type: FETCH_RUNTIME_CONFIGS_KEY_INFO_RESPONSE,
+    payload: response
+  };
+}
+
+export function fetchProviderRunTimeConfigs(scope, includeInherited = false) {
+  const cUUID = localStorage.getItem('customerId');
+  const request = axios.get(
+    `${ROOT_URL}/customers/${cUUID}/runtime_config/${scope}?includeInherited=${includeInherited}`
+  );
+  return {
+    type: FETCH_PROVIDER_RUNTIME_CONFIGS,
+    payload: request
+  };
+}
+
+export function fetchProviderRunTimeConfigsResponse(response) {
+  return {
+    type: FETCH_PROVIDER_RUNTIME_CONFIGS_RESPONSE,
+    payload: response
+  };
+}
+
+export function fetchCustomerRunTimeConfigs(includeInherited = false) {
+  const cUUID = localStorage.getItem('customerId');
+  const request = axios.get(
+    `${ROOT_URL}/customers/${cUUID}/runtime_config/${cUUID}?includeInherited=${includeInherited}`
+  );
+  return {
+    type: FETCH_CUSTOMER_RUNTIME_CONFIGS,
+    payload: request
+  };
+}
+
+export function fetchCustomerRunTimeConfigsResponse(response) {
+  return {
+    type: FETCH_CUSTOMER_RUNTIME_CONFIGS_RESPONSE,
+    payload: response
+  };
+}
+
+export function getRunTimeConfigKey({ key, scope = DEFAULT_RUNTIME_GLOBAL_SCOPE }) {
+  const cUUID = localStorage.getItem('customerId');
+  const request = axios.get(`${ROOT_URL}/customers/${cUUID}/runtime_config/${scope}/key/${key}`);
+  return {
+    type: GET_RUNTIME_CONFIG_KEY,
+    payload: request
+  };
+}
+
+export function getRunTimeConfigKeyResponse(response) {
+  return {
+    type: GET_RUNTIME_CONFIG_KEY_RESPONSE,
+    payload: response
+  };
+}
+
+export function setRunTimeConfig({ key, value, scope = DEFAULT_RUNTIME_GLOBAL_SCOPE }) {
   const cUUID = localStorage.getItem('customerId');
   const headers = {
     'Content-Type': 'text/plain'
@@ -933,7 +1066,7 @@ export function setRunTimeConfigResponse(response) {
   };
 }
 
-export function deleteRunTimeConfig({ key, scope = '00000000-0000-0000-0000-000000000000' }) {
+export function deleteRunTimeConfig({ key, scope = DEFAULT_RUNTIME_GLOBAL_SCOPE }) {
   const cUUID = localStorage.getItem('customerId');
   const request = axios.delete(`${ROOT_URL}/customers/${cUUID}/runtime_config/${scope}/key/${key}`);
   return {
@@ -987,12 +1120,14 @@ export function setLogsLoading() {
   };
 }
 
-export function getLogs(maxLines, regex, universe) {
+export function getLogs(maxLines, regex, universe, startDate, endDate) {
   const request = axios.get(`${ROOT_URL}/logs`, {
     params: {
       maxLines,
       queryRegex: regex,
-      universeName: universe
+      universeName: universe,
+      startDate,
+      endDate
     }
   });
   return {
@@ -1027,6 +1162,22 @@ export function getYugaByteReleases() {
 export function getYugaByteReleasesResponse(response) {
   return {
     type: GET_RELEASES_RESPONSE,
+    payload: response
+  };
+}
+
+export function fetchOIDCToken(userUUID) {
+  const cUUID = localStorage.getItem('customerId');
+  const request = axios.get(`${ROOT_URL}/customers/${cUUID}/users/${userUUID}/oidc_auth_token`);
+  return {
+    type: FETCH_OIDC_TOKEN,
+    payload: request
+  };
+}
+
+export function fetchOIDCTokenResponse(response) {
+  return {
+    type: FETCH_OIDC_TOKEN_RESPONSE,
     payload: response
   };
 }
@@ -1181,4 +1332,20 @@ export function updateTLS(universeUuid, formValues) {
     type: UPDATE_TLS,
     payload: request
   };
+}
+
+export function resetRuntimeConfigs() {
+  return {
+    type: RESET_RUNTIME_CONFIGS
+  };
+}
+
+export function getLDAPRoleMapping() {
+  const cUUID = localStorage.getItem('customerId');
+  return axios.get(`${ROOT_URL}/customers/${cUUID}/ldap_mappings`);
+}
+
+export function setLDAPRoleMapping(payload) {
+  const cUUID = localStorage.getItem('customerId');
+  return axios.put(`${ROOT_URL}/customers/${cUUID}/ldap_mappings`, payload);
 }

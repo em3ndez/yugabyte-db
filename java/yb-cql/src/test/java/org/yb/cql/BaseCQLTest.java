@@ -186,6 +186,7 @@ public class BaseCQLTest extends BaseMiniClusterTest {
         break;
       }
       LOG.info("system.peers still contains only " + numPeers + " entries, waiting");
+      attemptsMade++;
       Thread.sleep(1000);
     }
     if (waitSuccessful) {
@@ -267,6 +268,22 @@ public class BaseCQLTest extends BaseMiniClusterTest {
     LOG.info(logPrefix +
         "finished attempting to drop tables and trying to close CQL session/client");
     afterBaseCQLTestTearDown();
+  }
+
+  protected void restartClusterWithTSFlags(Map<String, String> tserverFlags) throws Exception {
+    destroyMiniCluster();
+    createMiniCluster(Collections.emptyMap(), tserverFlags);
+    setUpCqlClient();
+  }
+
+  protected void restartClusterWithMasterFlags(Map<String, String> masterFlags) throws Exception {
+    destroyMiniCluster();
+    createMiniCluster(masterFlags, Collections.emptyMap());
+    setUpCqlClient();
+  }
+
+  protected void restartClusterWithFlag(String flag, String value) throws Exception {
+    restartClusterWithTSFlags(Collections.singletonMap(flag, value));
   }
 
   protected void afterBaseCQLTestTearDown() throws Exception {
@@ -822,11 +839,15 @@ public class BaseCQLTest extends BaseMiniClusterTest {
   }
 
   protected void waitForReadPermsOnAllIndexes(String tableName) throws Exception {
+    waitForReadPermsOnAllIndexes(DEFAULT_TEST_KEYSPACE, tableName);
+  }
+
+  protected void waitForReadPermsOnAllIndexes(String keyspace, String tableName) throws Exception {
     TestUtils.waitFor(
       () -> {
         boolean all_indexes_have_read_perms = true;
         GetTableSchemaResponse response = miniCluster.getClient().getTableSchema(
-          DEFAULT_TEST_KEYSPACE, tableName);
+          keyspace, tableName);
         List<IndexInfo> indexes = response.getIndexes();
 
         for (IndexInfo index : indexes) {

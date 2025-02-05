@@ -1,15 +1,14 @@
 ---
 title: Using a recursive CTE to traverse a general undirected cyclic graph
 headerTitle: Finding the paths in a general undirected cyclic graph
-linkTitle: undirected cyclic graph
+linkTitle: Undirected cyclic graph
 description: This section shows how to use a recursive CTE to traverse a general undirected cyclic graph.
 menu:
-  preview:
+  preview_api:
     identifier: undirected cyclic graph
     parent: traversing-general-graphs
     weight: 30
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 Before trying any of the code in this section, make sure that you have created the _"edges"_ table (see [`cr-edges.sql`](../graph-representation/#cr-edges-sql)) and installed all the code shown in the section [Common code for traversing all kinds of graph](../common-code/).
@@ -67,7 +66,7 @@ select path from paths
 
 The first attempt at the SQL for traversing the present undirected cyclic graph is easily written down just as an obvious paraphrase:
 
-```plpgql
+```plpgsql
 deallocate all;
 
 prepare stmt(text) as
@@ -427,7 +426,7 @@ But there is another, and more critical, reason to discard the approach that avo
 
 It's obviously quicker to identify a single row with an identity predicate on a column with an optimal index for such a predicate than it is to identify the row using the `OR` combination of two predicates, only one of which, of course, will identify the row. Moreover, because the primary key is defined on the column list _"(node_1, node_2)"_ and because the SQL for the denormalized _"edges"_ table approach restricts only on the leading column, the execution plan can use the index that enforces the primary key constraint.
 
-Look at the output of the `\d` metacommand for the _"edges"_ table:
+Look at the output of the `\d` meta-command for the _"edges"_ table:
 
 ```
  Column | Type | Collation | Nullable | Default
@@ -618,4 +617,3 @@ call assert_shortest_paths_same_as_raw_paths();
 ```
 
 The assertion holds.
-

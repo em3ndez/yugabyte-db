@@ -4,12 +4,11 @@ linkTitle: Array of rows
 headerTitle: The literal for an array of "row" type values
 description: The literal for an array of "row" type values
 menu:
-  preview:
+  preview_api:
     identifier: array-of-rows
     parent: array-literals
     weight: 40
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 You now combine the understanding of how to write the literal for an array of primitive values with that of how to write the literal for a _"row"_ type value.

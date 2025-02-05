@@ -2,9 +2,13 @@
 
 package com.yugabyte.yw.forms;
 
+import static io.swagger.annotations.ApiModelProperty.AccessMode.READ_ONLY;
+
+import com.yugabyte.yw.models.helpers.NodeConfig;
 import io.swagger.annotations.ApiModel;
 import io.swagger.annotations.ApiModelProperty;
 import java.util.List;
+import java.util.Set;
 import javax.validation.constraints.NotNull;
 import javax.validation.constraints.Size;
 
@@ -45,7 +49,13 @@ public class NodeInstanceFormData {
     @ApiModelProperty(value = "Node instance name", example = "Mumbai instance", required = true)
     public String instanceName;
 
-    @ApiModelProperty(value = "Node name", example = "India node")
+    @ApiModelProperty(
+        value = "Node name in a universe",
+        example = "universe_node1",
+        accessMode = READ_ONLY)
     public String nodeName;
+
+    @ApiModelProperty(value = "Node configurations")
+    public Set<NodeConfig> nodeConfigs;
   }
 }

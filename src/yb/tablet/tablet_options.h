@@ -10,19 +10,23 @@
 // or implied.  See the License for the specific language governing permissions and limitations
 // under the License.
 //
-#ifndef YB_TABLET_TABLET_OPTIONS_H
-#define YB_TABLET_TABLET_OPTIONS_H
+
+#pragma once
 
 #include <future>
 #include <memory>
 #include <vector>
 
+#include "yb/tablet/tablet_retention_policy.h"
 #include "yb/util/env.h"
+#include "yb/util/threadpool.h"
 #include "yb/rocksdb/env.h"
 
 #include "yb/client/client_fwd.h"
 
 #include "yb/consensus/log_fwd.h"
+
+#include "yb/docdb/local_waiting_txn_registry.h"
 
 #include "yb/server/server_fwd.h"
 
@@ -33,15 +37,20 @@ class Cache;
 class EventListener;
 class MemoryMonitor;
 class Env;
+
+struct RocksDBPriorityThreadPoolMetrics;
 }
 
 namespace yb {
 
+class AutoFlagsManagerBase;
 class Env;
 class MemTracker;
 class MetricRegistry;
 
 namespace tablet {
+
+struct TabletFullCompactionListener;
 
 // Common for all tablets within TabletManager.
 struct TabletOptions {
@@ -51,7 +60,11 @@ struct TabletOptions {
   yb::Env* env = Env::Default();
   rocksdb::Env* rocksdb_env = rocksdb::Env::Default();
   std::shared_ptr<rocksdb::RateLimiter> rate_limiter;
+  std::shared_ptr<rocksdb::RocksDBPriorityThreadPoolMetrics> priority_thread_pool_metrics;
 };
+
+using TransactionManagerProvider = std::function<client::TransactionManager&()>;
+using VectorIndexThreadPoolProvider = std::function<rpc::ThreadPool*()>;
 
 struct TabletInitData {
   RaftGroupMetadataPtr metadata;
@@ -70,9 +83,20 @@ struct TabletInitData {
   IsSysCatalogTablet is_sys_catalog = IsSysCatalogTablet::kFalse;
   SnapshotCoordinator* snapshot_coordinator = nullptr;
   TabletSplitter* tablet_splitter = nullptr;
-  std::function<HybridTime(RaftGroupMetadata*)> allowed_history_cutoff_provider;
+  AllowedHistoryCutoffProvider allowed_history_cutoff_provider;
+  TransactionManagerProvider transaction_manager_provider;
+  docdb::LocalWaitingTxnRegistry* waiting_txn_registry = nullptr;
+  ThreadPool* wait_queue_pool = nullptr;
+  AutoFlagsManagerBase* auto_flags_manager = nullptr;
+  ThreadPool* full_compaction_pool;
+  ThreadPool* admin_triggered_compaction_pool;
+  scoped_refptr<yb::AtomicGauge<uint64_t>> post_split_compaction_added;
+  client::YBMetaDataCache* metadata_cache;
+  std::function<SchemaVersion(const TableId&, const ColocationId&)>
+      get_min_xcluster_schema_version = nullptr;
+  rpc::Messenger* messenger = nullptr;
+  VectorIndexThreadPoolProvider vector_index_thread_pool_provider = {};
 };
 
 } // namespace tablet
 } // namespace yb
-#endif // YB_TABLET_TABLET_OPTIONS_H

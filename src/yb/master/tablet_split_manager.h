@@ -11,86 +11,137 @@
 // under the License.
 //
 
-#ifndef YB_MASTER_TABLET_SPLIT_MANAGER_H
-#define YB_MASTER_TABLET_SPLIT_MANAGER_H
+#pragma once
 
 #include <unordered_set>
 
+#include "yb/master/leader_epoch.h"
+#include "yb/master/master_admin.pb.h"
 #include "yb/master/master_fwd.h"
-#include "yb/master/tablet_split_candidate_filter.h"
-#include "yb/master/tablet_split_complete_handler.h"
-#include "yb/master/tablet_split_driver.h"
+
+#include "yb/rpc/rpc_context.h"
+
+#include "yb/util/metrics.h"
 
 namespace yb {
 namespace master {
 
-using std::unordered_set;
+YB_STRONGLY_TYPED_BOOL(IgnoreTtlValidation);
+YB_STRONGLY_TYPED_BOOL(IgnoreDisabledList);
 
-class TabletSplitManager : public TabletSplitCompleteHandlerIf {
+Status CheckLiveReplicasForSplit(
+    const TabletId& tablet_id, const TabletReplicaMap& replicas, size_t rf);
+
+using SplitsToScheduleMap = std::unordered_map<TabletId, std::optional<uint64_t>>;
+
+class TabletSplitManager {
  public:
-  TabletSplitManager(TabletSplitCandidateFilterIf* filter,
-                     TabletSplitDriverIf* driver,
-                     XClusterSplitDriverIf* xcluster_split_driver);
+  TabletSplitManager(
+      Master& master,
+      const scoped_refptr<MetricEntity>& master_metrics,
+      const scoped_refptr<MetricEntity>& cluster_metrics);
 
-  // Temporarily disable splitting for the specified amount of time.
-  void DisableSplittingFor(const MonoDelta& disable_duration);
-
-  bool IsRunning();
+  Status WaitUntilIdle(CoarseTimePoint deadline = CoarseTimePoint::max());
 
   // Returns true if there are no outstanding tablet splits, and the automatic splitting thread is
   // not running (to ensure that no splits are started immediately after returning).
-  bool IsTabletSplittingComplete(const TableInfoMap& table_info_map);
+  // This function should eventually return true if called repeatedly after temporarily disabling
+  // splitting for the table.
+  bool IsTabletSplittingComplete(
+      const TableInfo& table, bool wait_for_parent_deletion, CoarseTimePoint deadline);
 
   // Perform one round of tablet splitting. This method is not thread-safe.
-  void MaybeDoSplitting(const TableInfoMap& table_info_map);
+  void MaybeDoSplitting(
+      const std::vector<TableInfoPtr>& tables,
+      const TabletInfoMap& tablet_info_map,
+      const LeaderEpoch& epoch);
 
-  void ProcessSplitTabletResult(const TableId& split_table_id,
-                                const SplitTabletIds& split_tablet_ids);
+  Status ProcessSplitTabletResult(
+      const TableId& split_table_id, const SplitTabletIds& split_tablet_ids,
+      const LeaderEpoch& epoch);
 
-  // Validate whether a candidate table is eligible for a split.
-  // Any temporarily disabled tablets are assumed ineligible by default.
-  CHECKED_STATUS ValidateSplitCandidateTable(
-      const TableInfo& table, bool ignore_disabled_list = false);
+  // Table-level checks for splitting that are checked not only as a best-effort
+  // filter, but also after acquiring the table/tablet locks in CatalogManager::DoSplit.
+  Status ValidateSplitCandidateTable(
+      const TableInfoPtr& table,
+      IgnoreDisabledList ignore_disabled_list = IgnoreDisabledList::kFalse);
 
-  // Validate whether a candidate tablet is eligible for a split.
-  // Any tablets with default TTL and a max file size for compaction limit are assumed
-  // ineligible by default.
-  CHECKED_STATUS ValidateSplitCandidateTablet(
-      const TabletInfo& tablet, bool ignore_ttl_validation = false);
+  // Tablet-level checks for splitting that are checked not only as a best-effort
+  // filter, but also after acquiring the table/tablet locks in CatalogManager::DoSplit.
+  Status ValidateSplitCandidateTablet(
+      const TabletInfo& tablet,
+      const TabletInfoPtr parent,
+      IgnoreTtlValidation ignore_ttl_validation = IgnoreTtlValidation::kFalse,
+      IgnoreDisabledList ignore_disabled_list = IgnoreDisabledList::kFalse);
 
-  void MarkTtlTableForSplitIgnore(const TableId& table_id);
+  // Disables tablet splitting for a specified amount of time.
+  Status DisableTabletSplitting(
+      const DisableTabletSplittingRequestPB* req, DisableTabletSplittingResponsePB* resp,
+      rpc::RpcContext* rpc);
 
-  void MarkSmallKeyRangeTabletForSplitIgnore(const TabletId& tablet_id);
+  // Returns true if there are no outstanding tablets and the tablet split manager is not currently
+  // processing tablet splits.
+  Status IsTabletSplittingComplete(
+      const IsTabletSplittingCompleteRequestPB* req, IsTabletSplittingCompleteResponsePB* resp,
+      rpc::RpcContext* rpc);
+
+  bool IsTabletSplittingComplete(bool wait_for_parent_deletion, CoarseTimePoint deadline);
+
+  // Temporarily disable splitting for the specified amount of time.
+  void DisableSplittingFor(const MonoDelta& disable_duration, const std::string& feature_name);
+  // Re-enable splitting after a call to DisableSplittingFor.
+  void ReenableSplittingFor(const std::string& feature_name);
+
+  // Disables splitting for a table with TTL file expiry.
+  void DisableSplittingForTtlTable(const TableId& table_id);
+
+  // Disables splitting for a backfilling table.
+  void DisableSplittingForBackfillingTable(const TableId& table_id);
+
+  // Re-enables splitting for a backfilling table (after success or failure).
+  void ReenableSplittingForBackfillingTable(const TableId& table_id);
+
+  // Disables splitting for tablets that are too small to split.
+  void DisableSplittingForSmallKeyRangeTablet(const TabletId& tablet_id);
+
+  Status PrepareForPitr(const CoarseTimePoint& deadline);
 
  private:
-  void ScheduleSplits(const unordered_set<TabletId>& splits_to_schedule);
+  void ScheduleSplits(const SplitsToScheduleMap& splits_to_schedule, const LeaderEpoch& epoch);
 
-  bool HasOutstandingTabletSplits(const TableInfoMap& table_info_map);
+  void DoSplitting(
+      const std::vector<TableInfoPtr>& tables,
+      const TabletInfoMap& tablet_info_map,
+      const LeaderEpoch& epoch);
 
-  void DoSplitting(const TableInfoMap& table_info_map);
+  Status ValidateTableAgainstDisabledLists(const TableId& table_id);
+  Status ValidateTabletAgainstDisabledList(const TabletId& tablet_id);
+  Status ValidatePartitioningVersion(const TableInfo& table);
 
-  Status ValidateAgainstDisabledList(const std::string& id,
-                                     std::unordered_map<std::string, CoarseTimePoint>* map);
+  Master& master_;
+  CatalogManagerIf& catalog_manager_;
 
-  TabletSplitCandidateFilterIf* filter_;
-  TabletSplitDriverIf* driver_;
-  XClusterSplitDriverIf* xcluster_split_driver_;
+  // This mutex is acquired in each tablet splitting manager run.
+  std::shared_timed_mutex is_running_mutex_;
 
-  // Used to signal (e.g. to IsTabletSplittingComplete) that the tablet split manager is not
-  // running, and hence it is safe to assume that no more splitting will occur if splitting was
-  // disabled before calling IsTabletSplittingComplete. This should only be written to by the
-  // automatic tablet splitting code.
-  bool is_running_;
-  CoarseTimePoint splitting_disabled_until_;
   CoarseTimePoint last_run_time_;
 
-  std::mutex mutex_;
-  std::unordered_map<TableId, CoarseTimePoint> ignore_table_for_splitting_until_ GUARDED_BY(mutex_);
-  std::unordered_map<TabletId, CoarseTimePoint> ignore_tablet_for_splitting_until_
-      GUARDED_BY(mutex_);
+  scoped_refptr<yb::AtomicGauge<uint64_t>> automatic_split_manager_time_ms_;
+  scoped_refptr<Counter> metric_split_tablet_too_many_tablets_;
 
+  template <typename IdType>
+  using DisabledSet = std::unordered_map<IdType, CoarseTimePoint>;
+
+  std::mutex disabled_sets_mutex_;
+  // Whether tablet-splitting is disabled (cluster-wide), keyed by the feature name (e.g. PITR).
+  // This prevents features from accidentally overwriting each others' disable timeouts.
+  DisabledSet<std::string> splitting_disabled_until_ GUARDED_BY(disabled_sets_mutex_);
+  DisabledSet<TableId> disable_splitting_for_ttl_table_until_ GUARDED_BY(disabled_sets_mutex_);
+  DisabledSet<TableId> disable_splitting_for_backfilling_table_until_
+      GUARDED_BY(disabled_sets_mutex_);
+  DisabledSet<TabletId> disable_splitting_for_small_key_range_tablet_until_
+      GUARDED_BY(disabled_sets_mutex_);
 };
 
 }  // namespace master
 }  // namespace yb
-#endif // YB_MASTER_TABLET_SPLIT_MANAGER_H

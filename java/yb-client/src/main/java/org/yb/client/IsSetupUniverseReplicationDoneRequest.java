@@ -2,7 +2,7 @@ package org.yb.client;
 
 import com.google.protobuf.Message;
 import java.util.UUID;
-import org.jboss.netty.buffer.ChannelBuffer;
+import io.netty.buffer.ByteBuf;
 import org.yb.WireProtocol.AppStatusPB;
 import org.yb.master.MasterReplicationOuterClass;
 import org.yb.master.MasterTypes;
@@ -11,20 +11,20 @@ import org.yb.util.Pair;
 public class IsSetupUniverseReplicationDoneRequest
   extends YRpc<IsSetupUniverseReplicationDoneResponse> {
 
-  private final String producerId;
+  private final String replicationGroupId;
 
-  IsSetupUniverseReplicationDoneRequest(YBTable table, String producerId) {
+  IsSetupUniverseReplicationDoneRequest(YBTable table, String replicationGroupId) {
     super(table);
-    this.producerId = producerId;
+    this.replicationGroupId = replicationGroupId;
   }
 
   @Override
-  ChannelBuffer serialize(Message header) {
+  ByteBuf serialize(Message header) {
     assert header.isInitialized();
 
     final MasterReplicationOuterClass.IsSetupUniverseReplicationDoneRequestPB.Builder builder =
       MasterReplicationOuterClass.IsSetupUniverseReplicationDoneRequestPB.newBuilder()
-        .setProducerId(producerId.toString());
+        .setReplicationGroupId(replicationGroupId.toString());
 
     return toChannelBuffer(header, builder.build());
   }

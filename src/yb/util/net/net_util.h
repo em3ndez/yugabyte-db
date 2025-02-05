@@ -29,8 +29,7 @@
 // or implied.  See the License for the specific language governing permissions and limitations
 // under the License.
 //
-#ifndef YB_UTIL_NET_NET_UTIL_H
-#define YB_UTIL_NET_NET_UTIL_H
+#pragma once
 
 #include <string>
 #include <vector>
@@ -39,7 +38,7 @@
 #include <boost/container/small_vector.hpp>
 #include <boost/optional/optional_fwd.hpp>
 
-#include <gflags/gflags_declare.h>
+#include "yb/util/flags.h"
 
 #include "yb/util/status_fwd.h"
 #include "yb/util/net/net_fwd.h"
@@ -63,7 +62,7 @@ class HostPort {
 
   // Parse a "host:port" pair into this object.
   // If there is no port specified in the string, then 'default_port' is used.
-  CHECKED_STATUS ParseString(const std::string& str, uint16_t default_port);
+  Status ParseString(const std::string& str, uint16_t default_port);
 
   static Result<HostPort> FromString(const std::string& str, uint16_t default_port);
 
@@ -72,7 +71,7 @@ class HostPort {
   //
   // 'addresses' may be NULL, in which case this function simply checks that
   // the host/port pair can be resolved, without returning anything.
-  CHECKED_STATUS ResolveAddresses(std::vector<Endpoint>* addresses) const;
+  Status ResolveAddresses(std::vector<Endpoint>* addresses) const;
 
   std::string ToString() const;
 
@@ -86,7 +85,7 @@ class HostPort {
   // HostPort objects. If no port is specified for an entry in the
   // comma separated list, 'default_port' is used for that entry's
   // pair.
-  static CHECKED_STATUS ParseStrings(
+  static Status ParseStrings(
       const std::string& comma_sep_addrs,
       uint16_t default_port,
       std::vector<HostPort>* res,
@@ -111,7 +110,7 @@ class HostPort {
 
   // Remove a given host/port from a vector of comma separated server multiple addresses, each in
   // [host:port,]+ format and returns a final list as a remaining vector of hostports.
-  static CHECKED_STATUS RemoveAndGetHostPortList(
+  static Status RemoveAndGetHostPortList(
       const Endpoint& remove,
       const std::vector<std::string>& multiple_server_addresses,
       uint16_t default_port,
@@ -145,33 +144,33 @@ struct HostPortHash {
 // the 'addresses' vector.
 //
 // Any elements which do not include a port will be assigned 'default_port'.
-CHECKED_STATUS ParseAddressList(const std::string& addr_list,
-                                uint16_t default_port,
-                                std::vector<Endpoint>* addresses);
+Status ParseAddressList(const std::string& addr_list,
+                        uint16_t default_port,
+                        std::vector<Endpoint>* addresses);
 
 // Return true if the given port is likely to need root privileges to bind to.
 bool IsPrivilegedPort(uint16_t port);
 
 // Return the local machine's hostname.
-CHECKED_STATUS GetHostname(std::string* hostname);
+Status GetHostname(std::string* hostname);
 
 // Return the local machine's hostname as a Result.
 Result<std::string> GetHostname();
 
 // Return the local machine's FQDN.
-CHECKED_STATUS GetFQDN(std::string* fqdn);
+Status GetFQDN(std::string* fqdn);
 
 // Returns a single socket address from a HostPort.
 // If the hostname resolves to multiple addresses, returns the first in the
 // list and logs a message in verbose mode.
-CHECKED_STATUS EndpointFromHostPort(const HostPort& host_port, Endpoint* endpoint);
+Status EndpointFromHostPort(const HostPort& host_port, Endpoint* endpoint);
 
 // Converts the given Endpoint into a HostPort, substituting the FQDN
 // in the case that the provided address is the wildcard.
 //
 // In the case of other addresses, the returned HostPort will contain just the
 // stringified form of the IP.
-CHECKED_STATUS HostPortFromEndpointReplaceWildcard(const Endpoint& addr, HostPort* hp);
+Status HostPortFromEndpointReplaceWildcard(const Endpoint& addr, HostPort* hp);
 
 // Try to run 'lsof' to determine which process is preventing binding to
 // the given 'addr'. If pids can be determined, outputs full 'ps' and 'pstree'
@@ -180,6 +179,10 @@ CHECKED_STATUS HostPortFromEndpointReplaceWildcard(const Endpoint& addr, HostPor
 // Output is issued to the log at WARNING level, or appended to 'log' if it
 // is non-NULL (mostly useful for testing).
 void TryRunLsof(const Endpoint& addr, std::vector<std::string>* log = NULL);
+
+void TryRunChronycTracking(std::vector<std::string>* log = NULL);
+
+void TryRunChronycSourcestats(std::vector<std::string>* log = NULL);
 
 // Get a free port that a local server could listen to. For use in tests. Tries up to a 1000 times
 // and fatals after that.
@@ -206,7 +209,7 @@ static std::string HostPortPBToString(const PB& pb) {
   return HostPortToString(pb.host(), pb.port());
 }
 
-CHECKED_STATUS HostToAddresses(
+Status HostToAddresses(
     const std::string& host,
     boost::container::small_vector_base<IpAddress>* addresses);
 
@@ -220,5 +223,3 @@ bool IsWildcardAddress(const std::string& host_str);
 void TEST_SetFailToFastResolveAddress(const std::string& address);
 
 } // namespace yb
-
-#endif  // YB_UTIL_NET_NET_UTIL_H

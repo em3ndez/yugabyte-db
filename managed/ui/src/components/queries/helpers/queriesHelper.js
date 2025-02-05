@@ -1,12 +1,15 @@
 import { useQuery } from 'react-query';
 import { fetchLiveQueries, fetchSlowQueries } from '../../../actions/universe';
 
+const LIVE_QUERY_REFETCH_INTERVAL = 60000;
+
 export const useLiveQueriesApi = ({ universeUUID }) => {
   const { refetch, isFetching, data } = useQuery(
     ['getLiveQueries', universeUUID],
     () => fetchLiveQueries(universeUUID),
     {
-      refetchOnMount: 'always'
+      refetchOnMount: 'always',
+      refetchInterval: LIVE_QUERY_REFETCH_INTERVAL
     }
   );
 
@@ -84,12 +87,12 @@ export const useSlowQueriesApi = ({ universeUUID, enabled, defaultStaleTime = 60
   };
 };
 
-const hasSubstringMatch = (textString, patternString, caseSensitive = false) => {
+export const hasSubstringMatch = (text, pattern, caseSensitive = false) => {
   if (!caseSensitive) {
-    textString = textString.toLowerCase();
-    patternString = patternString.toLowerCase();
+    text = text.toLowerCase();
+    pattern = pattern.toLowerCase();
   }
-  return textString.includes(patternString);
+  return text.includes(pattern);
 };
 
 const hasTokenMatch = (query, token, keyMap) => {
@@ -124,7 +127,7 @@ const hasTokenMatch = (query, token, keyMap) => {
         if (lowerRange === '*' && !Number.isNaN(parseFloat(upperRange))) {
           return query[column.value] <= parseFloat(upperRange);
         } else if (upperRange === '*' && !Number.isNaN(parseFloat(lowerRange))) {
-          return query[column.value] <= parseFloat(upperRange);
+          return query[column.value] >= parseFloat(lowerRange);
         } else if (!Number.isNaN(parseFloat(lowerRange)) && !Number.isNaN(parseFloat(upperRange))) {
           return (
             query[column.value] >= parseFloat(lowerRange) &&
@@ -174,7 +177,7 @@ const hasTokenMatch = (query, token, keyMap) => {
     }
   } else {
     // Search through all properties for token value
-    return Object.values(query).some((val) => hasSubstringMatch(String(val), token.value));
+    return Object.values(query).some((val) => hasSubstringMatch(String(val), token.value?.trim()));
   }
 };
 

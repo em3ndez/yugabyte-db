@@ -4,7 +4,7 @@ headerTitle: Date and time data types (DATE, TIME, and TIMESTAMP)
 linkTitle: DATE, TIME, and TIMESTAMP
 description: Use the date and time data types (DATE, TIME, and TIMESTAMP) to specify dates and time.
 menu:
-  preview:
+  preview_api:
     parent: api-cassandra
     weight: 1450
 aliases:
@@ -12,8 +12,7 @@ aliases:
   - /preview/api/cassandra/type_timestamp
   - /preview/api/ycql/type_datetime
   - /preview/api/ycql/type_timestamp
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 ## Synopsis
@@ -153,7 +152,7 @@ ycqlsh:example> SELECT sum(amount) FROM orders WHERE customer_id = 1 AND order_d
 
 ### Using the timestamp type
 
-You can do this as shown below.
+You can do this as follows:
 
 ```sql
 ycqlsh:example> CREATE TABLE sensor_data(sensor_id INT, ts TIMESTAMP, value FLOAT, PRIMARY KEY(sensor_id, ts));

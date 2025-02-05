@@ -11,8 +11,9 @@
 // under the License.
 //
 
-#include <glog/logging.h>
+#include "yb/util/logging.h"
 
+#include "yb/common/value.messages.h"
 #include "yb/common/ql_datatype.h"
 
 namespace yb {
@@ -67,6 +68,8 @@ DataType InternalToDataType(InternalType internal_type) {
       return DataType::VARINT;
     case InternalType::kFrozenValue:
       return DataType::FROZEN;
+    case InternalType::kTupleValue:
+      return DataType::TUPLE;
     case InternalType::kGinNullValue: // No such type in YCQL.
     case InternalType::VALUE_NOT_SET:
     case InternalType::kVirtualValue:
@@ -105,6 +108,7 @@ std::string InternalTypeToCQLString(InternalType internal_type) {
     case InternalType::kFrozenValue: return "frozen";
     case InternalType::kVirtualValue: return "virtual";
     case InternalType::kGinNullValue: return "unknown"; // No such type in YCQL.
+    case InternalType::kTupleValue: return "tuple";
   }
   LOG (FATAL) << "Invalid datatype: " << internal_type;
   return "Undefined Type";

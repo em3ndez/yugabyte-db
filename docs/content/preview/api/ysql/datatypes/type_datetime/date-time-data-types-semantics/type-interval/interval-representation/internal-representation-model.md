@@ -4,12 +4,11 @@ headerTitle: Modeling the internal representation and comparing the model with t
 linkTitle: Representation model
 description: Demonstrates a model of the internal representation of an interval value using PL/pgSQL. [YSQL]
 menu:
-  preview:
+  preview_api:
     identifier: internal-representation-model
     parent: interval-representation
     weight: 10
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 {{< tip title="Download and install the date-time utilities code." >}}

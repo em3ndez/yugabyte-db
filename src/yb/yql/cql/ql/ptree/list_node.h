@@ -20,8 +20,7 @@
 // which is verified during Analyze step.
 //--------------------------------------------------------------------------------------------------
 
-#ifndef YB_YQL_CQL_QL_PTREE_LIST_NODE_H_
-#define YB_YQL_CQL_QL_PTREE_LIST_NODE_H_
+#pragma once
 
 #include "yb/util/math_util.h"
 #include "yb/util/memory/arena.h"
@@ -92,14 +91,14 @@ class TreeListNode : public TreeNode {
   }
 
   // Run semantics analysis on this node.
-  CHECKED_STATUS Analyze(SemContext *sem_context) override {
+  Status Analyze(SemContext *sem_context) override {
     for (auto tnode : node_list_) {
       RETURN_NOT_OK(tnode->Analyze(sem_context));
     }
     return Status::OK();
   }
 
-  virtual CHECKED_STATUS Analyze(SemContext *sem_context,
+  virtual Status Analyze(SemContext *sem_context,
                                  TreeNodePtrOperator<SemContext, NodeType> node_op) {
     for (auto tnode : node_list_) {
       RETURN_NOT_OK(node_op(tnode.get(), sem_context));
@@ -109,11 +108,11 @@ class TreeListNode : public TreeNode {
 
   // Apply an operator on each node in the list.
   template<typename ContextType, typename DerivedType = NodeType>
-  CHECKED_STATUS Apply(ContextType *context,
-                       TreeNodePtrOperator<ContextType, DerivedType> node_op,
-                       int max_nested_level = 0,
-                       int max_nested_count = 0,
-                       TreeNodePtrOperator<ContextType, DerivedType> nested_node_op = nullptr) {
+  Status Apply(ContextType *context,
+               TreeNodePtrOperator<ContextType, DerivedType> node_op,
+               int max_nested_level = 0,
+               int max_nested_count = 0,
+               TreeNodePtrOperator<ContextType, DerivedType> nested_node_op = nullptr) {
 
     int nested_level = 0;
     int nested_count = 0;
@@ -181,10 +180,8 @@ class TreeListNode : public TreeNode {
 class PTListNode : public TreeListNode<> {
  public:
   // Run semantics analysis on a statement block.
-  CHECKED_STATUS AnalyzeStatementBlock(SemContext *sem_context);
+  Status AnalyzeStatementBlock(SemContext *sem_context);
 };
 
 }  // namespace ql
 }  // namespace yb
-
-#endif  // YB_YQL_CQL_QL_PTREE_LIST_NODE_H_

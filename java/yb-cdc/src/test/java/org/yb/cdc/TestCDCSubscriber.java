@@ -13,19 +13,20 @@
 
 package org.yb.cdc;
 
-import org.apache.log4j.Logger;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.yb.cdc.common.CDCBaseClass;
 import org.yb.cdc.util.CDCSubscriber;
-import org.yb.util.YBTestRunnerNonTsanOnly;
+import org.yb.YBTestRunner;
 
 import static org.yb.AssertionWrappers.*;
 
-@RunWith(value = YBTestRunnerNonTsanOnly.class)
+@RunWith(value = YBTestRunner.class)
 public class TestCDCSubscriber extends CDCBaseClass {
-  private final static Logger LOG = Logger.getLogger(TestCDCSubscriber.class);
+  private final static Logger LOG = LoggerFactory.getLogger(TestCDCSubscriber.class);
 
   @Before
   public void setUp() throws Exception {

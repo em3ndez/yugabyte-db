@@ -44,6 +44,7 @@
 #include "yb/util/test_util.h"
 
 using std::string;
+using std::vector;
 using namespace std::literals;
 
 namespace yb {
@@ -76,7 +77,8 @@ void TsRecoveryITest::StartCluster(const vector<string>& extra_tserver_flags,
 
 // Test that we replay from the recovery directory, if it exists.
 TEST_F(TsRecoveryITest, TestCrashDuringLogReplay) {
-  ASSERT_NO_FATALS(StartCluster({ "--TEST_fault_crash_during_log_replay=0.05" }));
+  const std::string crash_flag = "--TEST_fault_crash_during_log_replay=0.05";
+  ASSERT_NO_FATALS(StartCluster({ crash_flag }));
 
   TestWorkload work(cluster_.get());
   work.set_num_write_threads(4);
@@ -105,10 +107,12 @@ TEST_F(TsRecoveryITest, TestCrashDuringLogReplay) {
   }
   ASSERT_FALSE(cluster_->tablet_server(0)->IsProcessAlive()) << "TS didn't crash!";
 
+  cluster_->tablet_server(0)->Shutdown();
   // Now remove the crash flag, so the next replay will complete, and restart
   // the server once more.
-  cluster_->tablet_server(0)->Shutdown();
-  cluster_->tablet_server(0)->mutable_flags()->clear();
+  auto& flags = *cluster_->tablet_server(0)->mutable_flags();
+  flags.erase(std::remove_if(flags.begin(), flags.end(),
+      [&](std::string& flag){ return flag == crash_flag; }));
   ASSERT_OK(cluster_->tablet_server(0)->Restart());
 
   ClusterVerifier cluster_verifier(cluster_.get());
@@ -120,9 +124,12 @@ TEST_F(TsRecoveryITest, TestCrashDuringLogReplay) {
 }
 
 TEST_F(TsRecoveryITest, CrashAfterLogSegmentPreAllocationg) {
+  // Set xcluster_checkpoint_max_staleness_secs to 0 to prevent the flag validator from failing
+  // when log_min_seconds_to_retain is also set to 0
   ASSERT_NO_FATALS(StartCluster({
       "--log_segment_size_bytes=2000",
       "--log_min_seconds_to_retain=0",
+      "--xcluster_checkpoint_max_staleness_secs=0",
       "--retryable_request_timeout_secs=0",
       "--db_write_buffer_size=2000",
       "--TEST_log_fault_after_segment_allocation_min_replicate_index=10" }));

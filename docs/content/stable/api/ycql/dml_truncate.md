@@ -4,11 +4,10 @@ headerTitle: TRUNCATE
 linkTitle: TRUNCATE
 description: Use the TRUNCATE statement to remove all rows from a specified table.
 menu:
-  stable:
+  stable_api:
     parent: api-cassandra
     weight: 1330
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 ## Synopsis
@@ -23,7 +22,7 @@ Use the `TRUNCATE` statement to remove all rows from a specified table.
 
 ### Grammar
 
-```
+```ebnf
 truncate ::= TRUNCATE [ TABLE ] table_name;
 ```
 
@@ -62,7 +61,7 @@ ycqlsh:example> INSERT INTO employees(department_id, employee_id, name) VALUES (
 ycqlsh:example> SELECT * FROM employees;
 ```
 
-```
+```output
  department_id | employee_id | name
 ---------------+-------------+------
              2 |           1 |  Joe
@@ -80,7 +79,7 @@ ycqlsh:example> TRUNCATE employees;
 ycqlsh:example> SELECT * FROM employees;
 ```
 
-```
+```output
  department_id | employee_id | name
 ---------------+-------------+------
 ```
@@ -89,6 +88,6 @@ ycqlsh:example> SELECT * FROM employees;
 
 - [`CREATE TABLE`](../ddl_create_table)
 - [`INSERT`](../dml_insert)
-- [`SELECT`](../dml_select)
-- [`UPDATE`](../dml_update)
-- [`DELETE`](../dml_delete)
+- [`SELECT`](../dml_select/)
+- [`UPDATE`](../dml_update/)
+- [`DELETE`](../dml_delete/)

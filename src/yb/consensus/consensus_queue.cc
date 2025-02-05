@@ -32,15 +32,18 @@
 
 #include "yb/consensus/consensus_queue.h"
 
+#include <shared_mutex>
+
 #include <algorithm>
 #include <mutex>
-#include <shared_mutex>
 #include <string>
 #include <utility>
 
 #include <boost/container/small_vector.hpp>
-#include <glog/logging.h>
 
+#include "yb/cdc/cdc_error.h"
+
+#include "yb/consensus/consensus.messages.h"
 #include "yb/consensus/consensus_context.h"
 #include "yb/consensus/log_util.h"
 #include "yb/consensus/opid_util.h"
@@ -56,7 +59,8 @@
 
 #include "yb/util/enums.h"
 #include "yb/util/fault_injection.h"
-#include "yb/util/flag_tags.h"
+#include "yb/util/flags.h"
+#include "yb/util/flag_validators.h"
 #include "yb/util/locks.h"
 #include "yb/util/logging.h"
 #include "yb/util/mem_tracker.h"
@@ -69,87 +73,77 @@
 #include "yb/util/threadpool.h"
 #include "yb/util/tostring.h"
 #include "yb/util/url-coding.h"
+#include "yb/util/shared_lock.h"
 
 using namespace std::literals;
 using namespace yb::size_literals;
 
 DECLARE_uint64(rpc_max_message_size);
 
-// We expect that consensus_max_batch_size_bytes + 1_KB would be less than rpc_max_message_size.
-// Otherwise such batch would be rejected by RPC layer.
-DEFINE_uint64(consensus_max_batch_size_bytes, 4_MB,
-              "The maximum per-tablet RPC batch size when updating peers.");
-TAG_FLAG(consensus_max_batch_size_bytes, advanced);
-TAG_FLAG(consensus_max_batch_size_bytes, runtime);
+DECLARE_uint64(consensus_max_batch_size_bytes);
 
-DEFINE_int32(follower_unavailable_considered_failed_sec, 900,
+DEFINE_UNKNOWN_int32(follower_unavailable_considered_failed_sec, 900,
              "Seconds that a leader is unable to successfully heartbeat to a "
              "follower after which the follower is considered to be failed and "
              "evicted from the config.");
 TAG_FLAG(follower_unavailable_considered_failed_sec, advanced);
 
-DEFINE_int32(consensus_inject_latency_ms_in_notifications, 0,
+DEFINE_UNKNOWN_int32(consensus_inject_latency_ms_in_notifications, 0,
              "Injects a random sleep between 0 and this many milliseconds into "
              "asynchronous notifications from the consensus queue back to the "
              "consensus implementation.");
 TAG_FLAG(consensus_inject_latency_ms_in_notifications, hidden);
 TAG_FLAG(consensus_inject_latency_ms_in_notifications, unsafe);
 
-DEFINE_int32(cdc_checkpoint_opid_interval_ms, 60 * 1000,
+DEFINE_UNKNOWN_int32(cdc_checkpoint_opid_interval_ms, 60 * 1000,
              "Interval up to which CDC consumer's checkpoint is considered for retaining log cache."
              "If we haven't received an updated checkpoint from CDC consumer within the interval "
              "specified by cdc_checkpoint_opid_interval, then log cache does not consider that "
              "consumer while determining which op IDs to evict.");
 
-DEFINE_int64(cdc_intent_retention_ms, 4 * 3600 * 1000,
-             "Interval up to which CDC consumer's checkpoint is considered for retaining intents."
-             "If we haven't received an updated checkpoint from CDC consumer within the interval "
-             "specified by cdc_checkpoint_opid_interval, then CDC does not consider that "
-             "consumer while determining which op IDs to delete from the intent.");
-
-DEFINE_bool(enable_consensus_exponential_backoff, true,
-            "Whether exponential backoff based on number of retransmissions at tablet leader "
-            "for number of entries to replicate to lagging follower is enabled.");
+DEFINE_RUNTIME_bool(enable_consensus_exponential_backoff, true,
+    "Whether exponential backoff based on number of retransmissions at tablet leader "
+    "for number of entries to replicate to lagging follower is enabled.");
 TAG_FLAG(enable_consensus_exponential_backoff, advanced);
-TAG_FLAG(enable_consensus_exponential_backoff, runtime);
 
-DEFINE_int32(consensus_lagging_follower_threshold, 10,
-             "Number of retransmissions at tablet leader to mark a follower as lagging. "
-             "-1 disables the feature.");
+DEFINE_RUNTIME_int32(consensus_lagging_follower_threshold, 10,
+    "Number of retransmissions at tablet leader to mark a follower as lagging. "
+    "-1 disables the feature.");
 TAG_FLAG(consensus_lagging_follower_threshold, advanced);
-TAG_FLAG(consensus_lagging_follower_threshold, runtime);
 
 DEFINE_test_flag(bool, disallow_lmp_failures, false,
                  "Whether we disallow PRECEDING_ENTRY_DIDNT_MATCH failures for non new peers.");
 
-namespace {
+DEFINE_RUNTIME_AUTO_bool(remote_bootstrap_from_leader_only, kLocalVolatile, true, false,
+    "Whether to instruct the peer to attempt bootstrap from the closest peer instead of the "
+    "leader. The leader too could be the closest peer depending on the new peer's geographic "
+    "placement. Setting the flag to false will enable remote bootstrap from the closest peer. "
+    "On addition of a new node, it follows that most bootstrap sources would now be from a "
+    "single node and could result in increased load on the node. If bootstrap of a new node is "
+    "slow, it might be worth setting the flag to true and enable bootstrapping from leader only.");
 
-constexpr const auto kMinRpcThrottleThresholdBytes = 16;
+DEFINE_RUNTIME_uint32(max_remote_bootstrap_attempts_from_non_leader, 5,
+    "When FLAGS_remote_bootstrap_from_leader_only is enabled, the flag represents the maximum "
+    "number of times we attempt to remote bootstrap a new peer from a closest non-leader peer "
+    "that result in a failure. We fallback to bootstrapping from the leader peer post this.");
 
-static bool RpcThrottleThresholdBytesValidator(const char* flagname, int64_t value) {
-  if (value > 0) {
-    if (value < kMinRpcThrottleThresholdBytes) {
-      LOG(ERROR) << "Expect " << flagname << " to be at least " << kMinRpcThrottleThresholdBytes;
-      return false;
-    } else if (implicit_cast<size_t>(value) >= FLAGS_consensus_max_batch_size_bytes) {
-      LOG(ERROR) << "Expect " << flagname << " to be less than consensus_max_batch_size_bytes "
-                 << "value (" << FLAGS_consensus_max_batch_size_bytes << ")";
-      return false;
-    }
-  }
-  return true;
-}
+DEFINE_test_flag(bool, assert_remote_bootstrap_happens_from_same_zone, false,
+    "Assert that remote bootstrap is served by a peer in the same zone as the new peer.");
 
-} // namespace
+DEFINE_test_flag(bool, stop_committed_op_id_updation, false,
+    "Test flag to stop the updation of committed_op_id");
 
-DECLARE_int64(rpc_throttle_threshold_bytes);
+DEFINE_RUNTIME_uint32(cdcsdk_wal_reads_deadline_buffer_secs, 5,
+    "This flag determines the buffer time from the deadline at which we must stop reading the WAL "
+    "messages and start processing the records we have read till now.");
 
 namespace yb {
 namespace consensus {
 
 using log::Log;
 using std::unique_ptr;
-using rpc::Messenger;
+using std::string;
+using std::max;
 using strings::Substitute;
 
 METRIC_DEFINE_gauge_int64(tablet, majority_done_ops, "Leader Operations Acked by Majority",
@@ -173,10 +167,11 @@ std::string PeerMessageQueue::TrackedPeer::ToString() const {
   return Format(
       "{ peer: $0 is_new: $1 last_received: $2 next_index: $3 last_known_committed_idx: $4 "
       "is_last_exchange_successful: $5 needs_remote_bootstrap: $6 member_type: $7 "
-      "num_sst_files: $8 last_applied: $9 }",
+      "num_sst_files: $8 last_applied: $9 last_successful_communication_time: $10ms ago}",
       uuid, is_new, last_received, next_index, last_known_committed_idx,
       is_last_exchange_successful, needs_remote_bootstrap, PeerMemberType_Name(member_type),
-      num_sst_files, last_applied);
+      num_sst_files, last_applied,
+      MonoTime::Now().GetDeltaSince(last_successful_communication_time).ToMilliseconds());
 }
 
 void PeerMessageQueue::TrackedPeer::ResetLeaderLeases() {
@@ -206,8 +201,8 @@ PeerMessageQueue::PeerMessageQueue(const scoped_refptr<MetricEntity>& metric_ent
                                    const string& tablet_id,
                                    const server::ClockPtr& clock,
                                    ConsensusContext* context,
-                                   unique_ptr<ThreadPoolToken> raft_pool_token)
-    : raft_pool_observers_token_(std::move(raft_pool_token)),
+                                   unique_ptr<rpc::Strand> raft_pool_observers_strand)
+    : notifications_strand_(std::move(raft_pool_observers_strand)),
       local_peer_pb_(local_peer_pb),
       local_peer_uuid_(local_peer_pb_.has_permanent_uuid() ? local_peer_pb_.permanent_uuid()
                                                            : string()),
@@ -223,17 +218,20 @@ PeerMessageQueue::PeerMessageQueue(const scoped_refptr<MetricEntity>& metric_ent
 }
 
 void PeerMessageQueue::Init(const OpId& last_locally_replicated) {
-  LockGuard lock(queue_lock_);
-  CHECK_EQ(queue_state_.state, State::kQueueConstructed);
-  log_cache_.Init(last_locally_replicated.ToPB<OpIdPB>());
-  queue_state_.last_appended = last_locally_replicated;
-  queue_state_.state = State::kQueueOpen;
-  local_peer_ = TrackPeerUnlocked(local_peer_uuid_);
+  {
+    LockGuard lock(queue_lock_);
+    CHECK_EQ(queue_state_.state, State::kQueueConstructed);
+    log_cache_.Init(last_locally_replicated.ToPB<OpIdPB>());
+    queue_state_.last_appended = last_locally_replicated;
+    queue_state_.state = State::kQueueOpen;
+    local_peer_ = TrackPeerUnlocked(local_peer_pb_);
+  }  // Ensure that the queue_lock_ is released.
 
   if (context_) {
     context_->ListenNumSSTFilesChanged(std::bind(&PeerMessageQueue::NumSSTFilesChanged, this));
     installed_num_sst_files_changed_listener_ = true;
   }
+
 }
 
 void PeerMessageQueue::SetLeaderMode(const OpId& committed_op_id,
@@ -279,12 +277,13 @@ void PeerMessageQueue::TrackPeer(const string& uuid) {
   TrackPeerUnlocked(uuid);
 }
 
-PeerMessageQueue::TrackedPeer* PeerMessageQueue::TrackPeerUnlocked(const string& uuid) {
-  CHECK(!uuid.empty()) << "Got request to track peer with empty UUID";
-  DCHECK_EQ(queue_state_.state, State::kQueueOpen);
+void PeerMessageQueue::TrackPeer(const RaftPeerPB& raft_peer_pb) {
+  LockGuard lock(queue_lock_);
+  TrackPeerUnlocked(raft_peer_pb);
+}
 
-  TrackedPeer* tracked_peer = new TrackedPeer(uuid);
-
+PeerMessageQueue::TrackedPeer* PeerMessageQueue::SetupNewTrackedPeerUnlocked(
+    std::unique_ptr<PeerMessageQueue::TrackedPeer> tracked_peer) {
   // We don't know the last operation received by the peer so, following the Raft protocol, we set
   // next_index to one past the end of our own log. This way, if calling this method is the result
   // of a successful leader election and the logs between the new leader and remote peer match, the
@@ -292,14 +291,31 @@ PeerMessageQueue::TrackedPeer* PeerMessageQueue::TrackPeerUnlocked(const string&
   // assert leadership. If we guessed wrong, and the peer does not have a log that matches ours, the
   // normal queue negotiation process will eventually find the right point to resume from.
   tracked_peer->next_index = queue_state_.last_appended.index + 1;
-  InsertOrDie(&peers_map_, uuid, tracked_peer);
+  PeerMessageQueue::TrackedPeer* tracked_peer_raw_ptr = tracked_peer.release();
+  InsertOrDie(&peers_map_, tracked_peer_raw_ptr->uuid, tracked_peer_raw_ptr);
 
   CheckPeersInActiveConfigIfLeaderUnlocked();
 
   // We don't know how far back this peer is, so set the all replicated watermark to
   // MinimumOpId. We'll advance it when we know how far along the peer is.
   queue_state_.all_replicated_op_id = OpId::Min();
-  return tracked_peer;
+  return tracked_peer_raw_ptr;
+}
+
+PeerMessageQueue::TrackedPeer* PeerMessageQueue::TrackPeerUnlocked(const string& uuid) {
+  CHECK(!uuid.empty()) << "Got request to track peer with empty UUID";
+  DCHECK_EQ(queue_state_.state, State::kQueueOpen);
+
+  std::unique_ptr<TrackedPeer> tracked_peer = std::make_unique<TrackedPeer>(uuid);
+  return SetupNewTrackedPeerUnlocked(std::move(tracked_peer));
+}
+
+PeerMessageQueue::TrackedPeer* PeerMessageQueue::TrackPeerUnlocked(const RaftPeerPB& raft_peer_pb) {
+  CHECK(!raft_peer_pb.permanent_uuid().empty()) << "Got request to track peer with empty UUID";
+  DCHECK_EQ(queue_state_.state, State::kQueueOpen);
+
+  std::unique_ptr<TrackedPeer> tracked_peer = std::make_unique<TrackedPeer>(raft_peer_pb);
+  return SetupNewTrackedPeerUnlocked(std::move(tracked_peer));
 }
 
 void PeerMessageQueue::UntrackPeer(const string& uuid) {
@@ -356,53 +372,67 @@ void PeerMessageQueue::LocalPeerAppendFinished(const OpId& id, const Status& sta
   // Fake an RPC response from the local peer.
   // TODO: we should probably refactor the ResponseFromPeer function so that we don't need to
   // construct this fake response, but this seems to work for now.
-  ConsensusResponsePB fake_response;
+  // TODO(lw_uc) arena that encapsulates first block.
+  ThreadSafeArena arena;
+  LWConsensusResponsePB fake_response(&arena);
   id.ToPB(fake_response.mutable_status()->mutable_last_received());
   id.ToPB(fake_response.mutable_status()->mutable_last_received_current_leader());
   if (context_) {
     fake_response.set_num_sst_files(context_->NumSSTFiles());
   }
+  int64_t evict_index = -1;
+  bool is_leader;
   {
     LockGuard lock(queue_lock_);
+    if (PREDICT_FALSE(queue_state_.state != State::kQueueOpen)) {
+      LOG_WITH_PREFIX_UNLOCKED(WARNING) << "Queue is closed, disregarding appender finished. "
+          "OpId: " << id;
+      return;
+    }
 
     // TODO This ugly fix is required because we unlock queue_lock_ while doing AppendOperations.
     // So LocalPeerAppendFinished could be invoked before rest of AppendOperations.
     if (queue_state_.last_appended.index < id.index) {
       queue_state_.last_appended = id;
     }
-    fake_response.mutable_status()->set_last_committed_idx(queue_state_.committed_op_id.index);
-    queue_state_.last_applied_op_id.ToPB(fake_response.mutable_status()->mutable_last_applied());
 
-    if (queue_state_.mode != Mode::LEADER) {
-      log_cache_.EvictThroughOp(id.index);
-
+    is_leader = (queue_state_.mode == Mode::LEADER);
+    if (is_leader) {  // fake_response is only used in Leader case
+      fake_response.mutable_status()->set_last_committed_idx(queue_state_.committed_op_id.index);
+      queue_state_.last_applied_op_id.ToPB(fake_response.mutable_status()->mutable_last_applied());
+    } else {
+      evict_index = id.index;
       UpdateMetrics();
-      return;
     }
   }
-  ResponseFromPeer(local_peer_uuid_, fake_response);
+
+  if (is_leader) {
+    ResponseFromPeer(local_peer_uuid_, fake_response);
+  } else {
+    log_cache_.EvictThroughOp(evict_index);
+  }
 }
 
 Status PeerMessageQueue::TEST_AppendOperation(const ReplicateMsgPtr& msg) {
   return AppendOperations(
-      { msg }, yb::OpId::FromPB(msg->committed_op_id()), RestartSafeCoarseMonoClock().Now());
+      { msg }, OpId::FromPB(msg->committed_op_id()), RestartSafeCoarseMonoClock().Now());
 }
 
 Status PeerMessageQueue::AppendOperations(const ReplicateMsgs& msgs,
-                                          const yb::OpId& committed_op_id,
+                                          const OpId& committed_op_id,
                                           RestartSafeCoarseTimePoint batch_mono_time) {
   DFAKE_SCOPED_LOCK(append_fake_lock_);
   OpId last_id;
   if (!msgs.empty()) {
-    std::unique_lock<simple_spinlock> lock(queue_lock_);
-
     last_id = OpId::FromPB(msgs.back()->id());
+
+    LockGuard lock(queue_lock_);
 
     if (last_id.term > queue_state_.current_term) {
       queue_state_.current_term = last_id.term;
     }
   } else {
-    std::unique_lock<simple_spinlock> lock(queue_lock_);
+    LockGuard lock(queue_lock_);
     last_id = queue_state_.last_appended;
   }
 
@@ -417,9 +447,11 @@ Status PeerMessageQueue::AppendOperations(const ReplicateMsgs& msgs,
       Bind(&PeerMessageQueue::LocalPeerAppendFinished, Unretained(this), last_id)));
 
   if (!msgs.empty()) {
-    std::unique_lock<simple_spinlock> lock(queue_lock_);
-    queue_state_.last_appended = last_id;
-    UpdateMetrics();
+    {
+      LockGuard lock(queue_lock_);
+      queue_state_.last_appended = last_id;
+      UpdateMetrics();
+    }
   }
 
   return Status::OK();
@@ -430,8 +462,8 @@ uint64_t GetNumMessagesToSendWithBackoff(int64_t last_num_messages_sent) {
 }
 
 Status PeerMessageQueue::RequestForPeer(const string& uuid,
-                                        ConsensusRequestPB* request,
-                                        ReplicateMsgsHolder* msgs_holder,
+                                        LWConsensusRequestPB* request,
+                                        LWReplicateMsgsHolder* msgs_holder,
                                         bool* needs_remote_bootstrap,
                                         PeerMemberType* member_type,
                                         bool* last_exchange_successful) {
@@ -451,6 +483,8 @@ Status PeerMessageQueue::RequestForPeer(const string& uuid,
     propagated_safe_time = VERIFY_RESULT(context_->PreparePeerRequest());
   }
 
+  int64 current_term;
+  RaftConfigPB active_config;
   {
     LockGuard lock(queue_lock_);
     DCHECK_EQ(queue_state_.state, State::kQueueOpen);
@@ -549,24 +583,26 @@ Status PeerMessageQueue::RequestForPeer(const string& uuid,
     if (peer->member_type == PeerMemberType::VOTER) {
       is_voter = true;
     }
+    current_term = queue_state_.current_term;
+    active_config = *queue_state_.active_config;
   }
 
   if (unreachable_time.ToSeconds() > FLAGS_follower_unavailable_considered_failed_sec) {
-    if (!is_voter || CountVoters(*queue_state_.active_config) > 2) {
+    if (!is_voter || CountVoters(active_config) > 2) {
       // We never drop from 2 voters to 1 voter automatically, at least for now (12/4/18). We may
       // want to revisit this later, we're just being cautious with this.
-      // We remove unconditionally any failed non-voter replica (PRE_VOTER, PRE_OBSERVER, OBSERVER).
+      // We remove unconditionally any failed non-voter replica (PRE_VOTER,PRE_OBSERVER,OBSERVER).
       string msg = Substitute("Leader has been unable to successfully communicate "
                               "with Peer $0 for more than $1 seconds ($2)",
                               uuid,
                               FLAGS_follower_unavailable_considered_failed_sec,
                               unreachable_time.ToString());
-      NotifyObserversOfFailedFollower(uuid, queue_state_.current_term, msg);
+      NotifyObserversOfFailedFollower(uuid, current_term, msg);
     }
   }
 
   if (PREDICT_FALSE(*needs_remote_bootstrap)) {
-      YB_LOG_WITH_PREFIX_UNLOCKED_EVERY_N_SECS(INFO, 30)
+      YB_LOG_WITH_PREFIX_EVERY_N_SECS(INFO, 30)
           << "Peer needs remote bootstrap: " << uuid;
     return Status::OK();
   }
@@ -580,7 +616,7 @@ Status PeerMessageQueue::RequestForPeer(const string& uuid,
   // Otherwise, we grab requests from the log starting at the last_received point.
   if (!is_new && num_log_ops_to_send > 0) {
     // The batch of messages to send to the peer.
-    auto max_batch_size = FLAGS_consensus_max_batch_size_bytes - request->ByteSizeLong();
+    auto max_batch_size = FLAGS_consensus_max_batch_size_bytes - request->SerializedSize();
     auto to_index = num_log_ops_to_send == kSendUnboundedLogOps ?
         0 : previously_sent_index + num_log_ops_to_send;
     auto result = ReadFromLogCache(previously_sent_index, to_index, max_batch_size, uuid);
@@ -590,7 +626,7 @@ Status PeerMessageQueue::RequestForPeer(const string& uuid,
         std::string msg = Format("The logs necessary to catch up peer $0 have been "
                                  "garbage collected. The follower will never be able "
                                  "to catch up ($1)", uuid, result.status());
-        NotifyObserversOfFailedFollower(uuid, queue_state_.current_term, msg);
+        NotifyObserversOfFailedFollower(uuid, current_term, msg);
       }
       return result.status();
     }
@@ -600,7 +636,7 @@ Status PeerMessageQueue::RequestForPeer(const string& uuid,
     // point. At some point we may want to allow partially loading (and not pinning) earlier
     // messages. At that point we'll need to do something smarter here, like copy or ref-count.
     for (const auto& msg : result->messages) {
-      request->mutable_ops()->AddAllocated(msg.get());
+      request->mutable_ops()->push_back_ref(msg.get());
     }
 
     {
@@ -617,8 +653,7 @@ Status PeerMessageQueue::RequestForPeer(const string& uuid,
     if (result->read_from_disk_size) {
       consumption = ScopedTrackedConsumption(operations_mem_tracker_, result->read_from_disk_size);
     }
-    *msgs_holder = ReplicateMsgsHolder(
-        request->mutable_ops(), std::move(result->messages), std::move(consumption));
+    *msgs_holder = LWReplicateMsgsHolder(std::move(result->messages), std::move(consumption));
 
     if (propagated_safe_time &&
         !result->have_more_messages &&
@@ -649,14 +684,14 @@ Status PeerMessageQueue::RequestForPeer(const string& uuid,
   }
 
   if (PREDICT_FALSE(VLOG_IS_ON(2))) {
-    if (request->ops_size() > 0) {
-      VLOG_WITH_PREFIX_UNLOCKED(2) << "Sending request with operations to Peer: " << uuid
-          << ". Size: " << request->ops_size()
-          << ". From: " << request->ops(0).id().ShortDebugString() << ". To: "
-          << request->ops(request->ops_size() - 1).id().ShortDebugString();
-      VLOG_WITH_PREFIX_UNLOCKED(3) << "Operations: " << yb::ToString(request->ops());
+    if (!request->ops().empty()) {
+      VLOG_WITH_PREFIX(2) << "Sending request with operations to Peer: " << uuid
+          << ". Size: " << request->ops().size()
+          << ". From: " << request->ops().front().id().ShortDebugString() << ". To: "
+          << request->ops().back().id().ShortDebugString();
+      VLOG_WITH_PREFIX(3) << "Operations: " << yb::ToString(request->ops());
     } else {
-      VLOG_WITH_PREFIX_UNLOCKED(2)
+      VLOG_WITH_PREFIX(2)
           << "Sending " << (is_new ? "new " : "") << "status only request to Peer: " << uuid
           << ": " << request->ShortDebugString();
     }
@@ -665,16 +700,15 @@ Status PeerMessageQueue::RequestForPeer(const string& uuid,
   return Status::OK();
 }
 
-Result<ReadOpsResult> PeerMessageQueue::ReadFromLogCache(int64_t after_index,
-                                                         int64_t to_index,
-                                                         size_t max_batch_size,
-                                                         const std::string& peer_uuid,
-                                                         const CoarseTimePoint deadline) {
+Result<ReadOpsResult> PeerMessageQueue::ReadFromLogCache(
+    int64_t after_index, int64_t to_index, size_t max_batch_size, const std::string& peer_uuid,
+    const CoarseTimePoint deadline, const bool fetch_single_entry) {
   DCHECK_LT(FLAGS_consensus_max_batch_size_bytes + 1_KB, FLAGS_rpc_max_message_size);
 
   // We try to get the follower's next_index from our log.
   // Note this is not using "term" and needs to change
-  auto result = log_cache_.ReadOps(after_index, to_index, max_batch_size, deadline);
+  auto result =
+      log_cache_.ReadOps(after_index, to_index, max_batch_size, deadline, fetch_single_entry);
   if (PREDICT_FALSE(!result.ok())) {
     auto s = result.status();
     if (PREDICT_TRUE(s.IsNotFound())) {
@@ -683,13 +717,13 @@ Result<ReadOpsResult> PeerMessageQueue::ReadFromLogCache(int64_t after_index,
       // IsIncomplete() means that we tried to read beyond the head of the log (in the future).
       // KUDU-1078 points to a fix of this log spew issue that we've ported. This should not
       // happen under normal circumstances.
-      LOG_WITH_PREFIX_UNLOCKED(ERROR) << "Error trying to read ahead of the log "
+      LOG_WITH_PREFIX(ERROR) << "Error trying to read ahead of the log "
                                       << "while preparing peer request: "
                                       << s.ToString() << ". Destination peer: "
                                       << peer_uuid;
       return s;
     } else {
-      LOG_WITH_PREFIX_UNLOCKED(FATAL) << "Error reading the log while preparing peer request: "
+      LOG_WITH_PREFIX(FATAL) << "Error reading the log while preparing peer request: "
                                       << s.ToString() << ". Destination peer: "
                                       << peer_uuid;
       return s;
@@ -698,12 +732,40 @@ Result<ReadOpsResult> PeerMessageQueue::ReadFromLogCache(int64_t after_index,
   return result;
 }
 
+std::pair<int64_t, int64_t> PeerMessageQueue::GetCommittedAndMajorityReplicatedIndex() {
+  LockGuard lock(queue_lock_);
+  return {queue_state_.committed_op_id.index, queue_state_.majority_replicated_op_id.index};
+}
+
+int64_t PeerMessageQueue::GetStartOpIdIndex(int64_t start_index) {
+  return start_index == 0 ? max<int64_t>(log_cache_.earliest_op_index(), 0)
+                          : start_index;
+}
+
+Result<ReadOpsResult> PeerMessageQueue::ReadFromLogCacheForCDC(
+    int64_t last_op_id_index, int64_t to_index, CoarseTimePoint deadline, bool fetch_single_entry) {
+  // If an empty OpID is only sent on the first read request, start at the earliest known entry.
+  int64_t after_op_index = GetStartOpIdIndex(last_op_id_index);
+
+  auto result = ReadFromLogCache(
+      after_op_index, to_index, FLAGS_consensus_max_batch_size_bytes, local_peer_uuid_, deadline,
+      fetch_single_entry);
+  if (PREDICT_FALSE(!result.ok()) && PREDICT_TRUE(result.status().IsNotFound())) {
+    const std::string premature_gc_warning = Format(
+        "The logs from index $0 have been garbage collected and cannot be read ", after_op_index);
+    LOG_WITH_PREFIX(WARNING) << premature_gc_warning;
+    return result.status()
+        .CloneAndPrepend(premature_gc_warning)
+        .CloneAndAddErrorCode(cdc::CDCError(cdc::CDCErrorPB::CHECKPOINT_TOO_OLD));
+  }
+  return result;
+}
+
 // Read majority replicated messages from cache for CDC.
 // CDC producer will use this to get the messages to send in response to cdc::GetChanges RPC.
 Result<ReadOpsResult> PeerMessageQueue::ReadReplicatedMessagesForCDC(
-  const yb::OpId& last_op_id,
-  int64_t* repl_index,
-  const CoarseTimePoint deadline) {
+    const yb::OpId& last_op_id, int64_t* repl_index, const CoarseTimePoint deadline,
+    const bool fetch_single_entry) {
   // The batch of messages read from cache.
 
   int64_t to_index;
@@ -719,33 +781,258 @@ Result<ReadOpsResult> PeerMessageQueue::ReadReplicatedMessagesForCDC(
     *repl_index = to_index;
   }
 
-  if (last_op_id.index >= to_index) {
+  if (last_op_id.index >= to_index && !fetch_single_entry) {
     // Nothing to read.
-    return ReadOpsResult();
+    return ReadOpsResult {
+      .messages = ReplicateMsgs(),
+      .preceding_op = OpId(),
+      .have_more_messages = HaveMoreMessages(pending_messages)
+    };
   }
 
-  // If an empty OpID is only sent on the first read request, start at the earliest known entry.
-  int64_t after_op_index = last_op_id.empty() ?
-                             max(log_cache_.earliest_op_index(), last_op_id.index) :
-                             last_op_id.index;
+  auto result = VERIFY_RESULT(
+      ReadFromLogCacheForCDC(last_op_id.index, to_index, deadline, fetch_single_entry));
 
-  auto result = ReadFromLogCache(
-      after_op_index, to_index, FLAGS_consensus_max_batch_size_bytes, local_peer_uuid_, deadline);
-  if (PREDICT_FALSE(!result.ok()) && PREDICT_TRUE(result.status().IsNotFound())) {
-    LOG_WITH_PREFIX_UNLOCKED(INFO) << Format(
-        "The logs from index $0 have been garbage collected and cannot be read ($1)",
-        after_op_index, result.status());
-  }
-  if (result.ok()) {
-    result->have_more_messages = HaveMoreMessages(result->have_more_messages.get() ||
-                                                  pending_messages);
-  }
+  result.have_more_messages =
+      HaveMoreMessages(result.have_more_messages.get() || pending_messages);
+
   return result;
+}
+
+// Read all the commited messages from cache for CDC.
+// CDC producer will use these to get the messages to send in response to cdc::GetChanges RPC.
+Result<ReadOpsResult> PeerMessageQueue::ReadReplicatedMessagesForConsistentCDC(
+    OpId last_op_id, uint64_t stream_safe_time, CoarseTimePoint deadline, bool fetch_single_entry,
+    int64_t* repl_index) {
+  auto res = ReadOpsResult();
+  res.have_more_messages = HaveMoreMessages(false);
+  int64_t committed_op_id_index;
+  int64_t last_replicated_op_id_index;
+  bool pending_messages = false;
+  uint64_t last_read_hybrid_time = 0;
+
+  do {
+    // Return if we reach close to the deadline, providing time for cdc producer and virtual WAL
+    // to process the records.
+    if (deadline - CoarseMonoClock::Now() <= FLAGS_cdcsdk_wal_reads_deadline_buffer_secs * 1s) {
+      return res;
+    }
+
+    std::tie(committed_op_id_index, last_replicated_op_id_index) =
+        GetCommittedAndMajorityReplicatedIndex();
+
+    // Determine if there are pending operations in RAFT but not yet LogCache.
+    pending_messages = committed_op_id_index != last_replicated_op_id_index;
+
+    if (repl_index) {
+      *repl_index = committed_op_id_index;
+    }
+
+    if (last_op_id.index >= committed_op_id_index && !fetch_single_entry) {
+      if (pending_messages) {
+        // Wait for committed_op_id to match majority_replicated_op_id.
+        res.have_more_messages = HaveMoreMessages(pending_messages);
+        continue;
+      } else {
+        // Nothing to read.
+        return ReadOpsResult{
+            .messages = ReplicateMsgs(),
+            .preceding_op = last_op_id,
+            .have_more_messages = HaveMoreMessages::kFalse};
+      }
+    }
+
+    auto result = VERIFY_RESULT(ReadFromLogCacheForCDC(
+        last_op_id.index, committed_op_id_index, deadline, fetch_single_entry));
+
+    res.messages.insert(res.messages.end(), result.messages.begin(), result.messages.end());
+    res.read_from_disk_size += result.read_from_disk_size;
+    pending_messages |= result.have_more_messages.get();
+    res.have_more_messages = HaveMoreMessages(pending_messages);
+
+    if (res.messages.size() > 0) {
+      auto msg = res.messages.back();
+      last_op_id = OpId::FromPB(msg->id());
+      last_read_hybrid_time = msg->hybrid_time();
+    } else {
+      // If an empty last_op_id is sent in the first read request, then ReadFromLogCacheForCDC reads
+      // from the earliest known OpId. If this earliest known OpId turns out to be same as
+      // committed_op_id then we receive an empty message list in the result. The earliest known
+      // OpId is present in the preceding_op of the result. We update the last_op_id with this to
+      // prevent unncessary looping.
+      last_op_id = result.preceding_op;
+    }
+
+  } while ((last_op_id.index < committed_op_id_index || pending_messages) &&
+           last_read_hybrid_time <= stream_safe_time);
+
+  return res;
+}
+
+Result<ReadOpsResult> PeerMessageQueue::ReadReplicatedMessagesInSegmentForCDC(
+    const OpId& from_op_id, CoarseTimePoint deadline, bool fetch_single_entry,
+    int64_t* last_committed_index, HybridTime* consistent_stream_safe_time_footer,
+    bool* read_entire_wal) {
+  auto read_ops = ReadOpsResult();
+  int64_t start_op_id_index = -1;
+  int64_t current_segment_num = -1;
+  int64_t segment_last_index = -1;
+  int64_t committed_op_id_index = -1;
+  int64_t last_replicated_op_id_index = -1;
+  bool pending_messages;
+
+  do {
+    // We wait till committed_op_id_index becomes >= last index of the segment that contains the
+    // from_op_id. If we reach deadline, then return have_more_messages as true to wait for wal
+    // update.
+    if (deadline - CoarseMonoClock::Now() <= FLAGS_cdcsdk_wal_reads_deadline_buffer_secs * 1s) {
+      LOG(INFO) << "Deadline reached on tablet: " << tablet_id_
+                << " while waiting for committed_op_id_index: " << committed_op_id_index
+                << " to become >= segment's last index: " << segment_last_index
+                << ", current_segment_num: " << current_segment_num
+                << ", start_op_id_index: " << start_op_id_index
+                << ", last_replicated_op_id_index: " << last_replicated_op_id_index;
+      read_ops.have_more_messages = HaveMoreMessages(true);
+      return read_ops;
+    }
+
+    std::tie(committed_op_id_index, last_replicated_op_id_index) =
+        GetCommittedAndMajorityReplicatedIndex();
+
+    // Determine if there are pending operations in RAFT but not yet LogCache.
+    pending_messages = committed_op_id_index != last_replicated_op_id_index;
+
+    if (last_committed_index) {
+      *last_committed_index = committed_op_id_index;
+    }
+
+    if (from_op_id.index >= committed_op_id_index && !fetch_single_entry) {
+      // Nothing to read.
+      return ReadOpsResult{
+          .messages = ReplicateMsgs(),
+          .preceding_op = OpId(),
+          .have_more_messages = HaveMoreMessages(pending_messages)};
+    }
+
+    start_op_id_index = GetStartOpIdIndex(from_op_id.index);
+
+    VLOG(1) << "Will read Ops from a WAL segment for tablet: " << tablet_id_
+            << " start_op_id_index = " << start_op_id_index
+            << " committed_op_id_index = " << committed_op_id_index
+            << " last_replicated_op_id_index = " << last_replicated_op_id_index;
+
+    auto current_segment_num_result = log_cache_.LookupOpWalSegmentNumber(start_op_id_index);
+    if (!current_segment_num_result.ok() ||
+        (*current_segment_num_result == log_cache_.GetActiveSegmentNumber())) {
+      // Read entire WAL.
+      *read_entire_wal = true;
+      return ReadReplicatedMessagesForConsistentCDC(
+          from_op_id, HybridTime::kInvalid.ToUint64(), deadline, fetch_single_entry);
+    }
+
+    current_segment_num = *current_segment_num_result;
+    segment_last_index =
+        VERIFY_RESULT(log_cache_.GetMaxReplicateIndexFromSegmentFooter(current_segment_num));
+
+    // Nothing to read in this segment, read the next segment.
+    if (start_op_id_index == segment_last_index) {
+      current_segment_num =
+          VERIFY_RESULT(log_cache_.LookupOpWalSegmentNumber(start_op_id_index + 1));
+      if (current_segment_num == log_cache_.GetActiveSegmentNumber()) {
+        // Read entire WAL.
+        *read_entire_wal = true;
+        return ReadReplicatedMessagesForConsistentCDC(
+            from_op_id, HybridTime::kInvalid.ToUint64(), deadline, fetch_single_entry);
+      }
+      segment_last_index =
+          VERIFY_RESULT(log_cache_.GetMaxReplicateIndexFromSegmentFooter(current_segment_num));
+    }
+  } while (segment_last_index > committed_op_id_index);
+
+  auto consistent_stream_safe_time =
+      VERIFY_RESULT(log_cache_.GetMinStartTimeRunningTxnsFromSegmentFooter(current_segment_num));
+
+  if (consistent_stream_safe_time_footer) {
+    *consistent_stream_safe_time_footer = consistent_stream_safe_time;
+  }
+
+  VLOG(1) << "Reading a new WAL segment for tablet: " << tablet_id_ << " Segment info:"
+          << " current_segment_num = " << current_segment_num
+          << " active_segment_num = " << log_cache_.GetActiveSegmentNumber()
+          << " segment_last_index = " << segment_last_index
+          << " consistent_stream_safe_time = " << consistent_stream_safe_time
+          << " start_op_id_index = " << start_op_id_index;
+
+  auto current_index = start_op_id_index;
+
+  // Read the ops from the segment starting from current_index + 1.
+  while (current_index < segment_last_index) {
+    auto result = VERIFY_RESULT(
+        ReadFromLogCacheForCDC(current_index, segment_last_index, deadline, fetch_single_entry));
+
+    read_ops.read_from_disk_size += result.read_from_disk_size;
+    read_ops.messages.insert(
+        read_ops.messages.end(), result.messages.begin(), result.messages.end());
+
+    if (!result.messages.empty()) {
+      current_index = result.messages.back()->id().index();
+    }
+  }
+
+  // In addition to actually reading the active segment, the following condition also indicates that
+  // we have read the entire WAL. This can happen if a new segment has been allocated but there are
+  // no more writes on the tablet. Hence, last replicated op id falls in the last closed segment and
+  // active segment is essentially empty.
+  if(!pending_messages && current_index == last_replicated_op_id_index) {
+    *read_entire_wal = true;
+  }
+
+  return read_ops;
+}
+
+const PeerMessageQueue::TrackedPeer* PeerMessageQueue::FindClosestPeerForBootstrap(
+    const TrackedPeer* remote_tracked_peer) {
+  const CloudInfoPB& src_cloud_info = remote_tracked_peer->cloud_info.value();
+  // initializing rbs_source as the leader itself.
+  LocalityLevel best_locality_level =
+      TablespaceParser::GetLocalityLevel(src_cloud_info, local_peer_pb_.cloud_info());
+  PeerMessageQueue::TrackedPeer* rbs_source = local_peer_;
+  for (auto it = peers_map_.begin(); it != peers_map_.end(); it++) {
+    // don't consider locality of remote_tracked_peer with itself
+    if (!it->second->cloud_info.has_value() || remote_tracked_peer == it->second ||
+        it->second->needs_remote_bootstrap) {
+      continue;
+    }
+
+    // Consider only those followers as rbs source which are in the same term as the leader
+    // and have last_received_opid >= leader log's min available index.
+    // TODO: Add a gflag that sets the max allowed difference between the leader's last
+    // logged opid and that of the rbs source. Reject peer as an rbs source if
+    // leader->last_received.index - remote_peer->last_received.index > flag_value
+    OpId remote_last_received_opid = it->second->last_received;
+    if (it->second->member_type != PeerMemberType::VOTER ||
+        remote_last_received_opid.term != queue_state_.current_term ||
+        remote_last_received_opid.index < log_cache_.earliest_op_index() ||
+        !it->second->is_last_exchange_successful) {
+      continue;
+    }
+
+    auto cur_locality_level =
+        TablespaceParser::GetLocalityLevel(src_cloud_info, it->second->cloud_info.value());
+    if (cur_locality_level > best_locality_level) {
+      best_locality_level = cur_locality_level;
+      rbs_source = it->second;
+    }
+  }
+
+  return rbs_source;
 }
 
 Status PeerMessageQueue::GetRemoteBootstrapRequestForPeer(const string& uuid,
                                                           StartRemoteBootstrapRequestPB* req) {
   TrackedPeer* peer = nullptr;
+  const TrackedPeer* rbs_source = nullptr;
+  int64_t current_term;
   {
     LockGuard lock(queue_lock_);
     DCHECK_EQ(queue_state_.state, State::kQueueOpen);
@@ -754,37 +1041,77 @@ Status PeerMessageQueue::GetRemoteBootstrapRequestForPeer(const string& uuid,
     if (PREDICT_FALSE(peer == nullptr || queue_state_.mode == Mode::NON_LEADER)) {
       return STATUS(NotFound, "Peer not tracked or queue not in leader mode.");
     }
-  }
 
-  if (PREDICT_FALSE(!peer->needs_remote_bootstrap)) {
-    return STATUS(IllegalState, "Peer does not need to remotely bootstrap", uuid);
-  }
+    if (PREDICT_FALSE(!peer->needs_remote_bootstrap)) {
+      return STATUS(IllegalState, "Peer does not need to remotely bootstrap", uuid);
+    }
 
-  if (peer->member_type == PeerMemberType::VOTER || peer->member_type == PeerMemberType::OBSERVER) {
-    LOG(INFO) << "Remote bootstrapping peer " << uuid << " with type "
-              << PeerMemberType_Name(peer->member_type);
+    if (peer->member_type == PeerMemberType::VOTER ||
+        peer->member_type == PeerMemberType::OBSERVER) {
+      LOG(INFO) << "Remote bootstrapping peer " << uuid << " with type "
+                << PeerMemberType_Name(peer->member_type);
+    }
+
+    // Check if a closest follower can serve as the RBS source.
+    auto rbs_from_leader_only =
+        FLAGS_remote_bootstrap_from_leader_only ||
+        !peer->cloud_info.has_value() ||
+        peer->failed_bootstrap_attempts_from_non_leader >=
+            FLAGS_max_remote_bootstrap_attempts_from_non_leader;
+
+    rbs_source = rbs_from_leader_only ? local_peer_ : FindClosestPeerForBootstrap(peer);
+    current_term = queue_state_.current_term;
+
+    // Acess/Edit peer's fields within queue_lock_'s scope to avoid race. For instance, this peer's
+    // information could be accessed while finding RBS source for another newly added peer.
+    peer->needs_remote_bootstrap = false;
+    if (PREDICT_FALSE(FLAGS_TEST_assert_remote_bootstrap_happens_from_same_zone)) {
+      CHECK_EQ(
+          TablespaceParser::GetLocalityLevel(
+              rbs_source->cloud_info.value(), peer->cloud_info.value()),
+          LocalityLevel::kZone)
+          << "Expected rbs source to be in same zone as new peer";
+    }
   }
 
   req->Clear();
   req->set_dest_uuid(uuid);
   req->set_tablet_id(tablet_id_);
-  req->set_bootstrap_peer_uuid(local_peer_uuid_);
-  *req->mutable_source_private_addr() = local_peer_pb_.last_known_private_addr();
-  *req->mutable_source_broadcast_addr() = local_peer_pb_.last_known_broadcast_addr();
-  *req->mutable_source_cloud_info() = local_peer_pb_.cloud_info();
-  req->set_caller_term(queue_state_.current_term);
-  peer->needs_remote_bootstrap = false; // Now reset the flag.
+  // can use leader's current term as the bootstrap request is served by the leader or any other
+  // closest peer that is in the same term (when FLAGS_remote_bootstrap_from_leader_only is false).
+  req->set_caller_term(current_term);
+  // populate req with the closest peer's info for remote bootstrapping the tracked peer
+  req->set_bootstrap_source_peer_uuid(rbs_source->uuid);
+  *req->mutable_bootstrap_source_private_addr() = {
+      rbs_source->last_known_private_addr.begin(), rbs_source->last_known_private_addr.end()};
+  *req->mutable_bootstrap_source_broadcast_addr() = {
+      rbs_source->last_known_broadcast_addr.begin(), rbs_source->last_known_broadcast_addr.end()};
+  if (rbs_source->cloud_info.has_value()) {
+    *req->mutable_bootstrap_source_cloud_info() = rbs_source->cloud_info.value();
+  }
+
+  if (rbs_source->uuid != local_peer_->uuid) {
+    // rbs source is not the leader, hence set the leader info.
+    req->set_is_served_by_tablet_leader(false);
+    req->set_tablet_leader_peer_uuid(uuid);
+    *req->mutable_tablet_leader_private_addr() = local_peer_pb_.last_known_private_addr();
+    *req->mutable_tablet_leader_broadcast_addr() = local_peer_pb_.last_known_broadcast_addr();
+    *req->mutable_tablet_leader_cloud_info() = local_peer_pb_.cloud_info();
+  } else {
+    req->set_is_served_by_tablet_leader(true);
+  }
+
   return Status::OK();
 }
 
 void PeerMessageQueue::UpdateCDCConsumerOpId(const yb::OpId& op_id) {
-  std::lock_guard<rw_spinlock> l(cdc_consumer_lock_);
+  std::lock_guard l(cdc_consumer_lock_);
   cdc_consumer_op_id_ = op_id;
   cdc_consumer_op_id_last_updated_ = CoarseMonoClock::Now();
 }
 
 yb::OpId PeerMessageQueue::GetCDCConsumerOpIdToEvict() {
-  std::shared_lock<rw_spinlock> l(cdc_consumer_lock_);
+  SharedLock l(cdc_consumer_lock_);
   // For log cache eviction, we only want to include CDC consumers that are actively polling.
   // If CDC consumer checkpoint has not been updated recently, we exclude it.
   if (CoarseMonoClock::Now() - cdc_consumer_op_id_last_updated_ <= kCDCConsumerCheckpointInterval) {
@@ -994,7 +1321,7 @@ MicrosTime PeerMessageQueue::HybridTimeLeaseExpirationWatermark() {
     }
 
     static result_type InfiniteWatermarkForLocalPeer() {
-      return HybridTime::kMax.GetPhysicalValueMicros();
+      return kInfiniteHybridTimeLeaseExpiration;
     }
 
     static result_type ExtractValue(const TrackedPeer& peer) {
@@ -1058,6 +1385,15 @@ OpId PeerMessageQueue::OpIdWatermark() {
   return GetWatermark<Policy>();
 }
 
+void PeerMessageQueue::IncrementFailedBootstrapAttemptsFromNonLeader(const std::string& peer_uuid) {
+  LockGuard l(queue_lock_);
+  TrackedPeer* peer = FindPtrOrNull(peers_map_, peer_uuid);
+  if (!peer) {
+    return;
+  }
+  peer->failed_bootstrap_attempts_from_non_leader += 1;
+}
+
 void PeerMessageQueue::NotifyPeerIsResponsiveDespiteError(const std::string& peer_uuid) {
   LockGuard l(queue_lock_);
   TrackedPeer* peer = FindPtrOrNull(peers_map_, peer_uuid);
@@ -1080,13 +1416,11 @@ void PeerMessageQueue::RequestWasNotSent(const std::string& peer_uuid) {
 
 
 bool PeerMessageQueue::ResponseFromPeer(const std::string& peer_uuid,
-                                        const ConsensusResponsePB& response) {
-  DCHECK(response.IsInitialized()) << "Error: Uninitialized: "
-      << response.InitializationErrorString() << ". Response: " << response.ShortDebugString();
-
+                                        const LWConsensusResponsePB& response) {
   MajorityReplicatedData majority_replicated;
   Mode mode_copy;
   bool result = false;
+  int64_t evict_index = -1;
   {
     LockGuard scoped_lock(queue_lock_);
     DCHECK_NE(State::kQueueConstructed, queue_state_.state);
@@ -1139,10 +1473,6 @@ bool PeerMessageQueue::ResponseFromPeer(const std::string& peer_uuid,
 
     if (response.has_status()) {
       const auto& status = response.status();
-      // Sanity checks.  Some of these can be eventually removed, but they are handy for now.
-      DCHECK(status.IsInitialized()) << "Error: Uninitialized: "
-                                                << response.InitializationErrorString()
-                                                << ". Response: " << response.ShortDebugString();
       // The status must always have a last received op id and a last committed index.
       DCHECK(status.has_last_received());
       DCHECK(status.has_last_received_current_leader());
@@ -1156,13 +1486,13 @@ bool PeerMessageQueue::ResponseFromPeer(const std::string& peer_uuid,
       // If we've never successfully sent them anything, start after the last-committed op in their
       // log, which is guaranteed by the Raft protocol to be a valid op.
 
-      bool peer_has_prefix_of_log = IsOpInLog(yb::OpId::FromPB(status.last_received()));
+      bool peer_has_prefix_of_log = IsOpInLog(OpId::FromPB(status.last_received()));
       if (peer_has_prefix_of_log) {
         // If the latest thing in their log is in our log, we are in sync.
         peer->last_received = OpId::FromPB(status.last_received());
         peer->next_index = peer->last_received.index + 1;
 
-      } else if (!OpIdEquals(status.last_received_current_leader(), MinimumOpId())) {
+      } else if (OpId::FromPB(status.last_received_current_leader()) != OpId::Min()) {
         // Their log may have diverged from ours, however we are in the process of replicating our
         // ops to them, so continue doing so. Eventually, we will cause the divergent entry in their
         // log to be overwritten.
@@ -1258,7 +1588,7 @@ bool PeerMessageQueue::ResponseFromPeer(const std::string& peer_uuid,
     UpdateAllReplicatedOpId(&queue_state_.all_replicated_op_id);
     UpdateAllAppliedOpId(&queue_state_.all_applied_op_id);
 
-    auto evict_index = GetCDCConsumerOpIdToEvict().index;
+    evict_index = GetCDCConsumerOpIdToEvict().index;
 
     int32_t lagging_follower_threshold = FLAGS_consensus_lagging_follower_threshold;
     if (lagging_follower_threshold > 0) {
@@ -1268,9 +1598,11 @@ bool PeerMessageQueue::ResponseFromPeer(const std::string& peer_uuid,
       evict_index = std::min(evict_index, queue_state_.all_replicated_op_id.index);
     }
 
-    log_cache_.EvictThroughOp(evict_index);
-
     UpdateMetrics();
+  }
+
+  if (evict_index != -1) {
+    log_cache_.EvictThroughOp(evict_index);
   }
 
   if (mode_copy == Mode::LEADER) {
@@ -1318,10 +1650,10 @@ OpId PeerMessageQueue::TEST_GetLastAppliedOpId() const {
 
 void PeerMessageQueue::UpdateMetrics() {
   // Since operations have consecutive indices we can update the metrics based on simple index math.
-  metrics_.num_majority_done_ops->set_value(
-      queue_state_.committed_op_id.index - queue_state_.all_replicated_op_id.index);
-  metrics_.num_in_progress_ops->set_value(
-      queue_state_.last_appended.index - queue_state_.committed_op_id.index);
+  metrics_.num_majority_done_ops->set_value(queue_state_.committed_op_id.index
+          - queue_state_.all_replicated_op_id.index);
+  metrics_.num_in_progress_ops->set_value(queue_state_.last_appended.index
+          - queue_state_.committed_op_id.index);
 }
 
 void PeerMessageQueue::DumpToHtml(std::ostream& out) const {
@@ -1332,9 +1664,12 @@ void PeerMessageQueue::DumpToHtml(std::ostream& out) const {
   out << "<table>" << endl;;
   out << "  <tr><th>Peer</th><th>Watermark</th></tr>" << endl;
   for (const PeersMap::value_type& entry : peers_map_) {
-    out << Substitute("  <tr><td>$0</td><td>$1</td></tr>",
-                      EscapeForHtmlToString(entry.first),
-                      EscapeForHtmlToString(entry.second->ToString())) << endl;
+    out << Substitute(
+               "  <tr><td><ul><li>$0</li><li>$1</li></ul></td><td>$2</td></tr>",
+               EscapeForHtmlToString("UUID: " + entry.first),
+               EscapeForHtmlToString("Host: " + entry.second->last_known_private_addr[0].host()),
+               EscapeForHtmlToString(entry.second->ToString()))
+        << endl;
   }
   out << "</table>" << endl;
 
@@ -1351,7 +1686,7 @@ void PeerMessageQueue::Close() {
     context_->ListenNumSSTFilesChanged(std::function<void()>());
     installed_num_sst_files_changed_listener_ = false;
   }
-  raft_pool_observers_token_->Shutdown();
+  notifications_strand_->Shutdown();
   LockGuard lock(queue_lock_);
   ClearUnlocked();
 }
@@ -1417,25 +1752,27 @@ bool PeerMessageQueue::IsOpInLog(const yb::OpId& desired_op) const {
   if (PREDICT_TRUE(result.status().IsNotFound() || result.status().IsIncomplete())) {
     return false;
   }
-  LOG_WITH_PREFIX_UNLOCKED(FATAL) << "Error while reading the log: " << result.status();
+  LOG_WITH_PREFIX(FATAL) << "Error while reading the log: " << result.status();
   return false; // Unreachable; here to squelch GCC warning.
 }
 
 void PeerMessageQueue::NotifyObserversOfMajorityReplOpChange(
     const MajorityReplicatedData& majority_replicated_data) {
-  WARN_NOT_OK(raft_pool_observers_token_->SubmitClosure(
-      Bind(&PeerMessageQueue::NotifyObserversOfMajorityReplOpChangeTask,
-           Unretained(this),
-           majority_replicated_data)),
-      LogPrefixUnlocked() + "Unable to notify RaftConsensus of "
-                           "majority replicated op change.");
+  notifications_strand_->Enqueue(new rpc::StrandTaskWithErrorFunc(
+    [this, majority_replicated_data]() {
+      PeerMessageQueue::NotifyObserversOfMajorityReplOpChangeTask(majority_replicated_data);
+    },
+    [this](const Status& status) {
+      LOG_WITH_PREFIX(WARNING)
+          << "Unable to notify RaftConsensus of majority replicated op change: " << status;
+    }
+  ));
 }
 
 template <class Func>
 void PeerMessageQueue::NotifyObservers(const char* title, Func&& func) {
-  WARN_NOT_OK(
-      raft_pool_observers_token_->SubmitFunc(
-          [this, func = std::move(func)] {
+  notifications_strand_->Enqueue(new rpc::StrandTaskWithErrorFunc(
+      [this, func = std::move(func)] {
         MAYBE_INJECT_RANDOM_LATENCY(FLAGS_consensus_inject_latency_ms_in_notifications);
         std::vector<PeerMessageQueueObserver*> copy;
         {
@@ -1446,8 +1783,11 @@ void PeerMessageQueue::NotifyObservers(const char* title, Func&& func) {
         for (PeerMessageQueueObserver* observer : copy) {
           func(observer);
         }
-      }),
-      Format("$0Unable to notify observers for $1.", LogPrefixUnlocked(), title));
+      },
+      [this, title](const Status& status) {
+        LOG_WITH_PREFIX(WARNING)
+            << "Unable to notify observers for " << title << ": " << status;
+      }));
 }
 
 void PeerMessageQueue::NotifyObserversOfTermChange(int64_t term) {
@@ -1476,7 +1816,8 @@ void PeerMessageQueue::NotifyObserversOfMajorityReplOpChangeTask(
   {
     LockGuard lock(queue_lock_);
     if (!new_committed_op_id.empty() &&
-        new_committed_op_id.index > queue_state_.committed_op_id.index) {
+        new_committed_op_id.index > queue_state_.committed_op_id.index &&
+        !GetAtomicFlag(&FLAGS_TEST_stop_committed_op_id_updation)) {
       queue_state_.committed_op_id = new_committed_op_id;
     }
     queue_state_.last_applied_op_id.MakeAtLeast(last_applied_op_id);
@@ -1504,7 +1845,7 @@ void PeerMessageQueue::NotifyObserversOfFailedFollower(const string& uuid,
 }
 
 bool PeerMessageQueue::PeerAcceptedOurLease(const std::string& uuid) const {
-  std::lock_guard<simple_spinlock> lock(queue_lock_);
+  std::lock_guard lock(queue_lock_);
   TrackedPeer* peer = FindPtrOrNull(peers_map_, uuid);
   if (peer == nullptr) {
     return false;
@@ -1514,7 +1855,7 @@ bool PeerMessageQueue::PeerAcceptedOurLease(const std::string& uuid) const {
 }
 
 bool PeerMessageQueue::CanPeerBecomeLeader(const std::string& peer_uuid) const {
-  std::lock_guard<simple_spinlock> lock(queue_lock_);
+  std::lock_guard lock(queue_lock_);
   TrackedPeer* peer = FindPtrOrNull(peers_map_, peer_uuid);
   if (peer == nullptr) {
     LOG(ERROR) << "Invalid peer UUID: " << peer_uuid;
@@ -1530,7 +1871,7 @@ bool PeerMessageQueue::CanPeerBecomeLeader(const std::string& peer_uuid) const {
 }
 
 OpId PeerMessageQueue::PeerLastReceivedOpId(const TabletServerId& uuid) const {
-  std::lock_guard<simple_spinlock> lock(queue_lock_);
+  std::lock_guard lock(queue_lock_);
   TrackedPeer* peer = FindPtrOrNull(peers_map_, uuid);
   if (peer == nullptr) {
     LOG(ERROR) << "Invalid peer UUID: " << uuid;
@@ -1544,7 +1885,7 @@ string PeerMessageQueue::GetUpToDatePeer() const {
   std::vector<std::string> candidates;
 
   {
-    std::lock_guard<simple_spinlock> lock(queue_lock_);
+    std::lock_guard lock(queue_lock_);
     for (const PeersMap::value_type& entry : peers_map_) {
       if (local_peer_uuid_ == entry.first) {
         continue;
@@ -1573,6 +1914,11 @@ string PeerMessageQueue::GetUpToDatePeer() const {
 
 PeerMessageQueue::~PeerMessageQueue() {
   Close();
+}
+
+string PeerMessageQueue::LogPrefix() const {
+  LockGuard lock(queue_lock_);
+  return LogPrefixUnlocked();
 }
 
 string PeerMessageQueue::LogPrefixUnlocked() const {
@@ -1609,10 +1955,6 @@ size_t PeerMessageQueue::EvictLogCache(size_t bytes_to_evict) {
   return log_cache_.EvictThroughOp(std::numeric_limits<int64_t>::max(), bytes_to_evict);
 }
 
-Status PeerMessageQueue::FlushLogIndex() {
-  return log_cache_.FlushIndex();
-}
-
 void PeerMessageQueue::TrackOperationsMemory(const OpIds& op_ids) {
   log_cache_.TrackOperationsMemory(op_ids);
 }
@@ -1622,19 +1964,21 @@ Result<OpId> PeerMessageQueue::TEST_GetLastOpIdWithType(
   return log_cache_.TEST_GetLastOpIdWithType(max_allowed_index, op_type);
 }
 
-Status ValidateFlags() {
-  // Normally we would have used
-  //   DEFINE_validator(rpc_throttle_threshold_bytes, &RpcThrottleThresholdBytesValidator);
-  // right after defining the rpc_throttle_threshold_bytes flag. However, this leads to a segfault
-  // in the LTO-enabled build, presumably due to indeterminate order of static initialization.
-  // Instead, we invoke this function from master/tserver main() functions when static
-  // initialization is already finished.
-  if (!RpcThrottleThresholdBytesValidator(
-      "rpc_throttle_threshold_bytes", FLAGS_rpc_throttle_threshold_bytes)) {
-    return STATUS(InvalidArgument, "Flag validation failed");
+std::vector<FollowerCommunicationTime> PeerMessageQueue::GetFollowerCommunicationTimes() const {
+  std::vector<FollowerCommunicationTime> result;
+  std::lock_guard lock(queue_lock_);
+  result.reserve(peers_map_.size());
+  for (const auto& [peer_uuid, peer] : peers_map_) {
+    if (peer_uuid == local_peer_uuid_) {
+      continue;
+    }
+    result.emplace_back(peer_uuid, peer->last_successful_communication_time);
   }
+  return result;
+}
 
-  return Status::OK();
+void PeerMessageQueue::TEST_WaitForNotificationToFinish() {
+  notifications_strand_->BusyWait();
 }
 
 }  // namespace consensus

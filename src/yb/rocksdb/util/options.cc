@@ -47,7 +47,6 @@
 #include "yb/rocksdb/table/block_based_table_factory.h"
 #include "yb/rocksdb/util/compression.h"
 #include "yb/rocksdb/util/statistics.h"
-#include "yb/rocksdb/util/xfunc.h"
 
 namespace rocksdb {
 
@@ -95,7 +94,8 @@ ImmutableCFOptions::ImmutableCFOptions(const Options& options)
       mem_tracker(options.mem_tracker),
       block_based_table_mem_tracker(options.block_based_table_mem_tracker),
       iterator_replacer(options.iterator_replacer),
-      compaction_file_filter_factory(options.compaction_file_filter_factory.get()) {}
+      compaction_file_filter_factory(options.compaction_file_filter_factory.get()),
+      priority_thread_pool_metrics(options.priority_thread_pool_metrics) {}
 
 ColumnFamilyOptions::ColumnFamilyOptions()
     : comparator(BytewiseComparator()),
@@ -291,9 +291,7 @@ DBOptions::DBOptions()
       skip_stats_update_on_db_open(false),
       wal_recovery_mode(WALRecoveryMode::kTolerateCorruptedTailRecords),
       row_cache(nullptr),
-#ifndef ROCKSDB_LITE
       wal_filter(nullptr),
-#endif  // ROCKSDB_LITE
       fail_if_options_file_error(false) {
 }
 
@@ -416,10 +414,8 @@ void DBOptions::Dump(Logger* log) const {
       RHEADER(log, "                               Options.row_cache: None");
     }
   RHEADER(log, "                           Options.initial_seqno: %" PRIu64, initial_seqno);
-#ifndef ROCKSDB_LITE
   RHEADER(log, "       Options.wal_filter: %s",
       wal_filter ? wal_filter->Name() : "None");
-#endif  // ROCKDB_LITE
 }  // DBOptions::Dump
 
 void ColumnFamilyOptions::Dump(Logger* log) const {
@@ -619,7 +615,6 @@ Options::PrepareForBulkLoad() {
   return this;
 }
 
-#ifndef ROCKSDB_LITE
 // Optimization functions
 ColumnFamilyOptions* ColumnFamilyOptions::OptimizeForPointLookup(
     uint64_t block_cache_size_mb) {
@@ -688,7 +683,6 @@ DBOptions* DBOptions::IncreaseParallelism(int total_threads) {
   return this;
 }
 
-#endif  // !ROCKSDB_LITE
 
 const ReadOptions ReadOptions::kDefault;
 
@@ -704,8 +698,6 @@ ReadOptions::ReadOptions()
       prefix_same_as_start(false),
       pin_data(false),
       query_id(rocksdb::kDefaultQueryId) {
-  XFUNC_TEST("", "managed_options", managed_options, xf_manage_options,
-             reinterpret_cast<ReadOptions*>(this));
 }
 
 ReadOptions::ReadOptions(bool cksum, bool cache)
@@ -720,14 +712,20 @@ ReadOptions::ReadOptions(bool cksum, bool cache)
       prefix_same_as_start(false),
       pin_data(false),
       query_id(rocksdb::kDefaultQueryId) {
-  XFUNC_TEST("", "managed_options", managed_options, xf_manage_options,
-             reinterpret_cast<ReadOptions*>(this));
 }
 
 std::atomic<int64_t> flush_tick_(1);
 
 int64_t FlushTick() {
   return flush_tick_.fetch_add(1, std::memory_order_acq_rel);
+}
+
+QueryOptions QueryOptions::FromReadOptions(const ReadOptions& read_options) {
+  return QueryOptions {
+    .query_id = read_options.query_id,
+    .no_io = read_options.read_tier == kBlockCacheTier,
+    .statistics = read_options.statistics,
+  };
 }
 
 }  // namespace rocksdb

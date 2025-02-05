@@ -1,32 +1,53 @@
 ---
-title: Administer Yugabyte Platform
-headerTitle: Administer Yugabyte Platform
-linkTitle: Administer Yugabyte Platform
-description: Administer Yugabyte Platform.
-image: /images/section_icons/manage/enterprise.png
-headcontent: Administer Yugabyte Platform.
-type: page
-section: YUGABYTE PLATFORM
+title: Administer YugabyteDB Anywhere
+headerTitle: Administer YugabyteDB Anywhere
+linkTitle: Administer
+description: Administer YugabyteDB Anywhere
+headcontent:
 menu:
-  stable:
+  stable_yugabyte-platform:
+    parent: yugabytedb-anywhere
     identifier: administer-yugabyte-platform
-    weight: 649
+    weight: 690
+type: indexpage
 ---
 
-Yugabyte Platform can create a YugabyteDB universe with many instances (VMs, pods, machines, etc., provided by IaaS), logically grouped together to form one logical distributed database. Each universe includes one or more clusters. A universe is comprised of one primary cluster and, optionally, one or more read replica clusters. All instances belonging to a cluster run on the same type of cloud provider instance type.
+{{<index/block>}}
 
-<div class="row">
+  {{<index/item
+    title="Manage YugabyteDB Anywhere users and roles"
+    body="Invite team members to your account and manage their access."
+    href="anywhere-rbac/"
+    icon="fa-thin fa-user">}}
 
-  <div class="col-12 col-md-6 col-lg-12 col-xl-6">
-    <a class="section-link icon-offset" href="back-up-restore-yp/">
-      <div class="head">
-        <img class="icon" src="/images/section_icons/manage/backup.png" aria-hidden="true" />
-        <div class="title">Back up and restore Yugabyte Platform</div>
-      </div>
-      <div class="body">
-        Back up and restore Yugabyte Platform.
-      </div>
-    </a>
-  </div>
+  {{<index/item
+    title="Configure YugabyteDB Anywhere authentication"
+    body="Use LDAP or OIDC for authentication in YugabyteDB Anywhere."
+    href="ldap-authentication/"
+    icon="fa-thin fa-lock">}}
 
-</div>
+  {{<index/item
+    title="Back up and restore YugabyteDB Anywhere"
+    body="Back up and restore the YugabyteDB Anywhere server."
+    href="back-up-restore-yp/"
+    icon="fa-thin fa-arrow-down-to-bracket">}}
+
+  {{<index/item
+    title="Enable high availability"
+    body="Configure standby instances of YugabyteDB Anywhere."
+    href="high-availability/"
+    icon="fa-thin fa-clone">}}
+
+  {{<index/item
+    title="Manage runtime configuration settings"
+    body="Customize YugabyteDB Anywhere by changing default settings for the application, universes, and providers."
+    href="manage-runtime-config/"
+    icon="fa-thin fa-gear">}}
+
+  {{<index/item
+    title="Shutdown"
+    body="Shut YugabyteDB Anywhere down gracefully."
+    href="shutdown/"
+    icon="fa-thin fa-power-off">}}
+
+{{</index/block>}}

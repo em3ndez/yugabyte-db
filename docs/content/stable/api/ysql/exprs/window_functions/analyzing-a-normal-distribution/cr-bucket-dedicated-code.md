@@ -4,12 +4,11 @@ linkTitle: cr_bucket_dedicated_code.sql
 headerTitle: cr_bucket_dedicated_code.sql
 description: cr_bucket_dedicated_code.sql - Part of the code kit for the "Analyzing a normal distribution" section within the YSQL window functions documentation.
 menu:
-  stable:
+  stable_api:
     identifier: cr-bucket-dedicated-code
     parent: analyzing-a-normal-distribution
     weight: 80
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 Save this script as `cr_bucket_dedicated_code.sql`.
 ```plpgsql

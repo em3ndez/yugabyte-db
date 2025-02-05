@@ -29,8 +29,7 @@
 // or implied.  See the License for the specific language governing permissions and limitations
 // under the License.
 //
-#ifndef YB_RPC_RPC_TEST_BASE_H
-#define YB_RPC_RPC_TEST_BASE_H
+#pragma once
 
 #include <algorithm>
 #include <list>
@@ -65,6 +64,7 @@ class CalculatorServiceMethods {
   static const constexpr auto kAddMethodName = "Add";
   static const constexpr auto kDisconnectMethodName = "Disconnect";
   static const constexpr auto kEchoMethodName = "Echo";
+  static const constexpr auto kRepeatedEchoMethodName = "RepeatedEcho";
   static const constexpr auto kSendStringsMethodName = "SendStrings";
   static const constexpr auto kSleepMethodName = "Sleep";
 
@@ -83,6 +83,12 @@ class CalculatorServiceMethods {
   static RemoteMethod* EchoMethod() {
     static RemoteMethod method(
         rpc_test::CalculatorServiceIf::static_service_name(), kEchoMethodName);
+    return &method;
+  }
+
+  static RemoteMethod* RepeatedEchoMethod() {
+    static RemoteMethod method(
+        rpc_test::CalculatorServiceIf::static_service_name(), kRepeatedEchoMethodName);
     return &method;
   }
 
@@ -125,6 +131,7 @@ class GenericCalculatorService : public ServiceIf {
   void DoSendStrings(InboundCall* incoming);
   void DoSleep(InboundCall *incoming);
   void DoEcho(InboundCall *incoming);
+  void DoRepeatedEcho(InboundCall *incoming);
   void AddMethodToMap(
       const RpcServicePtr& service, RpcEndpointMap* map, const char* method_name, Method method);
 
@@ -161,9 +168,9 @@ class TestServer {
   Messenger* messenger() const { return messenger_.get(); }
   ServicePool& service_pool() const { return *service_pool_; }
 
-  CHECKED_STATUS Start();
+  Status Start();
 
-  CHECKED_STATUS RegisterService(std::unique_ptr<ServiceIf> service);
+  Status RegisterService(std::unique_ptr<ServiceIf> service);
 
  private:
   std::unique_ptr<Messenger> messenger_;
@@ -179,18 +186,18 @@ class RpcTestBase : public YBTest {
   void TearDown() override;
 
   std::unique_ptr<Messenger> CreateMessenger(
-      const string &name,
+      const std::string &name,
       const MessengerOptions& options = kDefaultClientMessengerOptions);
 
   AutoShutdownMessengerHolder CreateAutoShutdownMessengerHolder(
-      const string &name,
+      const std::string &name,
       const MessengerOptions& options = kDefaultClientMessengerOptions);
 
   MessengerBuilder CreateMessengerBuilder(
-      const string &name,
+      const std::string &name,
       const MessengerOptions& options = kDefaultClientMessengerOptions);
 
-  CHECKED_STATUS DoTestSyncCall(Proxy* proxy, const RemoteMethod *method);
+  Status DoTestSyncCall(Proxy* proxy, const RemoteMethod *method);
 
   void DoTestSidecar(Proxy* proxy,
                      std::vector<size_t> sizes,
@@ -214,7 +221,7 @@ class RpcTestBase : public YBTest {
 
   // Start a simple socket listening on a local port, returning the address.
   // This isn't an RPC server -- just a plain socket which can be helpful for testing.
-  CHECKED_STATUS StartFakeServer(Socket *listen_sock, HostPort* listen_hostport);
+  Status StartFakeServer(Socket *listen_sock, HostPort* listen_hostport);
 
   Messenger* server_messenger() const { return server_->messenger(); }
   TestServer& server() const { return *server_; }
@@ -228,5 +235,3 @@ class RpcTestBase : public YBTest {
 
 } // namespace rpc
 } // namespace yb
-
-#endif  // YB_RPC_RPC_TEST_BASE_H

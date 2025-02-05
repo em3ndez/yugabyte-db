@@ -11,8 +11,7 @@
 // under the License.
 //
 
-#ifndef YB_UTIL_STACK_TRACE_H
-#define YB_UTIL_STACK_TRACE_H
+#pragma once
 
 #include <pthread.h>
 
@@ -32,7 +31,11 @@ enum class StackTraceLineFormat {
   SHORT,
   CLION_CLICKABLE,
   SYMBOL_ONLY,
+#if !defined(NDEBUG)
+  DEFAULT = CLION_CLICKABLE
+#else
   DEFAULT = SHORT
+#endif
 };
 
 // Active - thread is performing execution.
@@ -113,6 +116,12 @@ class StackTrace {
                  pointer_cast<const char*>(frames_ + num_frames_));
   }
 
+  std::string_view as_string_view() const {
+    return std::string_view(pointer_cast<const char*>(frames_), sizeof(void *) * num_frames_);
+  }
+
+  static Result<StackTrace> MakeStackTrace(std::string_view frames);
+
  private:
   enum {
     // The maximum number of stack frames to collect.
@@ -145,8 +154,8 @@ std::vector<Result<StackTrace>> ThreadStacks(const std::vector<ThreadIdForStack>
 // Set which POSIX signal number should be used internally for triggering
 // stack traces. If the specified signal handler is already in use, this
 // returns an error, and stack traces will be disabled.
-CHECKED_STATUS SetStackTraceSignal(int signum);
+// It is not safe to call this after threads have been created.
+Status SetStackTraceSignal(int signum);
+int GetStackTraceSignal();
 
 }  // namespace yb
-
-#endif  // YB_UTIL_STACK_TRACE_H

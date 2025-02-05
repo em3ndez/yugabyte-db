@@ -15,7 +15,7 @@ import java.util.function.Function;
 /**
  * Replace placeholders, surrounded by prefix and suffix strings with some values from domain model.
  */
-public class PlaceholderSubstitutor {
+public class PlaceholderSubstitutor implements PlaceholderSubstitutorIF {
   private final String parameterPrefix;
   private final String parameterSuffix;
   private final Function<String, String> valueProvider;
@@ -54,6 +54,14 @@ public class PlaceholderSubstitutor {
           templateStr.indexOf(parameterSuffix, prefixPosition + parameterPrefix.length());
       if (suffixPosition == -1) {
         break;
+      }
+      int nextPrefixPosition =
+          templateStr.indexOf(parameterPrefix, prefixPosition + parameterPrefix.length());
+      if (nextPrefixPosition > 0 && nextPrefixPosition < suffixPosition) {
+        // we need to find prefix right before suffix
+        result.append(templateStr, position, nextPrefixPosition);
+        position = nextPrefixPosition;
+        continue;
       }
       result.append(templateStr, position, prefixPosition);
       String parameter =

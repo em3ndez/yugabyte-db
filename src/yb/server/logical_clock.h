@@ -30,8 +30,7 @@
 // under the License.
 //
 
-#ifndef YB_SERVER_LOGICAL_CLOCK_H_
-#define YB_SERVER_LOGICAL_CLOCK_H_
+#pragma once
 
 #include <string>
 
@@ -55,7 +54,7 @@ namespace server {
 // NOTE: this class is thread safe.
 class LogicalClock : public Clock {
  public:
-  CHECKED_STATUS Init() override;
+  Status Init() override;
 
   // Returns the current value of the clock without incrementing it.
   HybridTime Peek();
@@ -84,5 +83,3 @@ class LogicalClock : public Clock {
 
 }  // namespace server
 }  // namespace yb
-
-#endif /* YB_SERVER_LOGICAL_CLOCK_H_ */

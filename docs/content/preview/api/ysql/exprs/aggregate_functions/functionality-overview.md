@@ -4,12 +4,11 @@ linkTitle: Informal functionality overview
 headerTitle: Informal overview of aggregate function invocation
 description: This section provides an informal introduction to the invocation of aggregate functions.
 menu:
-  preview:
+  preview_api:
     identifier: aggregate-functions-functionality-overview
     parent: aggregate-functions
     weight: 10
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 Aggregate functions fall into two kinds according to the syntax that you use to invoke them.

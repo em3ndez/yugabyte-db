@@ -11,8 +11,7 @@
 // under the License.
 //
 
-#ifndef YB_ROCKSUTIL_WRITE_BATCH_FORMATTER_H
-#define YB_ROCKSUTIL_WRITE_BATCH_FORMATTER_H
+#pragma once
 
 #include <sstream>
 
@@ -44,31 +43,33 @@ class WriteBatchFormatter : public rocksdb::WriteBatch::Handler {
         output_format_(output_format),
         line_prefix_(line_prefix) {}
 
-  virtual CHECKED_STATUS PutCF(
+  virtual Status PutCF(
       uint32_t column_family_id,
       const rocksdb::SliceParts& key,
       const rocksdb::SliceParts& value) override;
 
-  virtual CHECKED_STATUS DeleteCF(
+  virtual Status DeleteCF(
       uint32_t column_family_id,
       const rocksdb::Slice& key) override;
 
-  virtual CHECKED_STATUS SingleDeleteCF(
+  virtual Status SingleDeleteCF(
       uint32_t column_family_id,
       const rocksdb::Slice& key) override;
 
-  virtual CHECKED_STATUS MergeCF(
+  virtual Status MergeCF(
       uint32_t column_family_id,
       const rocksdb::Slice& key,
       const rocksdb::Slice& value) override;
 
-  CHECKED_STATUS Frontiers(const rocksdb::UserFrontiers& range) override;
+  Status Frontiers(const rocksdb::UserFrontiers& range) override;
 
   std::string str() { return out_.str(); }
 
   void SetLinePrefix(const std::string& line_prefix) {
     line_prefix_ = line_prefix;
   }
+
+  int Count() { return kv_index_; }
 
  protected:
   virtual std::string FormatKey(const Slice& key);
@@ -92,5 +93,3 @@ class WriteBatchFormatter : public rocksdb::WriteBatch::Handler {
 };
 
 } // namespace yb
-
-#endif // YB_ROCKSUTIL_WRITE_BATCH_FORMATTER_H

@@ -10,8 +10,7 @@
 // or implied.  See the License for the specific language governing permissions and limitations
 // under the License.
 
-#ifndef YB_UTIL_FILE_UTIL_H
-#define YB_UTIL_FILE_UTIL_H
+#pragma once
 
 #include <float.h>
 #include <string.h>
@@ -24,7 +23,7 @@
 
 #include <boost/mpl/and.hpp>
 
-#include "yb/util/status_fwd.h"
+#include "yb/util/status.h"
 #include "yb/util/env.h"
 #include "yb/util/env_util.h"
 #include "yb/util/faststring.h"
@@ -47,16 +46,16 @@ YB_STRONGLY_TYPED_BOOL(RecursiveCopy);
 //          determine whether this file exists, or if the path is invalid.
 // IOError if an IO Error was encountered.
 // Uses specified `env` environment implementation to do the actual file existence checking.
-inline CHECKED_STATUS CheckFileExistsResult(const Status& status) {
+inline Status CheckFileExistsResult(const Status& status) {
   return status;
 }
 
-inline CHECKED_STATUS CheckFileExistsResult(bool exists) {
+inline Status CheckFileExistsResult(bool exists) {
   return exists ? Status::OK() : STATUS(NotFound, "");
 }
 
 template <class Env>
-inline CHECKED_STATUS FileExists(Env* env, const std::string& path) {
+inline Status FileExists(Env* env, const std::string& path) {
   return CheckFileExistsResult(env->FileExists(path));
 }
 
@@ -68,8 +67,8 @@ using yb::env_util::CopyFile;
 // recursive_copy specifies whether the copy should be recursive.
 // Returns error status in case of I/O errors.
 template <class TEnv>
-CHECKED_STATUS CopyDirectory(
-    TEnv* env, const string& src_dir, const string& dest_dir, UseHardLinks use_hard_links,
+Status CopyDirectory(
+    TEnv* env, const std::string& src_dir, const std::string& dest_dir, UseHardLinks use_hard_links,
     CreateIfMissing create_if_missing, RecursiveCopy recursive_copy = RecursiveCopy::kTrue) {
   RETURN_NOT_OK_PREPEND(
       FileExists(env, src_dir), Format("Source directory does not exist: $0", src_dir));
@@ -85,12 +84,12 @@ CHECKED_STATUS CopyDirectory(
   }
 
   // Copy files.
-  std::vector<string> files;
+  std::vector<std::string> files;
   RETURN_NOT_OK_PREPEND(
       env->GetChildren(src_dir, &files),
       Format("Cannot get list of files for directory: $0", src_dir));
 
-  for (const string& file : files) {
+  for (const std::string& file : files) {
     if (file != "." && file != "..") {
       const auto src_path = JoinPathSegments(src_dir, file);
       const auto dest_path = JoinPathSegments(dest_dir, file);
@@ -121,5 +120,3 @@ CHECKED_STATUS CopyDirectory(
 }
 
 }  // namespace yb
-
-#endif  // YB_UTIL_FILE_UTIL_H

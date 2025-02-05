@@ -13,13 +13,17 @@
 
 package org.yb.pgsql;
 
+import static org.yb.AssertionWrappers.assertTrue;
+
 import java.sql.Statement;
+
+import com.google.common.net.HostAndPort;
 
 import org.junit.Test;
 import org.junit.runner.RunWith;
-import org.yb.util.YBTestRunnerNonTsanOnly;
+import org.yb.YBTestRunner;
 
-@RunWith(YBTestRunnerNonTsanOnly.class)
+@RunWith(YBTestRunner.class)
 public class TestPgUniqueConstraint extends BasePgSQLTest {
 
   @Test
@@ -266,45 +270,56 @@ public class TestPgUniqueConstraint extends BasePgSQLTest {
   @Test
   public void addUniqueWithInclude() throws Exception {
     try (Statement stmt = connection.createStatement()) {
-      stmt.execute("CREATE TABLE test(i1 int, i2 int)");
-      stmt.execute("ALTER TABLE test ADD CONSTRAINT test_constr UNIQUE (i1) INCLUDE (i2)");
+      stmt.execute("CREATE TABLE test(i1 int, i2 int, i3 int)");
+      stmt.execute("ALTER TABLE test ADD CONSTRAINT test_constr UNIQUE (i3) INCLUDE (i1, i2)");
 
       // Check that index is created properly
       assertQuery(
           stmt,
-          "SELECT pg_get_indexdef(i.indexrelid)\n" +
-              "FROM pg_index i JOIN pg_class c ON i.indexrelid = c.oid\n" +
-              "WHERE i.indrelid = 'test'::regclass",
+          "SELECT pg_get_indexdef(i.indexrelid)" +
+              " FROM pg_index i" +
+              " WHERE i.indrelid = 'test'::regclass",
           new Row("CREATE UNIQUE INDEX test_constr ON public.test " +
-                      "USING lsm (i1 HASH) INCLUDE (i2)")
+                      "USING lsm (i3 HASH) INCLUDE (i1, i2)")
       );
 
-      // Valid insertions
-      stmt.execute("INSERT INTO test(i1, i2) VALUES (1, 3), (2, 4), (3, 3)");
+      // Valid DMLs
+      stmt.execute("INSERT INTO test(i3, i2) VALUES (1, 3), (2, 4), (3, 3), (4, NULL)");
+      stmt.execute("UPDATE test SET i2 = 2 WHERE i2 = 4");
+      stmt.execute("UPDATE test SET i1 = 1 WHERE i1 IS NULL AND i3 = 4");
 
-      // Invalid insertion
-      runInvalidQuery(stmt, "INSERT INTO test(i1, i2) VALUES (1, 3)", "duplicate");
+      // Invalid DMLs
+      runInvalidQuery(stmt, "INSERT INTO test(i3, i2) VALUES (1, 3)", "duplicate");
+      runInvalidQuery(stmt, "INSERT INTO test(i3, i2) VALUES (4, NULL)", "duplicate");
+      runInvalidQuery(stmt, "INSERT INTO test(i3) VALUES (4)", "duplicate");
+
+      // Check the resulting table content
+      assertQuery(stmt, "SELECT * FROM test ORDER BY i3, i2, i1",
+          new Row(null, 3, 1),
+          new Row(null, 2, 2),
+          new Row(null, 3, 3),
+          new Row(1, null, 4));
 
       // Selection containing inequality (<) on i1 is a full table scan until we support proper
       // range scan on index.
       assertQuery(
           stmt,
-          "EXPLAIN (COSTS OFF) SELECT * FROM test WHERE (i1, i2) < (4, 4)",
+          "EXPLAIN (COSTS OFF) SELECT * FROM test WHERE (i3, i2) < (4, 4)",
           new Row("Seq Scan on test"),
-          new Row("  Filter: (ROW(i1, i2) < ROW(4, 4))")
+          new Row("  Filter: (ROW(i3, i2) < ROW(4, 4))")
       );
 
       // Switch to a unique index without importing i2
       stmt.execute("ALTER TABLE test DROP CONSTRAINT test_constr");
-      stmt.execute("ALTER TABLE test ADD CONSTRAINT test_constr UNIQUE (i1)");
+      stmt.execute("ALTER TABLE test ADD CONSTRAINT test_constr UNIQUE (i3)");
 
       // Selection containing inequality (<) on i1 is a full table scan until we support proper
       // range scan on index.
       assertQuery(
           stmt,
-          "EXPLAIN (COSTS OFF) SELECT * FROM test WHERE (i1, i2) < (4, 4)",
+          "EXPLAIN (COSTS OFF) SELECT * FROM test WHERE (i3, i2) < (4, 4)",
           new Row("Seq Scan on test"),
-          new Row("  Filter: (ROW(i1, i2) < ROW(4, 4))")
+          new Row("  Filter: (ROW(i3, i2) < ROW(4, 4))")
       );
     }
   }
@@ -360,11 +375,12 @@ public class TestPgUniqueConstraint extends BasePgSQLTest {
 
   @Test
   public void createIndexViolatingUniqueness() throws Exception {
+    long tableOid;
     try (Statement stmt = connection.createStatement()) {
       stmt.execute("CREATE TABLE test(id int PRIMARY KEY, v int)");
 
       // Get the OID of the 'test' table from pg_class
-      long tableOid = getRowList(
+      tableOid = getRowList(
           stmt.executeQuery("SELECT oid FROM pg_class WHERE relname = 'test'")).get(0).getLong(0);
 
       // Two entries in pg_depend table, one for pg_type and the other for pg_constraint
@@ -373,13 +389,32 @@ public class TestPgUniqueConstraint extends BasePgSQLTest {
 
       stmt.executeUpdate("INSERT INTO test VALUES (1, 1)");
       stmt.executeUpdate("INSERT INTO test VALUES (2, 1)");
+    }
 
+    // Disabling transactional DDL GC flag to avoid CREATE UNIQUE INDEX
+    // failure from triggering table deletion. The deletion occurs
+    // as a background thread which can produce inconsistent schema
+    // verison between the Postgres and TServer side. To avoid this issue
+    // DDL transaction will only rollback if it fails but skip the master side
+    // clean up work.
+    for (HostAndPort hp : miniCluster.getMasters().keySet()) {
+      assertTrue(miniCluster.getClient().setFlag(hp,
+          "enable_transactional_ddl_gc", "false"));
+    }
+    try (Statement stmt = connection.createStatement()) {
       runInvalidQuery(
           stmt,
           "CREATE UNIQUE INDEX NONCONCURRENTLY test_v on test(v)",
           "duplicate key"
       );
+    }
+    // Reset flags.
+    for (HostAndPort hp : miniCluster.getMasters().keySet()) {
+      assertTrue(miniCluster.getClient().setFlag(hp,
+          "enable_transactional_ddl_gc", "true"));
+    }
 
+    try (Statement stmt = connection.createStatement()) {
       // Make sure index has no leftovers
       runInvalidQuery(stmt, "DROP INDEX test_v", "does not exist");
       assertNoRows(stmt, "SELECT oid FROM pg_class WHERE relname = 'test_v'");

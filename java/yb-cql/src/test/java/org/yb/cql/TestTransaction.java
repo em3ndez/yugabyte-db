@@ -50,14 +50,6 @@ public class TestTransaction extends BaseCQLTest {
     return flagMap;
   }
 
-  protected void restartClusterWithFlag(String flag, String value) throws Exception {
-    destroyMiniCluster();
-    createMiniCluster(
-        Collections.emptyMap(),
-        Collections.singletonMap(flag, value));
-    setUpCqlClient();
-  }
-
   private void createTable(String name, String columns, boolean transactional) {
     session.execute(String.format("create table %s (%s) with transactions = { 'enabled' : %b };",
                                   name, columns, transactional));
@@ -611,10 +603,16 @@ public class TestTransaction extends BaseCQLTest {
       // Test transaction timeout by recreating the cluster with missed heartbeat periods equals 0
       // and executing a transaction. Verify that OperationTimedOutException is raised as CQL proxy
       // keeps retrying the transaction.
+      int txnCheckIntervalMilliSecs = 50;
+      Map<String, String> tserverFlags = new HashMap<String, String>();
+      tserverFlags.put("transaction_max_missed_heartbeat_periods", "0.0");
+      tserverFlags.put("transaction_check_interval_usec",
+                       String.valueOf(txnCheckIntervalMilliSecs * 1000));
+
       destroyMiniCluster();
       createMiniCluster(
           Collections.emptyMap(),
-          Collections.singletonMap("transaction_max_missed_heartbeat_periods", "0.0"));
+          tserverFlags);
 
       setUpCqlClient();
       session.execute("create table test_timeout (k int primary key, v int) " +
@@ -624,11 +622,16 @@ public class TestTransaction extends BaseCQLTest {
       LOG.info("Initial expired transactions = {}", initialExpiredTransactions);
 
       try {
-        thrown.expect(com.datastax.driver.core.exceptions.OperationTimedOutException.class);
+        thrown.expect(com.datastax.driver.core.exceptions.DriverException.class);
         session.execute("begin transaction" +
                         "  insert into test_timeout (k, v) values (1, 1);" +
                         "end transaction;");
-      } catch (com.datastax.driver.core.exceptions.OperationTimedOutException e) {
+      } catch (com.datastax.driver.core.exceptions.DriverException e) {
+        // TransactionCoordinator polls for expired/aborted transactions every
+        // txnCheckIntervalMilliSecs in case of regular builds, and in intervals of
+        // 3 * txnCheckIntervalMilliSecs for tsan builds. Sleep accordingly to see the latest
+        // expired_transactions count.
+        Thread.sleep(txnCheckIntervalMilliSecs * BuildTypeUtil.nonTsanVsTsan(5, 10));
         int currentExpiredTransactions = getExpiredTransactionsCount();
         LOG.info("Current expired transactions = {}", currentExpiredTransactions);
         assertTrue(currentExpiredTransactions > initialExpiredTransactions);

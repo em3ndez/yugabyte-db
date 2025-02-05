@@ -29,8 +29,7 @@
 // or implied.  See the License for the specific language governing permissions and limitations
 // under the License.
 //
-#ifndef YB_MASTER_CATALOG_MANAGER_INTERNAL_H
-#define YB_MASTER_CATALOG_MANAGER_INTERNAL_H
+#pragma once
 
 #include "yb/common/wire_protocol.h"
 
@@ -41,15 +40,10 @@ namespace yb {
 
 namespace master {
 
-inline CHECKED_STATUS SetupError(MasterErrorPB* error,
-                                 MasterErrorPB::Code code,
-                                 const Status& s) {
-  StatusToPB(s, error->mutable_status());
-  error->set_code(code);
-  return s;
-}
+static const std::string kRelnamespaceNotFoundErrorStr =
+    "Not found or invalid relnamespace oid for table oid ";
 
-inline CHECKED_STATUS CheckIfNoLongerLeader(const Status& s) {
+inline Status CheckIfNoLongerLeader(const Status& s) {
   // TODO (KUDU-591): This is a bit of a hack, as right now
   // there's no way to propagate why a write to a consensus configuration has
   // failed. However, since we use Status::IllegalState()/IsAborted() to
@@ -70,7 +64,7 @@ inline CHECKED_STATUS CheckIfNoLongerLeader(const Status& s) {
 // Service::UnavailableError as the error, set NOT_THE_LEADER as the
 // error code and return true.
 template<class RespClass>
-CHECKED_STATUS CheckIfNoLongerLeaderAndSetupError(const Status& s, RespClass* resp) {
+Status CheckIfNoLongerLeaderAndSetupError(const Status& s, RespClass* resp) {
   auto new_status = CheckIfNoLongerLeader(s);
   if (MasterError(new_status) == MasterErrorPB::NOT_THE_LEADER) {
     return SetupError(resp->mutable_error(), MasterErrorPB::NOT_THE_LEADER, new_status);
@@ -79,7 +73,23 @@ CHECKED_STATUS CheckIfNoLongerLeaderAndSetupError(const Status& s, RespClass* re
   return s;
 }
 
+inline Status CheckStatus(const Status& status, const char* action) {
+  if (status.ok()) {
+    return status;
+  }
+
+  const Status s = status.CloneAndPrepend(std::string("An error occurred while ") + action);
+  LOG(WARNING) << s;
+  return s;
+}
+
+inline Status CheckLeaderStatus(const Status& status, const char* action) {
+  return CheckIfNoLongerLeader(CheckStatus(status, action));
+}
+
+template <class RespClass>
+Status CheckLeaderStatusAndSetupError(const Status& status, const char* action, RespClass* resp) {
+  return CheckIfNoLongerLeaderAndSetupError(CheckStatus(status, action), resp);
+}
 }  // namespace master
 }  // namespace yb
-
-#endif // YB_MASTER_CATALOG_MANAGER_INTERNAL_H

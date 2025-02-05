@@ -13,8 +13,7 @@
 //
 //
 
-#ifndef YB_CLIENT_TRANSACTION_H
-#define YB_CLIENT_TRANSACTION_H
+#pragma once
 
 #include <future>
 #include <memory>
@@ -36,12 +35,6 @@ class HybridTime;
 
 class Trace;
 
-enum TxnPriorityRequirement {
-  kLowerPriorityRange,
-  kHigherPriorityRange,
-  kHighestPriority
-};
-
 namespace client {
 
 using Waiter = boost::function<void(const Status&)>;
@@ -54,6 +47,27 @@ struct ChildTransactionData {
 
   static Result<ChildTransactionData> FromPB(const ChildTransactionDataPB& data);
 };
+
+template<class T>
+class ConstStaticWrapper {
+ public:
+  const T& Get() const {
+    return ref_.get();
+  }
+
+  template<const T* U>
+  static ConstStaticWrapper Build() {
+    return ConstStaticWrapper(*U);
+  }
+
+ private:
+  explicit ConstStaticWrapper(const T& ref)
+      : ref_(ref) {}
+
+  std::reference_wrapper<const T> ref_;
+};
+
+using LogPrefixName = ConstStaticWrapper<std::string>;
 
 // SealOnly is a special commit mode.
 // I.e. sealed transaction will be committed after seal record and all write batches are replicated.
@@ -84,13 +98,14 @@ class YBTransaction : public std::enable_shared_from_this<YBTransaction> {
   ~YBTransaction();
 
   Trace *trace();
+  void EnsureTraceCreated();
   void SetPriority(uint64_t priority);
 
   uint64_t GetPriority() const;
 
   // Should be invoked to complete transaction creation.
   // Transaction is unusable before Init is called.
-  CHECKED_STATUS Init(
+  Status Init(
       IsolationLevel isolation, const ReadHybridTime& read_time = ReadHybridTime());
 
   // Allows starting a transaction that reuses an existing read point.
@@ -112,6 +127,9 @@ class YBTransaction : public std::enable_shared_from_this<YBTransaction> {
   // Aborts this transaction.
   void Abort(CoarseTimePoint deadline = CoarseTimePoint());
 
+  // Make sure transaction is global.
+  Status EnsureGlobal(CoarseTimePoint deadline = CoarseTimePoint());
+
   // Returns transaction ID.
   const TransactionId& id() const;
 
@@ -124,7 +142,7 @@ class YBTransaction : public std::enable_shared_from_this<YBTransaction> {
   Result<YBTransactionPtr> CreateRestartedTransaction();
 
   // Setup precreated transaction to be restarted version of this transaction.
-  CHECKED_STATUS FillRestartedTransaction(const YBTransactionPtr& dest);
+  Status FillRestartedTransaction(const YBTransactionPtr& dest);
 
   // Prepares child data, so child transaction could be started in another server.
   // Should be async because status tablet could be not ready yet.
@@ -140,7 +158,7 @@ class YBTransaction : public std::enable_shared_from_this<YBTransaction> {
 
   // Apply results from child to this parent transaction.
   // `result` should be prepared with FinishChild of child transaction.
-  CHECKED_STATUS ApplyChildResult(const ChildTransactionResultPB& result);
+  Status ApplyChildResult(const ChildTransactionResultPB& result);
 
   std::shared_future<Result<TransactionMetadata>> GetMetadata(CoarseTimePoint deadline) const;
 
@@ -152,15 +170,38 @@ class YBTransaction : public std::enable_shared_from_this<YBTransaction> {
   // So this transaction could be used by some other application instance.
   Result<TransactionMetadata> Release();
 
-  // Creates transaction by metadata, could be used in pair with release to transfer transaction
-  // between application instances.
-  static YBTransactionPtr Take(TransactionManager* manager, const TransactionMetadata& metadata);
-
   void SetActiveSubTransaction(SubTransactionId id);
 
-  CHECKED_STATUS RollbackSubTransaction(SubTransactionId id);
+  boost::optional<SubTransactionMetadataPB> GetSubTransactionMetadataPB() const;
 
-  bool HasSubTransactionState();
+  Status SetPgTxnStart(int64_t pg_txn_start_us);
+
+  Status RollbackToSubTransaction(SubTransactionId id, CoarseTimePoint deadline);
+
+  bool HasSubTransaction(SubTransactionId id);
+
+  void SetLogPrefixTag(const LogPrefixName& name, uint64_t value);
+
+  void IncreaseMutationCounts(
+      SubTransactionId subtxn_id, const TableId& table_id, uint64_t mutation_count);
+
+  // Get aggregated mutations for each table across the whole transaction (exclude aborted
+  // sub-transactions).
+  std::vector<std::pair<TableId, uint64_t>> GetTableMutationCounts() const;
+
+  bool OldTransactionAborted() const;
+
+  // For docdb transactions of type PgClientSessionKind::kPgSession, initializes the metadata
+  // necessary for deadlock detection etc. This info is plugged in into write rpcs and the target
+  // tablet's wait-queue relies on this information to resume deadlocked session advisory lock reqs.
+  void InitPgSessionRequestVersion();
+
+  // For transactions of kind PgClientSessionKind::kPgSession, we record the background txn,
+  // if any. This info is propagated to the status tablet, which then creates an internal wait-for
+  // probe from the session level waiter -> active transaction if any which is necessary for
+  // detection of deadlocks spanning advisory locks and row-level locks (same would apply for
+  // detection of deadlocks spanning object locks, advisory locks and row locks in future).
+  void SetBackgroundTransaction(const YBTransactionPtr& background_transaction);
 
  private:
   class Impl;
@@ -170,24 +211,28 @@ class YBTransaction : public std::enable_shared_from_this<YBTransaction> {
 class YBSubTransaction {
  public:
   bool active() const {
-    return highest_subtransaction_id_ >= kMinSubTransactionId;
+    return !sub_txn_.IsDefaultState();
   }
 
   void SetActiveSubTransaction(SubTransactionId id);
 
-  CHECKED_STATUS RollbackSubTransaction(SubTransactionId id);
+  Status RollbackToSubTransaction(SubTransactionId id);
 
-  const SubTransactionMetadata& get();
+  bool HasSubTransaction(SubTransactionId id) const;
+
+  const SubTransactionMetadata& get() const;
+
+  std::string ToString() const;
+
+  bool operator==(const YBSubTransaction& other) const;
 
  private:
   SubTransactionMetadata sub_txn_;
 
   // Tracks the highest observed subtransaction_id. Used during "ROLLBACK TO s" to abort from s to
   // the highest live subtransaction_id.
-  SubTransactionId highest_subtransaction_id_ = 0;
+  SubTransactionId highest_subtransaction_id_ = kMinSubTransactionId;
 };
 
 } // namespace client
 } // namespace yb
-
-#endif // YB_CLIENT_TRANSACTION_H

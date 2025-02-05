@@ -4,12 +4,11 @@ linkTitle: Array concatenation
 headerTitle: Array concatenation functions and operators
 description: Array concatenation functions and operators
 menu:
-  preview:
+  preview_api:
     identifier: array-concatenation
     parent: array-functions-operators
     weight: 40
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 The `||` operator implements, by itself, all of the functionality that each of the `array_cat()`, `array_append()`, and `array_prepend()` functions individually implement. Yugabyte recommends that you use the `||` operator and avoid the functions. They are documented here for completeness—especially in case you find them in inherited code.

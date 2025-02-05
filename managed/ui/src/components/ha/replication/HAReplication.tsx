@@ -1,9 +1,10 @@
-import React, { FC, useState } from 'react';
+import { FC, useState } from 'react';
+
 import { YBLoading } from '../../common/indicators';
 import { HAErrorPlaceholder } from '../compounds/HAErrorPlaceholder';
-import { HAReplicationForm } from './HAReplicationForm';
-import { HAReplicationView } from './HAReplicationView';
+import { HAReplicationViewContainer } from './HAReplicationViewContainer';
 import { useLoadHAConfiguration } from '../hooks/useLoadHAConfiguration';
+import { HAReplicationFormContainer } from './HAReplicationFormContainer';
 
 export const HAReplication: FC = () => {
   const [isEditingConfig, setEditingConfig] = useState(false);
@@ -18,22 +19,29 @@ export const HAReplication: FC = () => {
   if (isLoading) {
     return <YBLoading />;
   }
-  
+
   if (error) {
+    // eslint-disable-next-line @typescript-eslint/no-non-null-asserted-optional-chain
     return <HAErrorPlaceholder error={error} configUUID={config?.uuid!} />;
   }
 
   if (isNoHAConfigExists) {
-    return <HAReplicationForm backToViewMode={backToViewMode} />;
+    return <HAReplicationFormContainer backToViewMode={backToViewMode} />;
   }
 
   if (config && schedule) {
     if (isEditingConfig) {
       return (
-        <HAReplicationForm config={config} schedule={schedule} backToViewMode={backToViewMode} />
+        <HAReplicationFormContainer
+          config={config}
+          schedule={schedule}
+          backToViewMode={backToViewMode}
+        />
       );
     } else {
-      return <HAReplicationView config={config} schedule={schedule} editConfig={editConfig} />;
+      return (
+        <HAReplicationViewContainer haConfig={config} schedule={schedule} editConfig={editConfig} />
+      );
     }
   }
 

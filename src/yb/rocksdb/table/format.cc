@@ -52,14 +52,8 @@ namespace rocksdb {
 extern const uint64_t kLegacyBlockBasedTableMagicNumber;
 extern const uint64_t kBlockBasedTableMagicNumber;
 
-#ifndef ROCKSDB_LITE
 extern const uint64_t kLegacyPlainTableMagicNumber;
 extern const uint64_t kPlainTableMagicNumber;
-#else
-// ROCKSDB_LITE doesn't have plain table
-const uint64_t kLegacyPlainTableMagicNumber = 0;
-const uint64_t kPlainTableMagicNumber = 0;
-#endif
 const uint32_t DefaultStackBufferSize = 5000;
 
 void BlockHandle::AppendEncodedTo(std::string* dst) const {
@@ -269,7 +263,7 @@ Status ReadFooterFromFile(
           footer(footer_),
           enforce_table_magic_number(enforce_table_magic_number_) {}
 
-    CHECKED_STATUS Validate(const Slice& read_result) const override {
+    Status Validate(const Slice& read_result) const override {
       // Check that we actually read the whole footer from the file. It may be that size isn't
       // correct.
       RETURN_NOT_OK(CheckSSTableFileSize(file, read_result.size()));
@@ -314,7 +308,7 @@ Result<ChecksumData> ComputeChecksum(
           .actual = crc32c::Value(src_data.data(), src_data.size())
       };
     case kxxHash:
-      if (yb::std_util::cmp_greater(src_data.size(), std::numeric_limits<int>::max())) {
+      if (std::cmp_greater(src_data.size(), std::numeric_limits<int>::max())) {
         return STATUS_FORMAT(
             Corruption, "Block too large for xxHash ($0 bytes, but must be $1 or smaller)",
             src_data.size(), std::numeric_limits<int>::max());
@@ -346,8 +340,9 @@ Status VerifyBlockChecksum(
       ComputeChecksum(file, footer, handle, Slice(data, block_size + 1), raw_expected_checksum));
   if (checksum.actual != checksum.expected) {
     return STATUS_FORMAT(
-        Corruption, "Block checksum mismatch in file: $0, block handle: $1",
-        file->file()->filename(), handle.ToDebugString());
+        Corruption, "Block checksum mismatch in file: $0, block handle: $1, "
+        "expected checksum: $2, actual checksum: $3.",
+        file->file()->filename(), handle.ToDebugString(), checksum.expected, checksum.actual);
   }
   return Status::OK();
 }
@@ -372,7 +367,7 @@ Status ReadBlock(
             handle(handle_),
             expected_read_size(expected_read_size_) {}
 
-      CHECKED_STATUS Validate(const Slice& read_result) const override {
+      Status Validate(const Slice& read_result) const override {
         if (read_result.size() != expected_read_size) {
           return STATUS_FORMAT(
               Corruption, "Truncated block read in file: $0, block handle: $1, expected size: $2",
@@ -392,7 +387,8 @@ Status ReadBlock(
       const size_t expected_read_size;
     } validator(file, footer, options, handle, expected_read_size);
 
-    s = file->ReadAndValidate(handle.offset(), expected_read_size, contents, buf, validator);
+    s = file->ReadAndValidate(handle.offset(), expected_read_size, contents, buf, validator,
+                              options.statistics);
   }
 
   PERF_COUNTER_ADD(block_read_count, 1);

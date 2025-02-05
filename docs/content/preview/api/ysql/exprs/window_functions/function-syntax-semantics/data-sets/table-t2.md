@@ -4,17 +4,16 @@ linkTitle: table t2
 headerTitle: Create and populate table t2
 description: Creates and populate table t2 with data that allows the demonstration of the YSQL window functions.
 menu:
-  preview:
+  preview_api:
     identifier: table-t2
     parent: data-sets
     weight: 30
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 {{< note title=" " >}}
 
-Make sure that you read the section [The data sets used by the code examples](../../data-sets/) before running the script to create table _"t2"_. In particular, it's essential that you have installed the [pgcrypto](../../../../../../../explore/ysql-language-features/pg-extensions/#pgcrypto-example) extension.
+Make sure that you read the section [The data sets used by the code examples](../../data-sets/) before running the script to create table _"t2"_. In particular, it's essential that you have installed the [pgcrypto](../../../../../../../explore/ysql-language-features/pg-extensions/extension-pgcrypto) extension.
 
 {{< /note >}}
 
@@ -130,4 +129,3 @@ Here is the result of the second `SELECT`. To make it easier to see the pattern,
 
      2 | 18 |     9
 ```
-

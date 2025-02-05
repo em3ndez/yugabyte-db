@@ -15,8 +15,7 @@
 // Tree node definitions for DELETE statement.
 //--------------------------------------------------------------------------------------------------
 
-#ifndef YB_YQL_CQL_QL_PTREE_PT_DELETE_H_
-#define YB_YQL_CQL_QL_PTREE_PT_DELETE_H_
+#pragma once
 
 #include "yb/yql/cql/ql/ptree/list_node.h"
 #include "yb/yql/cql/ql/ptree/tree_node.h"
@@ -55,7 +54,7 @@ class PTDeleteStmt : public PTDmlStmt {
   }
 
   // Node semantics analysis.
-  virtual CHECKED_STATUS Analyze(SemContext *sem_context) override;
+  virtual Status Analyze(SemContext *sem_context) override;
   void PrintSemanticAnalysisResult(SemContext *sem_context);
   ExplainPlanPB AnalysisResultToPB() override;
 
@@ -74,7 +73,7 @@ class PTDeleteStmt : public PTDmlStmt {
     return TreeNodeOpcode::kPTDeleteStmt;
   }
 
-  CHECKED_STATUS AnalyzeTarget(TreeNode *target, SemContext *sem_context);
+  Status AnalyzeTarget(TreeNode *target, SemContext *sem_context);
 
   bool IsWriteOp() const override {
     return true;
@@ -89,5 +88,3 @@ class PTDeleteStmt : public PTDmlStmt {
 
 }  // namespace ql
 }  // namespace yb
-
-#endif  // YB_YQL_CQL_QL_PTREE_PT_DELETE_H_

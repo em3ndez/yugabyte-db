@@ -4,12 +4,11 @@ linkTitle: array[] constructor
 headerTitle: The array[] value constructor
 description: The array[] value constructor
 menu:
-  preview:
+  preview_api:
     identifier: array-constructor
     parent: api-ysql-datatypes-array
     weight: 10
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 The `array[]` value constructor is a special variadic function. Uniquely among all the functions described in this _"Array data types and functionality"_ major section, it uses square brackets (`[]`) to surround its list of actual arguments.

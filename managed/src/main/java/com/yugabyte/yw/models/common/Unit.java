@@ -12,11 +12,13 @@ package com.yugabyte.yw.models.common;
 import static com.yugabyte.yw.models.common.Condition.GREATER_THAN;
 import static com.yugabyte.yw.models.common.Condition.LESS_THAN;
 
+import io.swagger.annotations.ApiModel;
 import lombok.Data;
 import lombok.Getter;
 import lombok.experimental.Accessors;
 
 @Getter
+@ApiModel
 public enum Unit {
   STATUS(
       new UnitBuilder()
@@ -48,11 +50,25 @@ public enum Unit {
           .metricName("sec")
           .integer(true)
           .thresholdConditionReadOnly(true)),
+  MINUTE(
+      new UnitBuilder()
+          .measure(Measure.TIME)
+          .displayName("min")
+          .metricName("min")
+          .integer(true)
+          .thresholdConditionReadOnly(true)),
   DAY(
       new UnitBuilder()
           .measure(Measure.TIME)
           .displayName("day(s)")
           .metricName("day")
+          .integer(true)
+          .thresholdConditionReadOnly(true)),
+  MEGABYTE(
+      new UnitBuilder()
+          .measure(Measure.SIZE)
+          .displayName("MB(s)")
+          .metricName("MB")
           .integer(true)
           .thresholdConditionReadOnly(true));
 

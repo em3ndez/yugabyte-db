@@ -52,6 +52,8 @@
 #include "yb/util/string_util.h"
 #include "yb/util/test_util.h"
 
+using std::unique_ptr;
+
 namespace rocksdb {
 
 namespace {
@@ -1023,7 +1025,7 @@ TEST_F(EnvPosixTest, WritableFileWrapper) {
     Status Flush() override { inc(3); return Status::OK(); }
     Status Sync() override { inc(4); return Status::OK(); }
     Status Fsync() override { inc(5); return Status::OK(); }
-    void SetIOPriority(Env::IOPriority pri) override { inc(6); }
+    void SetIOPriority(yb::IOPriority pri) override { inc(6); }
     uint64_t GetFileSize() override { inc(7); return 0; }
     void GetPreallocationStatus(size_t* block_size,
                                 size_t* last_allocated_block) override {
@@ -1037,20 +1039,25 @@ TEST_F(EnvPosixTest, WritableFileWrapper) {
       inc(10);
       return Status::OK();
     }
+    const std::string& filename() const override {
+      inc(11);
+      static std::string kFilename = "Base";
+      return kFilename;
+    }
 
    protected:
     Status Allocate(uint64_t offset, uint64_t len) override {
-      inc(11);
+      inc(12);
       return Status::OK();
     }
     Status RangeSync(uint64_t offset, uint64_t nbytes) override {
-      inc(12);
+      inc(13);
       return Status::OK();
     }
 
    public:
     ~Base() {
-      inc(13);
+      inc(14);
     }
   };
 
@@ -1075,15 +1082,16 @@ TEST_F(EnvPosixTest, WritableFileWrapper) {
     ASSERT_OK(w.Flush());
     ASSERT_OK(w.Sync());
     ASSERT_OK(w.Fsync());
-    w.SetIOPriority(Env::IOPriority::IO_HIGH);
+    w.SetIOPriority(yb::IOPriority::kHigh);
     w.GetFileSize();
     w.GetPreallocationStatus(nullptr, nullptr);
     w.GetUniqueId(nullptr);
     ASSERT_OK(w.InvalidateCache(0, 0));
+    w.filename();
     w.CallProtectedMethods();
   }
 
-  EXPECT_EQ(14, step);
+  EXPECT_EQ(15, step);
 }
 
 }  // namespace rocksdb

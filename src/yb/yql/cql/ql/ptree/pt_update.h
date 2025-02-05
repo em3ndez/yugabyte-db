@@ -15,8 +15,7 @@
 // Tree node definitions for UPDATE statement.
 //--------------------------------------------------------------------------------------------------
 
-#ifndef YB_YQL_CQL_QL_PTREE_PT_UPDATE_H_
-#define YB_YQL_CQL_QL_PTREE_PT_UPDATE_H_
+#pragma once
 
 #include "yb/yql/cql/ql/ptree/list_node.h"
 #include "yb/yql/cql/ql/ptree/tree_node.h"
@@ -53,7 +52,7 @@ class PTAssign : public TreeNode {
   }
 
   // Node semantics analysis.
-  virtual CHECKED_STATUS Analyze(SemContext *sem_context) override;
+  virtual Status Analyze(SemContext *sem_context) override;
   void PrintSemanticAnalysisResult(SemContext *sem_context);
 
   // Node type.
@@ -139,9 +138,9 @@ class PTUpdateStmt : public PTDmlStmt {
   }
 
   // Node semantics analysis.
-  virtual CHECKED_STATUS Analyze(SemContext *sem_context) override;
+  virtual Status Analyze(SemContext *sem_context) override;
   void PrintSemanticAnalysisResult(SemContext *sem_context);
-  CHECKED_STATUS AnalyzeSetExpr(PTAssign *assign_expr, SemContext *sem_context);
+  Status AnalyzeSetExpr(PTAssign *assign_expr, SemContext *sem_context);
   ExplainPlanPB AnalysisResultToPB() override;
 
   // Table name.
@@ -192,5 +191,3 @@ class PTUpdateStmt : public PTDmlStmt {
 
 }  // namespace ql
 }  // namespace yb
-
-#endif  // YB_YQL_CQL_QL_PTREE_PT_UPDATE_H_

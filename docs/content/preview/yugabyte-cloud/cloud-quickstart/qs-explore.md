@@ -1,24 +1,22 @@
 ---
 title: Explore Yugabyte SQL
 linkTitle: Explore distributed SQL
-description: Use distributed SQL to explore core features of YugabteDB.
+description: Use distributed SQL to explore core features of YugabyteDB.
 headcontent:
-image: /images/section_icons/index/quick_start.png
 menu:
-  preview:
+  preview_yugabyte-cloud:
     identifier: qs-explore-1-ysql
-    parent: cloud-quickstart
-    weight: 400
-type: page
-isTocNested: true
-showAsideToc: true
+    parent: yugabytedb-managed
+    params:
+      hide: true
+type: docs
 ---
 
-After [creating a free cluster](../qs-add/) and [connecting to the cluster](../qs-connect/) using Cloud Shell, you can start exploring YugabyteDB's PostgreSQL-compatible, fully-relational Yugabyte SQL API.
+After [creating a Sandbox cluster](../../cloud-basics/create-clusters/create-clusters-free/) and [connecting to the cluster](../../cloud-connect/connect-cloud-shell/) using Cloud Shell, you can start exploring YugabyteDB's PostgreSQL-compatible, fully-relational Yugabyte SQL API.
 
 When you connect to your cluster using Cloud Shell with the YSQL API, the shell window incorporates a quick start guide, with a series of pre-built queries for you to run.
 
-{{< youtube id="01owTbmSDe8" title="Explore distributed SQL in YugabyteDB Managed" >}}
+{{< youtube id="01owTbmSDe8" title="Explore distributed SQL in YugabyteDB Aeon" >}}
 
 ## Run the tutorial
 
@@ -80,8 +78,8 @@ The quick start includes the following scenarios:
 | Triggers | Record the last update time of each row automatically. |
 | Materialized Views | Pre-compute analytics for reporting using a materialized view. |
 
-To run this tutorial from your desktop shell, refer to [Explore Yugabyte SQL](../../../quick-start/explore/ysql/) in the Core Quick Start.
+To run this tutorial from your desktop shell, refer to [Explore Yugabyte SQL](/preview/tutorials/quick-start/explore/ysql/) in the Core Quick Start.
 
 ## Next step
 
-[Build an application](../cloud-build-apps/)
+[Build an application](/preview/tutorials/build-apps/)

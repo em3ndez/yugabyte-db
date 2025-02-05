@@ -10,8 +10,7 @@
 // or implied.  See the License for the specific language governing permissions and limitations
 // under the License.
 //
-#ifndef YB_YQL_REDIS_REDISSERVER_REDIS_PARSER_H_
-#define YB_YQL_REDIS_REDISSERVER_REDIS_PARSER_H_
+#pragma once
 
 #include <memory>
 #include <string>
@@ -32,8 +31,8 @@ namespace redisserver {
 constexpr size_t kMaxRedisValueSize = 512_MB;
 constexpr int64_t kNoneTtl = -1;
 
-CHECKED_STATUS ParseSet(client::YBRedisWriteOp *op, const RedisClientCommand& args);
-CHECKED_STATUS ParseGet(client::YBRedisReadOp* op, const RedisClientCommand& args);
+Status ParseSet(client::YBRedisWriteOp *op, const RedisClientCommand& args);
+Status ParseGet(client::YBRedisReadOp* op, const RedisClientCommand& args);
 
 // TODO: make additional command support here
 
@@ -84,13 +83,13 @@ class RedisParser {
     FINISHED,
   };
 
-  CHECKED_STATUS AdvanceToNextToken();
-  CHECKED_STATUS Initial();
-  CHECKED_STATUS SingleLine();
-  CHECKED_STATUS BulkHeader();
-  CHECKED_STATUS BulkArgumentSize();
-  CHECKED_STATUS BulkArgumentBody();
-  CHECKED_STATUS FindEndOfLine();
+  Status AdvanceToNextToken();
+  Status Initial();
+  Status SingleLine();
+  Status BulkHeader();
+  Status BulkArgumentSize();
+  Status BulkArgumentBody();
+  Status FindEndOfLine();
 
   // Parses number with specified bounds.
   // Number is located in separate line, and contain prefix before actual number.
@@ -143,5 +142,3 @@ class RedisParser {
 
 }  // namespace redisserver
 }  // namespace yb
-
-#endif  // YB_YQL_REDIS_REDISSERVER_REDIS_PARSER_H_

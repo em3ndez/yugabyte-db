@@ -1,27 +1,23 @@
 ---
 title: Add database users
 linkTitle: Add database users
-description: Add users to YugabyteDB Managed clusters
-headcontent:
-image: /images/section_icons/deploy/enterprise.png
+description: Add users to YugabyteDB Aeon clusters
+headcontent: Grant team members and applications access to your database
 menu:
-  preview:
+  preview_yugabyte-cloud:
     identifier: add-users
     parent: cloud-secure-clusters
     weight: 350
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
-Add database users to provide team members and applications access to the cluster's YugabyteDB database.
-
-When you create a cluster in YugabyteDB Managed, you set up the database admin credentials, which you use to access the YugabyteDB database. Use this account to:
+When you create a cluster in YugabyteDB Aeon, you set up the database admin credentials, which you use to access the YugabyteDB database installed on your cluster. Use this account to:
 
 - add more database users
 - assign privileges to users
 - change your password, or the passwords of other users
 
-YugabyteDB uses [role-based access control](../../../secure/authorization/) (RBAC) to [manage authorization](../cloud-users/). A database user's access is determined by the roles they are assigned. You should grant users only the privileges that they require.
+YugabyteDB uses [role-based access control](../../../secure/authorization/) (RBAC) to [manage database authorization](../cloud-users/). A database user's access is determined by the roles they are assigned. You should grant database users only the privileges that they require.
 
 ## Create and manage users and roles
 
@@ -46,6 +42,12 @@ Add database users as follows:
 1. Authorize their network so that they can access the cluster. Refer to [Assign IP allow lists](../../cloud-secure-clusters/add-connections/).
 1. Send them the credentials.
 
+{{< note title="Database users and case sensitivity" >}}
+
+Like SQL and CQL, both YSQL and YCQL are case-insensitive by default. When specifying an identifier, such as the name of a table or role, YSQL and YCQL automatically convert the identifier to lowercase. For example, `CREATE ROLE Alice` creates the role "alice". To use a case-sensitive name, enclose the name in quotes. For example, to create the role "Alice", use `CREATE ROLE "Alice"`.
+
+{{< /note >}}
+
 #### YSQL
 
 To add a database user in YSQL, use the CREATE ROLE statement as follows:
@@ -61,7 +63,7 @@ yugabyte=# GRANT <rolename> TO <username>;
 ```
 
 {{< note title="Note" >}}
-You can't create YSQL superusers in YugabyteDB Managed. To create another database administrator, grant the `yb_superuser` role. Refer to [Database authorization in YugabyteDB Managed clusters](../cloud-users/).
+You can't create YSQL superusers in YugabyteDB Aeon. To create another database administrator, grant the `yb_superuser` role. Refer to [Database authorization in YugabyteDB Aeon clusters](../cloud-users/).
 {{< /note >}}
 
 #### YCQL
@@ -97,9 +99,9 @@ cassandra@ycqlsh> ALTER ROLE <username> WITH PASSWORD = 'new-password';
 ## Learn more
 
 - [Manage users and roles in YugabyteDB](../../../secure/authorization/create-roles/)
-
-- [Database authorization in YugabyteDB Managed clusters](../cloud-users/)
+- [Database authorization in YugabyteDB Aeon clusters](../cloud-users/)
 
 ## Next steps
 
+- [Connect using a shell](../../cloud-connect/connect-client-shell/)
 - [Connect an application](../../cloud-connect/connect-applications/)

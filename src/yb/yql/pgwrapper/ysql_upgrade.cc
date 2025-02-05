@@ -20,6 +20,7 @@
 
 #include "server/catalog/pg_yb_migration_d.h"
 
+#include "yb/common/entity_ids.h"
 #include "yb/util/env_util.h"
 #include "yb/util/format.h"
 #include "yb/util/path_util.h"
@@ -46,10 +47,7 @@ Result<int64_t> SelectCountStar(PGConn* pgconn,
   auto query_str = Format("SELECT COUNT(*) FROM $0$1",
                           table_name,
                           where_clause == "" ? "" : Format(" WHERE $0", where_clause));
-  auto res = VERIFY_RESULT(pgconn->Fetch(query_str));
-  SCHECK(PQntuples(res.get()) == 1, InternalError,
-         Format("Query $0 was expected to return a single row", query_str));
-  return pgwrapper::GetInt64(res.get(), 0, 0);
+  return VERIFY_RESULT(pgconn->FetchRow<PGUint64>(query_str));
 }
 
 Result<bool> SystemTableExists(PGConn* pgconn, const std::string& table_name) {
@@ -68,6 +66,31 @@ Result<bool> SystemTableHasRows(PGConn* pgconn, const std::string& table_name) {
 Result<bool> FunctionExists(PGConn* pgconn, const std::string& function_name) {
   auto where_clause = Format("proname = '$0'", function_name);
   return VERIFY_RESULT(SelectCountStar(pgconn, "pg_proc", where_clause)) == 1;
+}
+
+// Return the last breaking version of template1.
+// In global catalog version mode, this is used to detect that a migration
+// script contains a breaking DDL statement if the last breaking version is
+// incremented after execution of the script. We introduce an extra delay to
+// allow the new catalog version to be propagated to tserver through heartbeat.
+// In per-database catalog version mode, there are two kinds of breaking DDLs:
+// (1) per-database breaking DDL
+// (2) global-impact breaking DDL
+// For (1), if a breaking DDL is executed on DB1 connection, because we execute
+// migration script from one DB connection to another and there are multiple
+// databases, by the time we come back to DB1 connection to execute the next
+// migration script, chances are that the DB1 breaking version has already
+// propagated so we don't need to add an extra delay which slows down the
+// upgrade process.
+// For (2), we need to introduce an extra delay. To simplify the query to detect
+// global-impact breaking DDL we also just check the last breaking version of
+// template1.
+// Note that this means for case (1) we unnecessarily introduce an extra delay
+// for template1.
+Result<uint64_t> GetBreakingCatalogVersion(PGConn* pgconn) {
+  return pgconn->FetchRow<PGUint64>(
+      Format("SELECT last_breaking_version FROM pg_yb_catalog_version WHERE "
+             "db_oid = $0", kTemplate1Oid));
 }
 
 std::string WrapSystemDml(const std::string& query) {
@@ -144,15 +167,14 @@ Result<Version> DetermineAndSetVersion(PGConn* pgconn) {
 
   // If pg_yb_migration was present before and has values, that's our version.
   if (!table_created) {
-    const std::string query_str(
+    const auto query_str(
         "SELECT major, minor FROM pg_catalog.pg_yb_migration"
         "  ORDER BY major DESC, minor DESC"
         "  LIMIT 1");
-    pgwrapper::PGResultPtr res = VERIFY_RESULT(pgconn->Fetch(query_str));
-    if (PQntuples(res.get()) == 1) {
-      int major_version = VERIFY_RESULT(pgwrapper::GetInt32(res.get(), 0, 0));
-      int minor_version = VERIFY_RESULT(pgwrapper::GetInt32(res.get(), 0, 1));
-      Version ver(major_version, minor_version);
+    const auto rows = VERIFY_RESULT((pgconn->FetchRows<int32_t, int32_t>(query_str)));
+    if (!rows.empty()) {
+      const auto& [major, minor] = rows.front();
+      Version ver(major, minor);
       LOG(INFO) << "Version is " << ver;
       return ver;
     }
@@ -175,12 +197,85 @@ bool IsNonSqlFile(const std::string& filename) {
 
 } // anonymous namespace
 
+class YsqlUpgradeHelper::DatabaseEntry {
+ public:
+  DatabaseEntry(std::string database_name,
+                PGConnBuilder conn_builder)
+      : database_name_(database_name),
+        conn_builder_(conn_builder) {
+  }
+
+  virtual ~DatabaseEntry() = default;
+
+  // Establish a connection to this database, or reuse an existing one if
+  // not in single-connection mode.
+  virtual Result<std::shared_ptr<pgwrapper::PGConn>> GetConnection() = 0;
+
+ protected:
+  Result<std::shared_ptr<pgwrapper::PGConn>> MakeConnection() {
+    auto pgconn = std::make_shared<pgwrapper::PGConn>(VERIFY_RESULT(conn_builder_.Connect()));
+    RETURN_NOT_OK(pgconn->Execute("SET ysql_upgrade_mode TO true;"));
+    return pgconn;
+  }
+
+ public:
+  const std::string database_name_;
+  Version version_{0, 0};
+
+ private:
+  PGConnBuilder conn_builder_;
+};
+
+class YsqlUpgradeHelper::ReusableConnectionDatabaseEntry
+    : public YsqlUpgradeHelper::DatabaseEntry {
+ public:
+  ReusableConnectionDatabaseEntry(std::string database_name, PGConnBuilder conn_builder)
+      : DatabaseEntry(database_name, conn_builder) {
+  }
+
+  Result<std::shared_ptr<pgwrapper::PGConn>> GetConnection() override {
+    if (pgconn_) {
+      return pgconn_;
+    }
+
+    pgconn_ = VERIFY_RESULT(MakeConnection());
+    return pgconn_;
+  }
+
+ private:
+  // Connection is wrapped in shared_ptr to rely on its referece counting for destruction.
+  std::shared_ptr<pgwrapper::PGConn> pgconn_;
+};
+
+class YsqlUpgradeHelper::SingletonConnectionDatabaseEntry
+    : public YsqlUpgradeHelper::DatabaseEntry {
+ public:
+  SingletonConnectionDatabaseEntry(std::string database_name, PGConnBuilder conn_builder)
+      : DatabaseEntry(database_name, conn_builder) {
+  }
+
+  Result<std::shared_ptr<pgwrapper::PGConn>> GetConnection() override {
+    SCHECK(weak_pgconn_.expired(), InternalError,
+           "New connection is requested before the old one is released!");
+
+    auto pgconn = VERIFY_RESULT(MakeConnection());
+    weak_pgconn_ = std::weak_ptr<pgwrapper::PGConn>(pgconn);
+    return pgconn;
+  }
+
+ private:
+  // Shared connection weak pointer to make sure only one is active at a time.
+  inline static std::weak_ptr<pgwrapper::PGConn> weak_pgconn_ {};
+};
+
 YsqlUpgradeHelper::YsqlUpgradeHelper(const HostPort& ysql_proxy_addr,
                                      uint64_t ysql_auth_key,
-                                     uint32_t heartbeat_interval_ms)
+                                     uint32_t heartbeat_interval_ms,
+                                     bool use_single_connection)
     : ysql_proxy_addr_(ysql_proxy_addr),
       ysql_auth_key_(ysql_auth_key),
-      heartbeat_interval_ms_(heartbeat_interval_ms) {
+      heartbeat_interval_ms_(heartbeat_interval_ms),
+      use_single_connection_(use_single_connection) {
 }
 
 Status YsqlUpgradeHelper::AnalyzeMigrationFiles() {
@@ -217,7 +312,52 @@ Status YsqlUpgradeHelper::AnalyzeMigrationFiles() {
     int major_version = std::stoi(version_match[1]);
     int minor_version = version_match[3].length() > 0 ? std::stoi(version_match[3]) : 0;
     Version version{major_version, minor_version};
+
+    // Make sure another file with the same version wasn't already read.
+    SCHECK(migration_filenames_map_.find(version) == migration_filenames_map_.end(),
+           InternalError,
+           Format("Migration '$0' uses the same version number as another file", filename));
     migration_filenames_map_[version] = filename;
+  }
+
+  // Check that there are no gaps in migration version numbers.
+  // Good: 1.0, 2.0, 3.0, 3.1, 3.2
+  // Bad:  1.0, 2.0, 4.0
+  // Bad:  1.0, 2.0, 3.0, 3.2
+  // Bad:  1.0, 2.0, 3.0, 4.1
+  // Bad:  1.0, 2.0, 3.0, 3.1, 4.0
+  // Bad:  1.0, 2.0, 3.0, 3.1, 4.1
+  Version prev_version{0, 0};
+  bool using_minor_versions = false;
+  for (const auto& entry : migration_filenames_map_) {
+    const auto& curr_version = entry.first;
+    const auto& filename = entry.second;
+
+    DCHECK(curr_version > prev_version)
+        << "Expected new version to be greater than previous version: " << curr_version << " vs "
+        << prev_version << ", filename: " << entry.second;
+    if (using_minor_versions) {
+      // Since previous increment was on minor version, expect a minor version increment.
+      SCHECK((curr_version.first == prev_version.first &&
+              curr_version.second == prev_version.second + 1),
+             InternalError,
+             Format("Migration '$0' is not exactly one minor version away from previous version $1",
+                    filename, prev_version));
+    } else {
+      // Could be a major or minor version increment.
+      SCHECK(((curr_version.first == prev_version.first &&
+               curr_version.second == prev_version.second + 1) ||
+              (curr_version.first == prev_version.first + 1 &&
+               curr_version.second == prev_version.second)),
+                InternalError,
+                Format("Migration '$0' is not exactly one major or minor version away from previous"
+                       " version $1",
+                       filename, prev_version));
+      if (curr_version.first == prev_version.first) {
+        using_minor_versions = true;
+      }
+    }
+    prev_version = curr_version;
   }
 
   latest_version_ = std::prev(migration_filenames_map_.end())->first;
@@ -225,80 +365,78 @@ Status YsqlUpgradeHelper::AnalyzeMigrationFiles() {
   return Status::OK();
 }
 
-Result<PGConn> YsqlUpgradeHelper::Connect(const std::string& database_name) {
-  // Construct connection string.  Note that the plain password in the connection string will be
-  // sent over the wire, but since it only goes over a unix-domain socket, there should be no
-  // eavesdropping/tampering issues.
-  const std::string conn_str = Format(
-      "user=$0 password=$1 host=$2 port=$3 dbname=$4",
-      "postgres",
-      ysql_auth_key_,
-      PgDeriveSocketDir(ysql_proxy_addr_.host()),
-      ysql_proxy_addr_.port(),
-      pgwrapper::PqEscapeLiteral(database_name));
-  // Use the string with redacted password for logging purposes.
-  boost::optional<std::string> conn_str_for_log(Format(
-      "user=$0 password=$1 host=$2 port=$3 dbname=$4",
-      "postgres",
-      "<REDACTED>",
-      PgDeriveSocketDir(ysql_proxy_addr_.host()),
-      ysql_proxy_addr_.port(),
-      pgwrapper::PqEscapeLiteral(database_name)));
+Result<std::unique_ptr<YsqlUpgradeHelper::DatabaseEntry>>
+YsqlUpgradeHelper::MakeDatabaseEntry(std::string database_name) {
+  // Explicitly using an infinite connect_timeout here.
+  auto builder = pgwrapper::CreateInternalPGConnBuilder(
+      ysql_proxy_addr_, database_name, ysql_auth_key_, /* deadline */ std::nullopt);
 
-  PGConn pgconn = VERIFY_RESULT(
-      PGConn::Connect(conn_str, false /* simple_query_protocol */, conn_str_for_log));
+  std::unique_ptr<DatabaseEntry> entry;
+  if (use_single_connection_) {
+    entry = std::make_unique<SingletonConnectionDatabaseEntry>(database_name, builder);
+  } else {
+    entry = std::make_unique<ReusableConnectionDatabaseEntry>(database_name, builder);
 
-  RETURN_NOT_OK(pgconn.Execute("SET ysql_upgrade_mode TO true;"));
+    // Eagerly initialize a connection
+    RETURN_NOT_OK(entry->GetConnection());
+  }
 
-  // Force global transactions when running upgrade to avoid transactions being run as local.
-  // This can be removed once #11731 is resolved.
-  RETURN_NOT_OK(pgconn.Execute("SET force_global_transaction TO true;"));
+  return entry;
+}
 
-  return pgconn;
+Result<bool> YsqlUpgradeHelper::HasYbCatalogVersion(DatabaseEntry* db_entry) {
+  auto conn = VERIFY_RESULT(db_entry->GetConnection());
+  return FunctionExists(conn.get(), "yb_catalog_version");
 }
 
 Status YsqlUpgradeHelper::Upgrade() {
   RETURN_NOT_OK(AnalyzeMigrationFiles());
   LOG(INFO) << "Latest version defined in migrations is " << latest_version_;
 
-  std::vector<DatabaseEntry> databases;
+  std::vector<std::unique_ptr<DatabaseEntry>> databases;
+
+  // Place template databases to be processed first.
+  std::vector<std::string> db_names{"template1", "template0"};
 
   {
-    PGConn t1_pgconn = VERIFY_RESULT(Connect("template1"));
-
-    // Place template databases to be processed first.
-    std::vector<std::string> db_names{"template1", "template0"};
+    auto& t1_entry = databases.emplace_back(VERIFY_RESULT(MakeDatabaseEntry("template1")));
+    auto  t1_conn  = VERIFY_RESULT(t1_entry->GetConnection());
 
     // Fetch databases list
     {
       const std::string query_str("SELECT datname FROM pg_database"
                                   "  WHERE datname NOT IN ('template0', 'template1');");
-      pgwrapper::PGResultPtr res = VERIFY_RESULT(t1_pgconn.Fetch(query_str));
+      pgwrapper::PGResultPtr res = VERIFY_RESULT(t1_conn->Fetch(query_str));
       for (int i = 0; i < PQntuples(res.get()); i++) {
-        db_names.emplace_back(VERIFY_RESULT(pgwrapper::GetString(res.get(), i, 0)));
+        db_names.emplace_back(VERIFY_RESULT(GetValue<std::string>(res.get(), i, 0)));
       }
     }
+  }
 
-    for (const auto& db : db_names) {
-      LOG(INFO) << "Determining a YSQL version for DB " << db;
-      PGConn pgconn = db == "template1" ? std::move(t1_pgconn) : VERIFY_RESULT(Connect(db));
+  for (const auto& db : db_names) {
+    LOG(INFO) << "Determining a YSQL version for DB " << db;
+    auto& entry = db == "template1"
+        ? databases[0]
+        : databases.emplace_back(VERIFY_RESULT(MakeDatabaseEntry(db)));
 
-      Version current_version = VERIFY_RESULT(DetermineAndSetVersion(&pgconn));
-      if (current_version.first >= kCatalogVersionMigrationNumber) {
-        catalog_version_migration_applied_ = true;
-      }
-      databases.emplace_back(db, std::move(pgconn), current_version);
+    auto conn = VERIFY_RESULT(entry->GetConnection());
+
+    const auto current_version = VERIFY_RESULT(DetermineAndSetVersion(&*conn));
+    entry->version_ = current_version;
+
+    if (current_version.first >= kCatalogVersionMigrationNumber) {
+      catalog_version_migration_applied_ = true;
     }
   }
 
   while (true) {
     DatabaseEntry* min_version_entry =
-        &*std::min_element(databases.begin(), databases.end(),
-                           [](const DatabaseEntry& db1, const DatabaseEntry& db2) {
-                             return std::get<2>(db1) < std::get<2>(db2);
-                           });
+        &**std::min_element(databases.begin(), databases.end(),
+                            [](const auto& db1, const auto& db2) {
+                              return db1->version_ < db2->version_;
+                            });
 
-    auto& min_version = std::get<2>(*min_version_entry);
+    auto& min_version = min_version_entry->version_;
     if (min_version >= latest_version_) {
       LOG(INFO) << "Minimum version is " << min_version
                 << " which is latest";
@@ -306,18 +444,38 @@ Status YsqlUpgradeHelper::Upgrade() {
     }
 
     LOG(INFO) << "Minimum version is " << min_version
-              << " (database " << std::get<0>(*min_version_entry) << ")";
+              << " (database " << min_version_entry->database_name_ << ")";
 
     RETURN_NOT_OK(MigrateOnce(min_version_entry));
+    if (pg_global_heartbeat_wait_) {
+      SleepFor(MonoDelta::FromMilliseconds(2 * heartbeat_interval_ms_));
+    }
+  }
+
+  // Fix for https://github.com/yugabyte/yugabyte-db/issues/18507:
+  // This bug only shows up when upgrading from 2.4.x or 2.6.x, in these
+  // two releases the table pg_yb_catalog_version exists but the function
+  // yb_catalog_version does not exist. However we have skipped V1 because
+  // SystemTableHasRows(pgconn, "pg_yb_catalog_version") returns true.
+  for (auto& entry : databases) {
+    if (!VERIFY_RESULT(HasYbCatalogVersion(entry.get()))) {
+      LOG(WARNING) << "Function yb_catalog_version is missing in " << entry->database_name_;
+      // Run V1 migration script to introduce function "yb_catalog_version".
+      const Version version = {0, 0};
+      RETURN_NOT_OK(MigrateOnce(entry.get(), &version));
+    } else {
+      LOG(INFO) << "Found function yb_catalog_version in " << entry->database_name_;
+    }
   }
 
   return Status::OK();
 }
 
-Status YsqlUpgradeHelper::MigrateOnce(DatabaseEntry* db_entry) {
-  const std::string& db_name = std::get<0>(*db_entry);
-  auto& pgconn = std::get<1>(*db_entry);
-  const auto& version = std::get<2>(*db_entry);
+Status YsqlUpgradeHelper::MigrateOnce(DatabaseEntry* db_entry, const Version* historical_version) {
+  const auto& db_name = db_entry->database_name_;
+  const auto& version = historical_version ? *historical_version : db_entry->version_;
+
+  auto pgconn = VERIFY_RESULT(db_entry->GetConnection());
 
   const auto& next_migration = std::find_if(migration_filenames_map_.begin(),
                                             migration_filenames_map_.end(),
@@ -338,34 +496,69 @@ Status YsqlUpgradeHelper::MigrateOnce(DatabaseEntry* db_entry) {
 
   LOG(INFO) << db_name << ": applying migration '" << next_migration_filename << "'";
 
+  const auto check_breaking_ddl =
+      catalog_version_migration_applied_ && !use_single_connection_;
+  uint64_t old_breaking_version = last_breaking_version_;
+  if (check_breaking_ddl && old_breaking_version == 0) {
+    old_breaking_version = VERIFY_RESULT(GetBreakingCatalogVersion(&*pgconn));
+    DCHECK_GE(old_breaking_version, 1UL);
+  }
+
+  // We use the existence of "pg_global" to indicate that we need to wait.
+  // For example, the creation of shared system relation need to be propagated
+  // to invalidate its negative cache entry in other Postgres backends.
+  pg_global_heartbeat_wait_ =
+    db_name == "template1" && boost::icontains(migration_content.ToString(), "pg_global");
+  if (pg_global_heartbeat_wait_) {
+    LOG(INFO) << "Found pg_global in migration file " << next_migration_filename
+              << " when applying to " << db_name;
+  }
+
   // Note that underlying PQexec executes mutiple statements transactionally, where our usual ACID
   // guarantees apply.
   // Migrations may override that using BEGIN/COMMIT statements - this will split a singular
   // implicit transaction onto several explicit ones.
-  RETURN_NOT_OK_PREPEND(pgconn.Execute(migration_content.ToString(),
+  RETURN_NOT_OK_PREPEND(pgconn->Execute(migration_content.ToString(),
                                        false /* show_query_in_error */),
                         Format("Failed to apply migration '$0' to a database $1",
                                next_migration_filename,
                                db_name));
 
+  bool has_breaking_ddl = false;
+  if (check_breaking_ddl) {
+    last_breaking_version_ = VERIFY_RESULT(GetBreakingCatalogVersion(&*pgconn));
+    DCHECK_GE(last_breaking_version_, 1UL);
+    has_breaking_ddl = old_breaking_version < last_breaking_version_;
+  }
   // Wait for the new Catalog Version to be propagated to tserver through heartbeat.
-  // This can only happen once, when the table is introduced in the first migration.
+  // (1) catalog_version_migration_applied_: this can only happen once, when the
+  // table pg_yb_catalog_version is introduced in the first migration.
+  // (2) has_breaking_ddl: last migration contains a breaking DDL as indicated
+  // by the last_breaking_version change in the pg_yb_catalog_version table.
   // Sleep here isn't guaranteed to work (see #6238), failure to propagate a catalog version
   // would lead to Catalog Version Mismatch error fixed by retrial.
-  if (!catalog_version_migration_applied_) {
+  if (!catalog_version_migration_applied_ || has_breaking_ddl) {
     SleepFor(MonoDelta::FromMilliseconds(2 * heartbeat_interval_ms_));
-    catalog_version_migration_applied_ = true;
+    if (!catalog_version_migration_applied_) {
+      catalog_version_migration_applied_ = true;
+    }
+  }
+
+  if (historical_version) {
+    LOG(INFO) << db_name << ": migration successfully applied without version bump";
+    return Status::OK();
   }
 
   RETURN_NOT_OK_PREPEND(
-      pgconn.ExecuteFormat(
+      pgconn->ExecuteFormat(
           WrapSystemDml(
               "INSERT INTO pg_catalog.pg_yb_migration (major, minor, name, time_applied) "
               "  VALUES ($0, $1, '$2', ROUND(EXTRACT(EPOCH FROM CURRENT_TIMESTAMP) * 1000));"),
           next_version.first, next_version.second, next_migration_filename),
       Format("Failed to bump pg_yb_migration to $0.$1 in database $2",
              next_version.first, next_version.second, db_name));
-  std::get<2>(*db_entry) = next_version;
+
+  db_entry->version_ = next_version;
   LOG(INFO) << db_name << ": migration successfully applied, version bumped to " << next_version;
 
   return Status::OK();

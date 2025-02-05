@@ -45,6 +45,10 @@ public class Metric {
 
   private String name;
 
+  private String help;
+
+  private String unit;
+
   private Type type;
 
   private Date createTime = nowWithoutMillis();
@@ -77,6 +81,12 @@ public class Metric {
     return this;
   }
 
+  public Metric setKeyLabel(String label, String value) {
+    setLabel(label, value);
+    keyLabels.add(label);
+    return this;
+  }
+
   public Metric setLabel(KnownAlertLabels label, String value) {
     return setLabel(label.labelName(), value);
   }
@@ -94,9 +104,7 @@ public class Metric {
   }
 
   public Map<String, String> getKeyLabelValues() {
-    return labels
-        .entrySet()
-        .stream()
+    return labels.entrySet().stream()
         .filter(e -> keyLabels.contains(e.getKey()))
         .collect(Collectors.toMap(Entry::getKey, Entry::getValue));
   }

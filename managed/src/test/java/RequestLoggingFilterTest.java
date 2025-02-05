@@ -1,10 +1,17 @@
-import akka.actor.ActorSystem;
-import akka.stream.ActorMaterializer;
-import akka.stream.ActorMaterializerSettings;
-import akka.stream.Materializer;
+import static org.junit.Assert.*;
+import static play.mvc.Results.ok;
+
 import com.typesafe.config.Config;
 import com.typesafe.config.ConfigFactory;
 import com.typesafe.config.ConfigValueFactory;
+import com.yugabyte.yw.common.logging.LogUtil;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
+import java.util.function.Function;
+import org.apache.pekko.actor.ActorSystem;
+import org.apache.pekko.stream.ActorMaterializer;
+import org.apache.pekko.stream.ActorMaterializerSettings;
+import org.apache.pekko.stream.Materializer;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
@@ -12,14 +19,6 @@ import org.slf4j.MDC;
 import play.mvc.Filter;
 import play.mvc.Http;
 import play.mvc.Result;
-
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionStage;
-import java.util.function.Function;
-
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertNull;
-import static play.mvc.Results.ok;
 
 public class RequestLoggingFilterTest {
   private static final String header = "X-REQUEST-ID";
@@ -62,17 +61,17 @@ public class RequestLoggingFilterTest {
   @Test
   public void testWithCloudDisabled() {
     Config config =
-        ConfigFactory.empty().withValue("yb.cloud.enabled", ConfigValueFactory.fromAnyRef(false));
+        ConfigFactory.empty()
+            .withValue("yb.cloud.enabled", ConfigValueFactory.fromAnyRef(false))
+            .withValue("yb.cloud.requestIdHeader", ConfigValueFactory.fromAnyRef(header));
     Filter f = new RequestLoggingFilter(materializer, config);
-
     Function<Http.RequestHeader, CompletionStage<Result>> next =
         (rh) -> {
-          assertNull(MDC.get("request-id"));
+          assertNotNull(MDC.get(LogUtil.CORRELATION_ID));
           return CompletableFuture.completedFuture(ok("ok"));
         };
 
     Http.RequestHeader rh = new Http.RequestBuilder().build();
-    rh.getHeaders().addHeader(header, "reqId");
     f.apply(next, rh);
   }
 }

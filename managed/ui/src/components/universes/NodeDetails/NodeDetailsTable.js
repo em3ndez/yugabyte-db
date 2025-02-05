@@ -1,9 +1,16 @@
 // Copyright (c) YugaByte, Inc.
 
-import React, { Component, Fragment } from 'react';
+import { Component, Fragment } from 'react';
+import { MenuItem, Dropdown } from 'react-bootstrap';
 import { BootstrapTable, TableHeaderColumn } from 'react-bootstrap-table';
-import 'react-bootstrap-table/css/react-bootstrap-table.css';
-import { YBLoadingCircleIcon } from '../../common/indicators';
+import moment from 'moment';
+import pluralize from 'pluralize';
+import { YBPanelItem } from '../../panels';
+import { NodeAction } from '../../universes';
+import { setCookiesFromLocalStorage } from '../../../routes';
+import { YBTooltip } from '../../../redesign/components';
+import { NodeType } from '../../../redesign/utils/dtos';
+import { CloudType } from '../../../redesign/features/universe/universe-form/utils/dto';
 import { isDefinedNotNull, isNonEmptyString } from '../../../utils/ObjectUtils';
 import {
   getPrimaryCluster,
@@ -11,72 +18,154 @@ import {
   getReadOnlyCluster
 } from '../../../utils/UniverseUtils';
 import { isNotHidden, isDisabled, isHidden } from '../../../utils/LayoutUtils';
-import { YBPanelItem } from '../../panels';
-import { NodeAction } from '../../universes';
-import moment from 'moment';
-import pluralize from 'pluralize';
+import { getUniverseStatus, UniverseState } from '../helpers/universeHelpers';
+
+import './NodeDetailsTable.scss';
+import 'react-bootstrap-table/css/react-bootstrap-table.css';
+
+const NODE_TYPE = [
+  {
+    label: 'All Nodes',
+    value: 'All Nodes'
+  },
+  {
+    label: NodeType.TServer,
+    value: NodeType.TServer
+  },
+  {
+    label: NodeType.Master,
+    value: NodeType.Master
+  }
+];
 
 export default class NodeDetailsTable extends Component {
+  constructor(props) {
+    super(props);
+    this.state = {
+      nodeTypeDropdownValue: NODE_TYPE[0].value
+    };
+  }
+
+  onNodeTypeChanged = (selectedNodeType) => {
+    this.setState({
+      nodeTypeDropdownValue: selectedNodeType
+    });
+  };
+
   render() {
     const {
-      nodeDetails, providerUUID, clusterType, customer, currentUniverse,
-      providers
+      nodeDetails,
+      providerUUID,
+      clusterType,
+      customer,
+      currentUniverse,
+      providers,
+      isDedicatedNodes,
+      isKubernetesCluster,
+      accessKeys
     } = this.props;
-    const loadingIcon = <YBLoadingCircleIcon size="inline" />;
     const successIcon = <i className="fa fa-check-circle yb-success-color" />;
     const warningIcon = <i className="fa fa-warning yb-fail-color" />;
-    const sortedNodeDetails = nodeDetails.sort((a, b) => a.nodeIdx - b.nodeIdx);
+    let sortedNodeDetails = nodeDetails.sort((a, b) => a.nodeIdx - b.nodeIdx);
     const universeUUID = currentUniverse.data.universeUUID;
-    const universePaused = currentUniverse?.data?.universeDetails?.universePaused;
-    const providerConfig = providers.data.find((provider) => provider.uuid === providerUUID)?.config;
+    const universeProvider = providers?.data?.find((provider) => provider.uuid === providerUUID);
+    const providerConfig = universeProvider?.config;
 
+    if (isDedicatedNodes && clusterType === 'primary') {
+      if (this.state.nodeTypeDropdownValue === NodeType.Master) {
+        sortedNodeDetails = sortedNodeDetails.filter((nodeDetails) =>
+          isKubernetesCluster
+            ? nodeDetails.isMasterProcess
+            : nodeDetails.dedicatedTo === NodeType.Master.toUpperCase()
+        );
+      } else if (this.state.nodeTypeDropdownValue === NodeType.TServer) {
+        sortedNodeDetails = sortedNodeDetails.filter((nodeDetails) =>
+          isKubernetesCluster
+            ? nodeDetails.isTServerProcess
+            : nodeDetails.dedicatedTo === NodeType.TServer.toUpperCase()
+        );
+      }
+    }
     const formatIpPort = function (cell, row, type) {
       if (cell === '-') {
         return <span>{cell}</span>;
       }
-      const isMaster = type === 'master';
+      const isMaster = type === NodeType.Master.toLowerCase();
       const href = getProxyNodeAddress(
         universeUUID,
-        customer,
         row.privateIP,
         isMaster ? row.masterPort : row.tserverPort
       );
-      const isAlive = isMaster ? row.isMasterAlive : row.isTserverAlive
-      if (isAlive) {
-        return (
-          <div>
-            {successIcon}&nbsp;
-            {isNotHidden(customer.currentCustomer.data.features, 'universes.proxyIp') ? (
-              <a href={href} target="_blank" rel="noopener noreferrer">
-                {isMaster ? 'Master' : 'TServer'}
-              </a>
+      const isAlive = isMaster ? row.isMasterAlive : row.isTserverAlive;
+      const universeStatus = getUniverseStatus(currentUniverse.data);
+      const isUniverseStatusGood = universeStatus.state === UniverseState.GOOD;
+
+      const nodeProcess = (
+        <a
+          href={href}
+          onClick={setCookiesFromLocalStorage}
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          {isMaster ? NodeType.Master : NodeType.TServer}
+        </a>
+      );
+
+      const nodeProcessWithStatus = (
+        <YBTooltip
+          title={isMaster ? row.masterUUID : row.uuid}
+          placement={isMaster ? 'top' : 'bottom'}
+        >
+          {nodeProcess}
+        </YBTooltip>
+      );
+
+      return (
+        <div>
+          {isAlive ? successIcon : warningIcon}&nbsp;
+          {isNotHidden(customer.currentCustomer.data.features, 'universes.proxyIp') ? (
+            isUniverseStatusGood &&
+            (isMaster ? isNonEmptyString(row.masterUUID) : isNonEmptyString(row.uuid)) ? (
+              nodeProcessWithStatus
             ) : (
-              <span>{isMaster ? 'Master' : 'TServer'}</span>
-            )}
-            {isMaster && row.isMasterLeader ? ' (Leader)' : ''}
-          </div>
-        );
-      } else {
-        return (
-          <div>
-            {row.isLoading ? loadingIcon : warningIcon}&nbsp;{isMaster ? 'Master' : 'TServer'}
-          </div>
-        );
-      }
+              nodeProcess
+            )
+          ) : (
+            <span>{isMaster ? NodeType.Master : NodeType.TServer}</span>
+          )}
+          {isMaster && row.isMasterLeader ? ' (Leader)' : ''}
+        </div>
+      );
     };
 
     const getIpPortLinks = (cell, row) => {
+      const cluster =
+        clusterType === 'primary'
+          ? getPrimaryCluster(currentUniverse.data?.universeDetails?.clusters)
+          : getReadOnlyCluster(currentUniverse.data?.universeDetails?.clusters);
+      const isKubernetes = cluster?.userIntent?.providerType === 'kubernetes';
+
       return (
         <Fragment>
-          {formatIpPort(row.isMaster, row, 'master')}
-          {formatIpPort(row.isTServer, row, 'tserver')}
+          {isDedicatedNodes &&
+            !isKubernetes &&
+            row.dedicatedTo === NodeType.Master.toUpperCase() &&
+            formatIpPort(row.isMaster, row, NodeType.Master.toLowerCase())}
+          {isDedicatedNodes &&
+            !isKubernetes &&
+            row.dedicatedTo === NodeType.TServer.toUpperCase() &&
+            formatIpPort(row.isTServer, row, NodeType.TServer.toLowerCase())}
+          {(!isDedicatedNodes || isKubernetes) &&
+            formatIpPort(row.isMaster, row, NodeType.Master.toLowerCase())}
+          {(!isDedicatedNodes || isKubernetes) &&
+            formatIpPort(row.isTServer, row, NodeType.TServer.toLowerCase())}
         </Fragment>
       );
     };
 
     const getNodeNameLink = (cell, row) => {
       const showIp = isNotHidden(customer.currentCustomer.data.features, 'universes.proxyIp');
-      const ip = showIp ? <div className={'text-lightgray'}>{row['privateIP']}</div>: null;
+      const ip = showIp ? <div className={'text-lightgray'}>{row['privateIP']}</div> : null;
       let nodeName = cell;
       let onPremNodeName = '';
       if (showIp) {
@@ -95,9 +184,9 @@ export default class NodeDetailsTable extends Component {
             </a>
           );
         } else if (row.cloudInfo.cloud === 'azu' && isDefinedNotNull(providerConfig)) {
-          const tenantId = providerConfig["AZURE_TENANT_ID"];
-          const subscriptionId = providerConfig["AZURE_SUBSCRIPTION_ID"];
-          const resourceGroup = providerConfig["AZURE_RG"];
+          const tenantId = providerConfig['AZURE_TENANT_ID'];
+          const subscriptionId = providerConfig['AZURE_SUBSCRIPTION_ID'];
+          const resourceGroup = providerConfig['AZURE_RG'];
           const azuURI = `https://portal.azure.com/#@${tenantId}/resource/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.Compute/virtualMachines/${cell}`;
           nodeName = (
             <a href={azuURI} target="_blank" rel="noopener noreferrer">
@@ -134,9 +223,13 @@ export default class NodeDetailsTable extends Component {
 
     const getStatusUptime = (cell, row) => {
       let uptime = '_';
-      if (isDefinedNotNull(row.uptime_seconds)) {
+      const uptimeSeconds =
+        isDedicatedNodes && row.dedicatedTo === NodeType.Master.toUpperCase()
+          ? row.master_uptime_seconds
+          : row.uptime_seconds;
+      if (isDefinedNotNull(uptimeSeconds)) {
         // get the difference between the moments
-        const difference = parseFloat(row.uptime_seconds) * 1000;
+        const difference = parseFloat(uptimeSeconds) * 1000;
 
         //express as a duration
         const diffDuration = moment.duration(difference);
@@ -153,11 +246,12 @@ export default class NodeDetailsTable extends Component {
            not removing all zeros, as we want to display something like 10 min 0 sec -
            so that precision is clear for the user */
         let foundNonZero = false;
-        const filteredDurations = diffArray.filter((duration) =>
-          foundNonZero === true || (duration[0] !== 0 && (foundNonZero = true)));
+        const filteredDurations = diffArray.filter(
+          (duration) => foundNonZero === true || (duration[0] !== 0 && (foundNonZero = true))
+        );
         if (filteredDurations.length === 1) {
           const diffEntry = filteredDurations[0];
-          uptime = `${diffEntry[0]} ${pluralize(diffEntry[1], diffEntry[0])}`
+          uptime = `${diffEntry[0]} ${pluralize(diffEntry[1], diffEntry[0])}`;
         } else if (filteredDurations.length > 1) {
           const firstEntry = filteredDurations[0];
           const secondEntry = filteredDurations[1];
@@ -180,9 +274,10 @@ export default class NodeDetailsTable extends Component {
         customer.currentCustomer.data.features,
         'universes.actions'
       );
+
       const hideQueries =
         !isNotHidden(customer.currentCustomer.data.features, 'universes.details.queries') ||
-        !row.isTServer;
+        row.isTServer === '-';
 
       if (hideIP) {
         const index = row.allowedActions.indexOf('CONNECT');
@@ -197,6 +292,8 @@ export default class NodeDetailsTable extends Component {
           ? getPrimaryCluster(currentUniverse.data?.universeDetails?.clusters)
           : getReadOnlyCluster(currentUniverse.data?.universeDetails?.clusters);
       const isKubernetes = cluster?.userIntent?.providerType === 'kubernetes';
+      const isOnPrem = universeProvider?.code === CloudType.onprem;
+      const isOnPremManuallyProvisioned = isOnPrem && universeProvider?.details?.skipProvisioning;
 
       return (
         <NodeAction
@@ -208,6 +305,11 @@ export default class NodeDetailsTable extends Component {
           hideConnect={hideIP}
           hideQueries={hideQueries}
           disabled={actions_disabled}
+          clusterType={clusterType}
+          isKubernetes={isKubernetes}
+          isOnPremManuallyProvisioned={isOnPremManuallyProvisioned}
+          cluster={cluster}
+          accessKeys={accessKeys}
         />
       );
     };
@@ -239,72 +341,111 @@ export default class NodeDetailsTable extends Component {
     };
 
     const panelTitle = clusterType === 'primary' ? 'Primary Cluster' : 'Read Replicas';
-    const displayNodeActions = !this.props.isReadOnlyUniverse && !universePaused
-      && isNotHidden(customer.currentCustomer.data.features, 'universes.tableActions');
 
+    const universeStatus = getUniverseStatus(currentUniverse.data);
+    const displayNodeActions =
+      !this.props.isReadOnlyUniverse &&
+      universeStatus.state !== UniverseState.PAUSED &&
+      isNotHidden(customer.currentCustomer.data.features, 'universes.tableActions');
     return (
-      <YBPanelItem
-        className={`${clusterType}-node-details`}
-        header={<h2 className="content-title">{panelTitle}</h2>}
-        body={
-          <BootstrapTable ref="nodeDetailTable" data={sortedNodeDetails}>
-            <TableHeaderColumn
-              dataField="name"
-              isKey={true}
-              className={'node-name-field'}
-              columnClassName={'node-name-field'}
-              dataFormat={getNodeNameLink}
-            >
-              Name
-            </TableHeaderColumn>
-            <TableHeaderColumn
-              dataField="nodeStatus"
-              dataFormat={getStatusUptime}
-              className={'yb-node-status-cell'}
-              columnClassName={'yb-node-status-cell'}
-            >
-              Status
-            </TableHeaderColumn>
-            <TableHeaderColumn
-              dataField="cloudItem"
-              dataFormat={getCloudInfo}
-              className="cloud-info-cell"
-              columnClassName="cloud-info-cell"
-            >
-              Cloud Info
-            </TableHeaderColumn>
-            <TableHeaderColumn dataFormat={getReadableSize} dataField="ram_used">
-              RAM Used
-            </TableHeaderColumn>
-            <TableHeaderColumn dataFormat={getReadableSize} dataField="total_sst_file_size">
-              SST Size
-            </TableHeaderColumn>
-            <TableHeaderColumn dataFormat={getReadableSize} dataField="uncompressed_sst_file_size">
-              Uncompressed SST Size
-            </TableHeaderColumn>
-            <TableHeaderColumn dataFormat={getOpsSec} dataField="read_ops_per_sec">
-              Read | Write ops/sec
-            </TableHeaderColumn>
-            <TableHeaderColumn
-              dataField="isMaster"
-              dataFormat={getIpPortLinks}
-              formatExtraData="master"
-            >
-              Processes
-            </TableHeaderColumn>
-            {displayNodeActions && (
+      <div className="node-details-table-container">
+        <YBPanelItem
+          className={`${clusterType}-node-details`}
+          header={
+            <>
+              <h2 className="content-title">{panelTitle}</h2>
+              {isDedicatedNodes && (
+                <Dropdown id="nodeTypeDropdown" className="node-type-dropdown">
+                  <Dropdown.Toggle>
+                    <>
+                      <span className="node-type-dropdown__label">{'Type'}</span>
+                      <span className="node-type-dropdown__value">
+                        {this.state.nodeTypeDropdownValue}
+                      </span>
+                    </>
+                  </Dropdown.Toggle>
+                  <Dropdown.Menu>
+                    {NODE_TYPE.map((nodeType, nodeTypeIdx) => {
+                      return (
+                        <MenuItem
+                          eventKey={`nodeId-${nodeTypeIdx}`}
+                          key={`${nodeType.label}`}
+                          active={this.state.nodeTypeDropdownValue === nodeType.value}
+                          onSelect={() => this.onNodeTypeChanged(nodeType.value)}
+                        >
+                          {nodeType.value}
+                        </MenuItem>
+                      );
+                    })}
+                  </Dropdown.Menu>
+                </Dropdown>
+              )}
+            </>
+          }
+          body={
+            // eslint-disable-next-line react/no-string-refs
+            <BootstrapTable ref={'nodeDetailTable'} data={sortedNodeDetails}>
               <TableHeaderColumn
-                dataField="nodeAction"
-                className={'yb-actions-cell'}
-                columnClassName={'yb-actions-cell'}
-                dataFormat={getNodeAction}
+                dataField="name"
+                isKey={true}
+                className={'node-name-field'}
+                columnClassName={'node-name-field'}
+                dataFormat={getNodeNameLink}
               >
-                Action
+                Name
               </TableHeaderColumn>
-            )}
-          </BootstrapTable>
-        }
-      />
+              <TableHeaderColumn
+                dataField="nodeStatus"
+                dataFormat={getStatusUptime}
+                className={'yb-node-status-cell'}
+                columnClassName={'yb-node-status-cell'}
+              >
+                Status
+              </TableHeaderColumn>
+              <TableHeaderColumn
+                dataField="cloudItem"
+                dataFormat={getCloudInfo}
+                className="cloud-info-cell"
+                columnClassName="cloud-info-cell"
+              >
+                Cloud Info
+              </TableHeaderColumn>
+              <TableHeaderColumn dataFormat={getReadableSize} dataField="ram_used">
+                RAM Used
+              </TableHeaderColumn>
+              <TableHeaderColumn dataFormat={getReadableSize} dataField="total_sst_file_size">
+                SST Size
+              </TableHeaderColumn>
+              <TableHeaderColumn
+                dataFormat={getReadableSize}
+                dataField="uncompressed_sst_file_size"
+              >
+                Uncompressed SST Size
+              </TableHeaderColumn>
+              <TableHeaderColumn dataFormat={getOpsSec} dataField="read_ops_per_sec">
+                Read | Write ops/sec
+              </TableHeaderColumn>
+              <TableHeaderColumn
+                dataField="isMaster"
+                dataFormat={getIpPortLinks}
+                formatExtraData="master"
+              >
+                Processes
+              </TableHeaderColumn>
+              {displayNodeActions && (
+                <TableHeaderColumn
+                  dataField="nodeAction"
+                  className={'yb-actions-cell'}
+                  columnClassName={'yb-actions-cell'}
+                  dataFormat={getNodeAction}
+                >
+                  Action
+                </TableHeaderColumn>
+              )}
+            </BootstrapTable>
+          }
+        />
+      </div>
     );
   }
 }

@@ -41,9 +41,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef YB_SERVER_DEFAULT_PATH_HANDLERS_H
-#define YB_SERVER_DEFAULT_PATH_HANDLERS_H
+#pragma once
 
+#include "yb/server/webserver.h"
+#include "yb/util/metric_entity.h"
+#include "yb/util/jsonwriter.h"
 
 namespace yb {
 
@@ -51,9 +53,16 @@ class MetricRegistry;
 class Webserver;
 class FsManager;
 
+namespace server {
+class RpcServerBase;
+}
+
 // Adds a set of default path handlers to the webserver to display
 // logs and configuration flags.
 void AddDefaultPathHandlers(Webserver* webserver);
+
+// Prints out memory allocation statistics.
+void MemUsageHandler(const Webserver::WebRequest& req, Webserver::WebResponse* resp);
 
 // Adds an endpoint to get metrics in JSON format.
 void RegisterMetricsJsonHandler(Webserver* webserver, const MetricRegistry* const metrics);
@@ -61,6 +70,10 @@ void RegisterMetricsJsonHandler(Webserver* webserver, const MetricRegistry* cons
 // Adds an endpoint to display path usage.
 void RegisterPathUsageHandler(Webserver* webserver, FsManager* fsmanager);
 
-} // namespace yb
+void RegisterTlsHandler(Webserver* webserver, server::RpcServerBase* server);
 
-#endif // YB_SERVER_DEFAULT_PATH_HANDLERS_H
+void ParseRequestOptions(
+    const Webserver::WebRequest& req, MetricPrometheusOptions* prometheus_opts,
+    MetricJsonOptions* json_opts = nullptr, JsonWriter::Mode* json_mode = nullptr);
+
+} // namespace yb

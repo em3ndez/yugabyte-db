@@ -4,12 +4,11 @@ headerTitle: The plain timestamp and timestamptz data types
 linkTitle: Plain timestamp and timestamptz
 description: The semantics of the plain timestamp and timestamptz data types. [YSQL]
 menu:
-  preview:
+  preview_api:
     identifier: type-timestamp
     parent: date-time-data-types-semantics
     weight: 30
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 {{< tip title="Understanding this section depends on understanding the 'Timezones' section." >}}

@@ -27,7 +27,7 @@
 #include "yb/client/yb_op.h"
 
 #include "yb/common/common.pb.h"
-#include "yb/common/partial_row.h"
+#include "yb/dockv/partial_row.h"
 #include "yb/common/ql_value.h"
 
 #include "yb/gutil/strings/split.h"
@@ -40,59 +40,44 @@
 #include "yb/util/status_log.h"
 
 #include "yb/yql/redis/redisserver/redis_client.h"
+#include "yb/util/flags.h"
 
 using namespace std::literals;
 
 using std::atomic;
-using std::atomic_bool;
 using std::unique_ptr;
 
 using strings::Substitute;
 
 using std::shared_ptr;
-using yb::Status;
-using yb::ThreadPool;
-using yb::ThreadPoolBuilder;
-using yb::MonoDelta;
-using yb::MemoryOrder;
-using yb::ConditionVariable;
-using yb::Mutex;
-using yb::MutexLock;
-using yb::CountDownLatch;
-using yb::Slice;
-using yb::YBPartialRow;
-using yb::TableType;
+using std::string;
+using std::set;
+using std::ostream;
+using std::vector;
 
-using yb::client::YBClient;
-using yb::client::YBError;
 using yb::client::YBNoOp;
 using yb::client::YBSession;
-using yb::client::YBTable;
 using yb::redisserver::RedisReply;
 
-DEFINE_bool(load_gen_verbose,
+DEFINE_NON_RUNTIME_bool(load_gen_verbose,
             false,
             "Custom verbose log messages for debugging the load test tool");
 
-DEFINE_int32(load_gen_insertion_tracker_delay_ms,
+DEFINE_NON_RUNTIME_int32(load_gen_insertion_tracker_delay_ms,
              50,
              "The interval (ms) at which the load generator's \"insertion tracker thread\" "
              "wakes in up ");
 
-DEFINE_int32(load_gen_scanner_open_retries,
+DEFINE_NON_RUNTIME_int32(load_gen_scanner_open_retries,
              10,
              "Number of times to re-try when opening a scanner");
 
-DEFINE_int32(load_gen_wait_time_increment_step_ms,
+DEFINE_NON_RUNTIME_int32(load_gen_wait_time_increment_step_ms,
              100,
              "In retry loops used in the load test we increment the wait time by this number of "
              "milliseconds after every attempt.");
 
 namespace {
-
-void ConfigureYBSession(YBSession* session) {
-  session->SetTimeout(60s);
-}
 
 string FormatWithSize(const string& s) {
   return strings::Substitute("'$0' ($1 bytes)", s, s.size());
@@ -207,7 +192,7 @@ SingleThreadedWriter* RedisNoopSessionFactory::GetWriter(MultiThreadedWriter* wr
 
 MultiThreadedAction::MultiThreadedAction(
     const string& description, int64_t num_keys, int64_t start_key, int num_action_threads,
-    int num_extra_threads, const string& client_id, atomic_bool* stop_requested_flag,
+    int num_extra_threads, const string& client_id, atomic<bool>* stop_requested_flag,
     int value_size)
     : description_(description),
       num_keys_(num_keys),
@@ -266,7 +251,7 @@ void MultiThreadedAction::WaitForCompletion() {
 
 MultiThreadedWriter::MultiThreadedWriter(
     int64_t num_keys, int64_t start_key, int num_writer_threads, SessionFactory* session_factory,
-    atomic_bool* stop_flag, int value_size, size_t max_num_write_errors)
+    atomic<bool>* stop_flag, int value_size, size_t max_num_write_errors)
     : MultiThreadedAction(
           "writers", num_keys, start_key, num_writer_threads, 2, session_factory->ClientId(),
           stop_flag, value_size),
@@ -395,8 +380,7 @@ bool RedisNoopSingleThreadedWriter::Write(
 }
 
 void YBSingleThreadedWriter::ConfigureSession() {
-  session_ = client_->NewSession();
-  ConfigureYBSession(session_.get());
+  session_ = client_->NewSession(60s);
 }
 
 bool YBSingleThreadedWriter::Write(
@@ -494,8 +478,8 @@ MultiThreadedReader::MultiThreadedReader(int64_t num_keys, int num_reader_thread
                                          SessionFactory* session_factory,
                                          atomic<int64_t>* insertion_point,
                                          const KeyIndexSet* inserted_keys,
-                                         const KeyIndexSet* failed_keys, atomic_bool* stop_flag,
-                                         int value_size, int max_num_read_errors,
+                                         const KeyIndexSet* failed_keys, atomic<bool>* stop_flag,
+                                         int value_size, size_t max_num_read_errors,
                                          MultiThreadedReaderOptions options)
     : MultiThreadedAction(
           "readers", num_keys, 0, num_reader_threads, 1, session_factory->ClientId(),
@@ -564,14 +548,13 @@ void RedisSingleThreadedReader::CloseSession() {
 }
 
 void YBSingleThreadedReader::ConfigureSession() {
-  session_ = client_->NewSession();
-  ConfigureYBSession(session_.get());
+  session_ = client_->NewSession(60s);
 }
 
 bool NoopSingleThreadedWriter::Write(
     int64_t key_index, const string& key_str, const string& value_str) {
   YBNoOp noop(table_->table());
-  std::unique_ptr<YBPartialRow> row(table_->schema().NewRow());
+  auto row = table_->schema().NewRow();
   CHECK_OK(row->SetBinary("k", key_str));
   Status s = noop.Execute(client_, *row);
   if (s.ok()) {
@@ -590,7 +573,7 @@ ReadStatus YBSingleThreadedReader::PerformRead(
     QLAddStringHashValue(read_op->mutable_request(), key_str);
     table_->AddColumns({"k", "v"}, read_op->mutable_request());
     auto status = session_->TEST_ApplyAndFlush(read_op);
-    boost::optional<QLRowBlock> row_block;
+    boost::optional<qlexpr::QLRowBlock> row_block;
     if (status.ok()) {
       auto result = read_op->MakeRowBlock();
       if (!result.ok()) {

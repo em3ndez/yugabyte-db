@@ -1,15 +1,14 @@
 ---
 title: Common code for traversing all kinds of graph
 headerTitle: Common code for traversing all kinds of graph
-linkTitle: common code
+linkTitle: Common code
 description: This section presents common helper code for traversing all kinds of graph
 menu:
-  stable:
+  stable_api:
     identifier: common-code
     parent: traversing-general-graphs
     weight: 20
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 Make sure that you have run [`cr-edges.sql`](../graph-representation/#cr-edges-sql) before you run the following code. Once you've done this, you can leave all of the common code that you create by following the steps described below in place while you run the various code examples in the following sections that show how to traverse the various different kinds of graph.
@@ -153,7 +152,7 @@ You'll use the procedure _["create_path_table()"](#cr-cr-path-table-sql)_ to cre
 - _"unq_containing_paths"_. This is the target table for the paths produced by procedure _["restrict_to_unq_containing_paths()"](#cr-restrict-to-unq-containing-paths-sql)_.
 - _"temp_paths"_, and _"previous_paths"_. These tables are used by the approach that uses direct SQL, issued from a PL/pgsql stored procedure, that implements what the recursive CTE does rather than an actual `WITH` clause. See the section [How to implement early path pruning](../undirected-cyclic-graph/#how-to-implement-early-path-pruning).
 
-First create the _"raw_paths"_ table and optionally add a column and create a trigger on the table so that the outcome of each successive repeat of the code that implements the _recursive term_ can be traced to help the developer see how the code works. (It has this effect only for the implementation of the _"find_paths()"_ procedure that implements early-path-pruning.) 
+First create the _"raw_paths"_ table and optionally add a column and create a trigger on the table so that the outcome of each successive repeat of the code that implements the _recursive term_ can be traced to help the developer see how the code works. (It has this effect only for the implementation of the _"find_paths()"_ procedure that implements early-path-pruning.)
 
 Because the purpose of the trigger is entirely pedagogical, because it is not needed by the substantive _"find_paths()"_ logic, and because its presence brings a theoretical performance drag, you should _either_ use the script that adds the extra tracing column and trigger for the _"raw_paths"_ table _or_ use the script that simply creates the _"raw_paths"_ table bare—according to your purpose.
 
@@ -168,7 +167,7 @@ alter table raw_paths add column repeat_nr int;
 
 drop function if exists raw_paths_trg_f() cascade;
 create function raw_paths_trg_f()
-  returns trigger 
+  returns trigger
   language plpgsql
 as $body$
 declare
@@ -514,7 +513,7 @@ $body$;
 
 ## Create a procedure and a function for measuring elapsed wall-clock time
 
-The code that the section [Stress testing different _find_paths()_ implementations on maximally connected graphs](../stress-test/) presents needs to compare the times that alternative implementations take to complete. The \\_timing on_ metacommand doesn't help here because it reports the time after every individual statement and, on Unix-like operating systems, does this using _stderr_. The \\_o_ metacommand doesn't redirect _stderr_ to the spool file. So you need a SQL scheme to start a stopwatch and later to read it.
+The code that the section [Stress testing different _find_paths()_ implementations on maximally connected graphs](../stress-test/) presents needs to compare the times that alternative implementations take to complete. The \\_timing on_ meta-command doesn't help here because it reports the time after every individual statement and, on Unix-like operating systems, does this using _stderr_. The \\_o_ meta-command doesn't redirect _stderr_ to the spool file. So you need a SQL scheme to start a stopwatch and later to read it.
 
 The section [Case study—implementing a stopwatch with SQL](../../../../datatypes/type_datetime/stopwatch/) within the overall [Date and time data types](../../../../datatypes/type_datetime/) major section shows you how to implement a SQL stopwatch that allows you to start it with the procedure _start_stopwatch()_ before starting what you want to time and to read it with the function _stopwatch_reading()_ when what you want to time finishes. The result of selecting this function goes to the spool file along with all other query results.
 

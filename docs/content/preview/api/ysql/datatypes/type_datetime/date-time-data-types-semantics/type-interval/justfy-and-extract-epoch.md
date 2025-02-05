@@ -4,12 +4,11 @@ headerTitle: The justify() and extract(epoch ...) functions for interval values
 linkTitle: Justify() and extract(epoch...)
 description: Describes the functions justify_hours(interval), justify_days(interval), justify_interval(interval), and extract(epoch from interval_value). [YSQL]
 menu:
-  preview:
+  preview_api:
     identifier: justfy-and-extract-epoch
     parent: type-interval
     weight: 35
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 {{< tip title="Download and install the date-time utilities code." >}}
@@ -332,7 +331,7 @@ The function finishes without error, showing that, for the _interval_ values use
 
 ## The extract(epoch from interval_value) built-in function
 
-The [PostgreSQL documentation](https://www.postgresql.org/docs/11/functions-datetime.html#FUNCTIONS-DATETIME-EXTRACT) specifies the semantics of _extract(epoch from interval_value)_ thus:
+The [PostgreSQL documentation](https://www.postgresql.org/docs/15/functions-datetime.html#FUNCTIONS-DATETIME-EXTRACT) specifies the semantics of _extract(epoch from interval_value)_ thus:
 
 - [the function returns] the total number of seconds in the _interval_ [value].
 
@@ -392,9 +391,9 @@ Notice that each reported number of seconds differs from the others.
 It turns out that the result from _extract(epoch from interval_value)_ aims to give a sensible number of seconds for durations of many years. So it uses the (semantics of the) _trunc()_ and _mod()_ built-in functions to transform the value of the _mm_ field of the _interval_ representation to years, _yy_, and a months remainder, _mm_. Then the _yy_ value is multiplied by the number of days in a _Julian year_. This is greater than _12\*30_.
 
 {{< note title="How many days are there in a year?" >}}
-Internet search quickly finds lots of articles on this topic—for example, <a href="https://en.wikipedia.org/wiki/Gregorian_calendar" target="_blank">Gregorian year <i class="fas fa-external-link-alt"></i></a> in Wikipedia. Two subtly different answers are in common use.
+Internet search quickly finds lots of articles on this topic—for example, [Gregorian year](https://en.wikipedia.org/wiki/Gregorian_calendar) in Wikipedia. Two subtly different answers are in common use.
 
-- **The _Julian year_ is defined to be _365.25_ days**. This is calculated using the fact that over a four year period, there are _usually_ three normal years and one leap year—so the average number of days per year is _365.25_. The <a href="https://en.wikipedia.org/wiki/International_Astronomical_Union" target="_blank">International Astronomical Union <i class="fas fa-external-link-alt"></i></a> uses the Julian year to define the size of the <a href="https://en.wikipedia.org/wiki/Light-year" target="_blank">light year <i class="fas fa-external-link-alt"></i></a>.
+- **The _Julian year_ is defined to be _365.25_ days**. This is calculated using the fact that over a four year period, there are _usually_ three normal years and one leap year—so the average number of days per year is _365.25_. The [International Astronomical Union](https://en.wikipedia.org/wiki/International_Astronomical_Union) uses the Julian year to define the size of the [light year](https://en.wikipedia.org/wiki/Light-year).
 
 - **The _Gregorian year_ is defined to be _365.2425_ days**—just a little shorter than the Julian year. This is because the Julian calendar assumed incorrectly that the average solar year is exactly 365.25 days long—an overestimate of a little under one day per century. The Gregorian reform shortened the average (calendar) year by 0.0075 days to stop the drift of the calendar with respect to the equinoxes. It uses the following rule to say when leap years occur in order to produce the required shorter average over a sufficiently long period: a year that is evenly divisible by _100_ is a leap year _only_ if it is _also_ evenly divisible by _400_.
 {{< /note >}}

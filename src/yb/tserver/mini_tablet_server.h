@@ -29,8 +29,7 @@
 // or implied.  See the License for the specific language governing permissions and limitations
 // under the License.
 //
-#ifndef YB_TSERVER_MINI_TABLET_SERVER_H
-#define YB_TSERVER_MINI_TABLET_SERVER_H
+#pragma once
 
 #include <string>
 
@@ -59,6 +58,8 @@ namespace tserver {
 
 class TabletServer;
 
+YB_STRONGLY_TYPED_BOOL(WaitTabletsBootstrapped);
+
 // An in-process tablet server meant for use in test cases.
 class MiniTabletServer {
  public:
@@ -66,6 +67,9 @@ class MiniTabletServer {
       const std::string& fs_root,
       uint16_t rpc_port,
       int index = 0);
+
+  static Result<std::unique_ptr<MiniTabletServer>> CreateMiniTabletServer(
+    const std::vector<std::string>& fs_roots, uint16_t rpc_port, int index = 0);
 
   MiniTabletServer(const std::vector<std::string>& wal_paths,
                    const std::vector<std::string>& data_paths,
@@ -84,42 +88,49 @@ class MiniTabletServer {
   // an ephemeral port. To determine the address that the server
   // bound to, call MiniTabletServer::bound_addr().
   // The TS will be initialized asynchronously and then started.
-  CHECKED_STATUS Start();
+  // if wait_tablets_bootstrapped=true, then Waits for the tablet
+  // server to be fully initialized, including
+  // having all its tablets bootstrapped.
+  Status Start(WaitTabletsBootstrapped wait_tablets_bootstrapped = WaitTabletsBootstrapped::kTrue);
+
+  std::string ToString() const;
 
   // Waits for the tablet server to be fully initialized, including
   // having all tablets bootstrapped.
-  CHECKED_STATUS WaitStarted();
+  Status WaitStarted();
 
   void Shutdown();
-  CHECKED_STATUS FlushTablets(
+  Status FlushTablets(
       tablet::FlushMode mode = tablet::FlushMode::kSync,
       tablet::FlushFlags flags = tablet::FlushFlags::kAllDbs);
-  CHECKED_STATUS CompactTablets(docdb::SkipFlush skip_flush = docdb::SkipFlush::kFalse);
-  CHECKED_STATUS SwitchMemtables();
-  CHECKED_STATUS CleanTabletLogs();
+  Status CompactTablets(docdb::SkipFlush skip_flush = docdb::SkipFlush::kFalse);
+  Status SwitchMemtables();
+  Status CleanTabletLogs();
 
   // Stop and start the tablet server on the same RPC and webserver ports. The tserver must be
   // running.
-  CHECKED_STATUS Restart();
-  CHECKED_STATUS RestartStoppedServer();
+  Status Restart();
+  Status RestartStoppedServer();
 
   // Add a new tablet to the test server, use the default consensus configuration.
   //
   // Requires that the server has already been started with Start().
-  CHECKED_STATUS AddTestTablet(const std::string& ns_id,
-                       const std::string& table_id,
-                       const std::string& tablet_id,
-                       const Schema& schema,
-                       TableType table_type);
+  Status AddTestTablet(
+      const std::string& ns_id,
+      const std::string& table_id,
+      const std::string& tablet_id,
+      const Schema& schema,
+      TableType table_type);
 
   // Add a new tablet to the test server and specify the consensus configuration
   // for the tablet.
-  CHECKED_STATUS AddTestTablet(const std::string& ns_id,
-                       const std::string& table_id,
-                       const std::string& tablet_id,
-                       const Schema& schema,
-                       const consensus::RaftConfigPB& config,
-                       TableType table_type);
+  Status AddTestTablet(
+      const std::string& ns_id,
+      const std::string& table_id,
+      const std::string& tablet_id,
+      const Schema& schema,
+      const consensus::RaftConfigPB& config,
+      TableType table_type);
 
   // Create a RaftConfigPB which should be used to create a local-only
   // tablet on the given tablet server.
@@ -140,23 +151,21 @@ class MiniTabletServer {
   // Close and disable all connections from this server to any other servers in the cluster.
   void Isolate();
   // Re-enable connections from this server to other servers in the cluster.
-  CHECKED_STATUS Reconnect();
+  Status Reconnect();
 
   FsManager& fs_manager() const;
+  MetricEntity& metric_entity() const;
+  const MemTrackerPtr& mem_tracker() const;
+  HybridTime Now() const;
 
  private:
   bool started_;
   TabletServerOptions opts_;
   int index_;
 
-  std::unique_ptr<encryption::UniverseKeyManager> universe_key_manager_;
-  std::unique_ptr<yb::Env> encrypted_env_;
-  std::unique_ptr<rocksdb::Env> rocksdb_encrypted_env_;
   std::unique_ptr<TabletServer> server_;
   std::unique_ptr<Tunnel> tunnel_;
 };
 
 } // namespace tserver
 } // namespace yb
-
-#endif // YB_TSERVER_MINI_TABLET_SERVER_H

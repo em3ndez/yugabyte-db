@@ -3,48 +3,62 @@ title: Flyway
 linkTitle: Flyway
 description: Using Flyway with YugabyteDB
 aliases:
-section: INTEGRATIONS
 menu:
-  preview:
+  preview_integrations:
     identifier: flyway
+    parent: schema-migration
     weight: 571
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
-[Flyway](https://flywaydb.org/) provides the means to manage schema changes to a YugabyteDB database, among others.
+[Flyway](https://www.red-gate.com/products/flyway/community/) provides the means to manage schema changes to a YugabyteDB database, among others.
 
-The YugabyteDB-specific implementation of the Flyway APIs has been added to the Flyway community project.
+YugabyteDB has developed a plugin for better integration with Flyway. This plugin is available under the [Flyway Community DB Support](https://github.com/flyway/flyway-community-db-support) project.
 
 ## Prerequisites
 
-Before you can start using Flyway, ensure that you have the following installed and configured:
+To use Flyway with YugabyteDB, you need the following:
 
-- YugabyteDB version 2.4 or later (see [YugabyteDB Quick Start Guide](/preview/quick-start/)).
+- YugabyteDB version 2.20 or later (see [Quick Start](/preview/tutorials/quick-start/macos/)).
 
-- Yugabyte cluster (see [Create a local cluster](/preview/quick-start/create-local-cluster/macos/)).
+- Flyway community edition version 10.12.0 or later (see [Download Flyway](https://www.red-gate.com/products/flyway/editions)).
 
-- Flyway community edition version 7.11.2 or later (see [Download Flyway](https://flywaydb.org/download)).
+- Flyway plugin for YugabyteDB version 10.12.0 or later (see [Maven coordinates](https://central.sonatype.com/artifact/org.flywaydb/flyway-database-yugabytedb)).
 
 - Connection details in the Flyway configuration file `conf/flyway.conf`. Append the following at the end of the file, replacing `flyway.url` with the URL of your running YugabyteDB cluster:
 
+  ```properties
+  flyway.url=jdbc:yugabytedb://localhost:5433/yugabyte
+  flyway.user=yugabyte
+  flyway.password=yugabyte
+  ```
+    You can also use the vanilla PostgreSQL JDBC Driver instead of the YugabyteDB JDBC Smart Driver by setting the URL prefix to `jdbc:/postgresql://`, and the plugin will attempt to use the corresponding driver.
   ```properties
   flyway.url=jdbc:postgresql://localhost:5433/yugabyte
   flyway.user=yugabyte
   flyway.password=yugabyte
   ```
 
-## Migrating schema
+- Add YugabyteDB JDBC Smart Driver jar in your application's classpath. Use the following maven coordinates; for the latest version, see the [mvn repository](https://mvnrepository.com/artifact/com.yugabyte/jdbc-yugabytedb).
+  ```
+  <dependency>
+    <groupId>com.yugabyte</groupId>
+    <artifactId>jdbc-yugabytedb</artifactId>
+    <version>42.7.3-yb-1</version>
+  </dependency>
+  ```
+
+## Migrate schema
 
 Flyway allows you to specify migrations using either SQL or Java.
 
 {{< note title="Note" >}}
 
-By default, Flyway runs migrations inside a transaction. In case of failures, the transaction is rolled back (see [Flyway Transactions](https://flywaydb.org/documentation/concepts/migrations.html#transactions)). Since YugabyteDB does not currently support DDLs inside a user-initiated transaction (instead, it runs a DDL inside an implicit transaction), you may need to manually revert the DDL changes when you see a message about failed migrations “Please restore backups and roll back database and code”.
+By default, Flyway runs migrations inside a transaction. In case of failures, the transaction is rolled back (see [Flyway Transactions](https://documentation.red-gate.com/fd/migration-transaction-handling-273973399.html)). Because YugabyteDB does not currently support DDLs inside a user-initiated transaction (instead, it runs a DDL inside an implicit transaction), you may need to manually revert the DDL changes when you see a message about failed migrations "Please restore backups and roll back database and code".
 
 {{< /note >}}
 
-### How to use SQL
+### Use SQL
 
 You can specify migrations as SQL statements in `.sql` files that are placed in the `<FLYWAY_INSTALL_DIR>/sql/` directory by default. You can change the location of these files by placing them in a different directory and then editing the `flyway.locations` property in the `flyway.conf` file accordingly.
 
@@ -78,7 +92,7 @@ To migrate schema using SQL, perform the following:
    ./flyway migrate
   ```
 
-### How to use Java
+### Use Java
 
 You can define Flyway migrations as Java classes by extending the `BaseJavaMigration` class and overriding the `migrate()` method.
 
@@ -114,7 +128,6 @@ To check the state of the database and run the migration, execute the following 
  ./flyway migrate
 ```
 
+## Learn more
 
-
-
-
+Refer to the [Flyway documentation](https://documentation.red-gate.com/flyway) for more details on using Flyway.

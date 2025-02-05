@@ -4,11 +4,10 @@ headerTitle: BOOLEAN data types
 linkTitle: Boolean
 description: Use the BOOLEAN data type to represent three different states - TRUE, FALSE, or NULL.
 menu:
-  stable:
+  stable_api:
     identifier: api-ysql-datatypes-bool
     parent: api-ysql-datatypes
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 ## Synopsis
@@ -17,7 +16,7 @@ The `BOOLEAN` data type represents three different states: `TRUE`, `FALSE`, or `
 
 ## Description
 
-```
+```ebnf
 type_specification ::= { BOOLEAN | BOOL }
 literal ::= { TRUE | true | 't' | 'y' | 'yes' | 'on' | 1 |
               FALSE | false | 'f' | 'n' | 'no' | 'off' | 0 }

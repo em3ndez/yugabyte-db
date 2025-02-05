@@ -11,8 +11,7 @@
 // under the License.
 //
 
-#ifndef YB_TSERVER_PG_TABLE_CACHE_H
-#define YB_TSERVER_PG_TABLE_CACHE_H
+#pragma once
 
 #include <future>
 
@@ -34,15 +33,19 @@ class PgTableCache {
   explicit PgTableCache(std::shared_future<client::YBClient*> client_future);
   ~PgTableCache();
 
-  CHECKED_STATUS GetInfo(
+  Status GetInfo(
       const TableId& table_id,
-      master::GetTableSchemaResponsePB* info,
-      PgTablePartitionsPB* partitions);
+      master::IncludeHidden include_hidden,
+      client::YBTablePtr* table,
+      master::GetTableSchemaResponsePB* schema);
 
   Result<client::YBTablePtr> Get(const TableId& table_id);
 
   void Invalidate(const TableId& table_id);
   void InvalidateAll(CoarseTimePoint invalidation_time);
+  void InvalidateDbTables(const std::unordered_set<uint32_t>& db_oids_updated,
+                          const std::unordered_set<uint32_t>& db_oids_deleted,
+                          CoarseTimePoint invalidation_time);
 
  private:
   class Impl;
@@ -52,5 +55,3 @@ class PgTableCache {
 
 }  // namespace tserver
 }  // namespace yb
-
-#endif  // YB_TSERVER_PG_TABLE_CACHE_H

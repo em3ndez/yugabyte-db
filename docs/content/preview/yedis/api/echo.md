@@ -9,25 +9,25 @@ menu:
 aliases:
   - /preview/api/redis/echo
   - /preview/api/yedis/del
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 ## Synopsis
-<b>`ECHO message`</b><br>
+
+**`ECHO message`**
+
 This command outputs the given `message`.
 
 ## Return Value
+
 Returns the message.
 
 ## Examples
-
-You can do this as shown below.
 
 ```sh
 $ ECHO "Yuga Yuga"
 ```
 
-```
+```output
 "Yuga Yuga"
 ```

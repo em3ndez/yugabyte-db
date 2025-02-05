@@ -11,8 +11,7 @@
 // under the License.
 //
 
-#ifndef YB_CONSENSUS_CONSENSUS_CONTEXT_H
-#define YB_CONSENSUS_CONSENSUS_CONTEXT_H
+#pragma once
 
 #include "yb/common/common_fwd.h"
 
@@ -39,7 +38,7 @@ class ConsensusContext {
   //   instance immediately stores the ReplicateMsg in the Log. Once the replicate
   //   message is stored in stable storage an ACK is sent to the leader (i.e. the
   //   replica Consensus instance does not wait for Prepare() to finish).
-  virtual CHECKED_STATUS StartReplicaOperation(
+  virtual Status StartReplicaOperation(
       const ConsensusRoundPtr& context, HybridTime propagated_safe_time) = 0;
 
   virtual void SetPropagatedSafeTime(HybridTime ht) = 0;
@@ -55,7 +54,7 @@ class ConsensusContext {
   // This is called every time majority-replicated watermarks (OpId / leader leases) change. This is
   // used for updating the "propagated safe time" value in MvccManager and unblocking readers
   // waiting for it to advance.
-  virtual void MajorityReplicated() = 0;
+  virtual Status MajorityReplicated() = 0;
 
   // This is called every time the Raft config was changed and replicated.
   // This is used to notify the higher layer about the config change. Currently it's
@@ -71,7 +70,7 @@ class ConsensusContext {
   virtual void ListenNumSSTFilesChanged(std::function<void()> listener) = 0;
 
   // Checks whether operation with provided op id and type could be added to the log.
-  virtual CHECKED_STATUS CheckOperationAllowed(
+  virtual Status CheckOperationAllowed(
       const OpId& op_id, consensus::OperationType op_type) = 0;
 
   virtual ~ConsensusContext() = default;
@@ -79,5 +78,3 @@ class ConsensusContext {
 
 } // namespace consensus
 } // namespace yb
-
-#endif // YB_CONSENSUS_CONSENSUS_CONTEXT_H

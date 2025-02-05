@@ -20,11 +20,13 @@
 #include "yb/util/logging.h"
 #include "yb/util/string_case.h"
 
+using std::string;
+using std::vector;
+
 namespace yb {
 namespace ql {
 
 using strings::Substitute;
-using client::YBColumnSchema;
 
 PTKeyspaceProperty::PTKeyspaceProperty(MemoryContext *memctx,
                                        YBLocation::SharedPtr loc,
@@ -42,7 +44,7 @@ PTKeyspaceProperty::PTKeyspaceProperty(MemoryContext *memctx,
 PTKeyspaceProperty::~PTKeyspaceProperty() {
 }
 
-CHECKED_STATUS PTKeyspaceProperty::Analyze(SemContext *sem_context) {
+Status PTKeyspaceProperty::Analyze(SemContext *sem_context) {
   return Status::OK();
 }
 
@@ -50,7 +52,7 @@ void PTKeyspaceProperty::PrintSemanticAnalysisResult(SemContext *sem_context) {
   VLOG(3) << "SEMANTIC ANALYSIS RESULT (" << *loc_ << "):\n" << "Not yet avail";
 }
 
-CHECKED_STATUS PTKeyspacePropertyListNode::Analyze(SemContext *sem_context) {
+Status PTKeyspacePropertyListNode::Analyze(SemContext *sem_context) {
   bool has_replication = false;
 
   // If the statement has properties, 'replication' property must be present. Check this before
@@ -99,7 +101,7 @@ PTKeyspacePropertyMap::PTKeyspacePropertyMap(MemoryContext *memctx,
 PTKeyspacePropertyMap::~PTKeyspacePropertyMap() {
 }
 
-CHECKED_STATUS PTKeyspacePropertyMap::Analyze(SemContext *sem_context) {
+Status PTKeyspacePropertyMap::Analyze(SemContext *sem_context) {
   DCHECK_ONLY_NOTNULL(lhs_.get());
   // Verify we have a valid property name in the lhs.
   const auto property_name = string(lhs_->c_str());

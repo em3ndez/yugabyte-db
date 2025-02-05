@@ -3,62 +3,57 @@ title: Rust
 headerTitle: Rust
 linkTitle: Rust
 description: Rust Drivers and ORMs support for YugabyteDB.
-image: /images/section_icons/sample-data/s_s1-sampledata-3x.png
 menu:
   preview:
     identifier: rust-drivers
     parent: drivers-orms
-    weight: 570
-isTocNested: true
-showAsideToc: true
+    weight: 600
+type: indexpage
+showRightNav: true
 ---
 
-Following are the recommended projects for implementing Rust Applications for YugabyteDB YSQL API.
+## Supported projects
 
-| Project | Type | Support Level |
-| :------ | :--- | :------------ |
-| [Diesel](diesel/) | ORM | Full |
+The following project is recommended for implementing Rust applications using the YugabyteDB YSQL API.
 
-## Build a Hello World app
+| Project | Documentation and Guides | Latest Driver Version | Supported YugabyteDB Version | Example Apps |
+| ------- | ------------------------ | --------------------- | ---------------------------- | ------------ |
+| YugabyteDB Rust-Postgres Smart Driver [Recommended] | [Documentation](yb-rust-postgres/)<br /> [Reference](rust-postgres-reference/) | [yb-postgres](https://crates.io/crates/yb-postgres) (synchronous YSQL client): v0.19.7-yb-1-beta.3 <br/> [yb-tokio-postgres](https://crates.io/crates/yb-tokio-postgres) (asynchronous YSQL client): v0.7.10-yb-1-beta.3 | 2.19 and later | |
+| Diesel | [Documentation](diesel/) <br/> [Hello World](../orms/rust/ysql-diesel/) | | |[Diesel app](https://github.com/YugabyteDB-Samples/orm-examples/tree/master/rust/diesel) |
 
-Learn how to establish a connection to YugabyteDB database and begin basic CRUD operations using the steps in [Build an Application](/preview/quick-start/build-apps/rust/ysql-dieesel) in the Quick Start section.
+Learn how to establish a connection to a YugabyteDB database and begin basic CRUD operations using the **Hello World** examples.
 
-## Prerequisites for building a Rust application
+For fully-runnable code snippets and explanations of common operations, see the **example apps**. Before running the example apps, make sure you have installed the prerequisites.
 
-### Install Rust
+## Prerequisites
 
-Make sure that your system has Rust installed. You can find installation instructions on the [Rust site](https://www.rust-lang.org/tools/install). To check the version of Rust installed, use the following command:
+To develop Rust applications for YugabyteDB, you need the following:
 
-```shell
-$ rustc --version
-```
+- **Rust**
 
-### Create a Rust project
+  To download and install Rust, refer to the [Rust](https://doc.rust-lang.org/cargo/getting-started/installation.html) documentation.
 
-To create a new Rust project, run the following command:
+  To check the version of Rust, use the following command:
 
-```shell
-$ cargo new HelloWorld-rust
-```
+  ```sh
+  $ rustc --version
+  ```
 
-This creates the project as `HelloWorld-rust` which consists of a `Cargo.toml` file (this contains the project metadata) and a `src` directory containing the main code file, `main.rs`.
+- **Create a Rust project**
 
-To run the Rust project, execute the following command in the project directory:
+  To create a new Rust project, run the following command:
 
-```shell
-$ cargo run
-```
+  ```sh
+  $ cargo new HelloWorld-rust
+  ```
 
-### Create a YugabyteDB cluster
+  This creates the project as `HelloWorld-rust` which consists of a `Cargo.toml` file (project metadata) and a `src` directory containing the main code file, `main.rs`.
 
-Create a free cluster on YugabyteDB Managed. Refer to [Create a free cluster](/preview/yugabyte-cloud/cloud-quickstart/qs-add/).
+- **YugabyteDB cluster**
 
-You can also set up a standalone YugabyteDB cluster by following the steps in [Install YugabyteDB](/preview/quick-start/install/macos/).
+  - Create a free cluster on YugabyteDB Aeon. Refer to [Use a cloud cluster](/preview/tutorials/quick-start-yugabytedb-managed/). Note that YugabyteDB Aeon requires SSL.
+  - Alternatively, set up a standalone YugabyteDB cluster by following the steps in [Install YugabyteDB](/preview/tutorials/quick-start/macos/).
 
-## Usage examples
+## Next step
 
-For fully runnable code snippets and explanations of common operations, see the specific Rust driver and ORM section. The following table provides links to driver-specific documentation and examples.
-
-| Project | Type | Usage Examples |
-| :------ | :--- | :------------- |
-| [Diesel](diesel/) | ORM | [HelloWorld App](/preview/quick-start/build-apps/rust/ysql-diesel/) <br />[CRUD App](diesel/) |
+[Connect an app](yb-rust-postgres/)

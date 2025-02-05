@@ -11,8 +11,7 @@
 // under the License.
 //
 
-#ifndef YB_UTIL_NET_INETADDRESS_H
-#define YB_UTIL_NET_INETADDRESS_H
+#pragma once
 
 #include <string.h>
 
@@ -46,7 +45,7 @@ class InetAddress {
   InetAddress(const InetAddress& other);
 
   // Fills in strval with the string representation of an IPv4 or IPv6 address.
-  CHECKED_STATUS ToString(std::string* strval) const;
+  Status ToString(std::string* strval) const;
 
   // Returns string representation of an IPv4 or IPv6 address. This method doesn't return a
   // Status for usecases in the code where we don't support returning a status.
@@ -68,7 +67,7 @@ class InetAddress {
 
   // Give a slice holding raw bytes in network byte order, build the appropriate InetAddress
   // object. If size_hint is specified, it indicates the number of bytes to decode from the slice.
-  CHECKED_STATUS FromSlice(const Slice& slice, size_t size_hint = 0);
+  Status FromSlice(const Slice& slice, size_t size_hint = 0);
 
   const boost::asio::ip::address& address() const {
     return boost_addr_;
@@ -109,9 +108,7 @@ class InetAddress {
   boost::asio::ip::address boost_addr_;
 };
 
-void FilterAddresses(const string &transform_spec,
+void FilterAddresses(const std::string &transform_spec,
                      std::vector<boost::asio::ip::address> *addresses);
 
 } // namespace yb
-
-#endif // YB_UTIL_NET_INETADDRESS_H

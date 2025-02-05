@@ -7,7 +7,6 @@ import com.google.inject.Singleton;
 import com.typesafe.config.Config;
 import com.yugabyte.yw.common.config.impl.SettableRuntimeConfigFactory;
 import com.yugabyte.yw.forms.AuditLoggingConfig;
-
 import javax.annotation.Nullable;
 import javax.validation.constraints.NotNull;
 import org.apache.commons.lang3.StringUtils;
@@ -24,6 +23,9 @@ public class LogUtil {
   private static final String APPLICATION_LOG_LEVEL_SYS_PROPERTY = "applicationLogLevel";
   private static final String LOG_ROLLOVER_PATTERN_SYS_PROPERTY = "applicationLogRolloverPattern";
   private static final String LOG_MAX_HISTORY_SYS_PROPERTY = "applicationLogMaxHistory";
+  private static final String LOGGING_FILE_PREFIX_KEY = "yb.logging.fileNamePrefix";
+  private static final String APPLICATION_LOG_FILE_PREFIX_SYS_PROPERTY =
+      "applicationLogFileNamePrefix";
 
   private static final String LOG_OVERRIDE_PATH_SYS_PROPERTY = "log.override.path";
   private static final String YB_CLOUD_ENABLED_SYS_PROPERTY = "yb.cloud.enabled";
@@ -40,6 +42,13 @@ public class LogUtil {
   private static final String AUDIT_LOG_ROLLOVER_PATTERN_SYS_PROPERTY = "auditLogRolloverPattern";
   private static final String AUDIT_LOG_MAX_HISTORY_KEY = "yb.audit.log.maxHistory";
   private static final String AUDIT_LOG_MAX_HISTORY_SYS_PROPERTY = "auditLogMaxHistory";
+  private static final String AUDIT_LOG_FILE_PREFIX_KEY = "yb.audit.log.fileNamePrefix";
+  private static final String AUDIT_LOG_FILE_PREFIX_SYS_PROPERTY = "auditLogFileNamePrefix";
+
+  /*[PLAT-3932]: Key for storing the Correlation ID of HTTP requests in the MDC for logging
+   * purposes.
+   * */
+  public static final String CORRELATION_ID = "correlation-id";
 
   public static void updateLoggingFromConfig(
       SettableRuntimeConfigFactory sConfigFactory, Config config) {
@@ -49,7 +58,7 @@ public class LogUtil {
     // need to configure this to simulate the effect of play.logger.includeConfigProperties=true
     configureFixedLogbackSystemProperties(config);
     try {
-      updateApplicationLoggingContext(logLevel, rolloverPattern, maxHistory);
+      updateApplicationLoggingContext(logLevel, rolloverPattern, maxHistory, "");
     } catch (JoranException ex) {
       LOG.warn("Could not initialize logback");
     }
@@ -67,7 +76,8 @@ public class LogUtil {
           auditLogOutputToStdout,
           auditLogOutputToFile,
           auditLogRolloverPattern,
-          auditLogMaxHistory);
+          auditLogMaxHistory,
+          "");
     } catch (JoranException ex) {
       LOG.warn("Could not initialize logback");
     }
@@ -108,7 +118,8 @@ public class LogUtil {
       SettableRuntimeConfigFactory sConfigFactory,
       @NotNull String level,
       @Nullable String rolloverPattern,
-      @Nullable Integer maxHistory) {
+      @Nullable Integer maxHistory,
+      @Nullable String applicationLogFileNamePrefix) {
     sConfigFactory.globalRuntimeConf().setValue(LOGGING_CONFIG_KEY, level);
     if (rolloverPattern != null) {
       sConfigFactory.globalRuntimeConf().setValue(LOGGING_ROLLOVER_PATTERN_KEY, rolloverPattern);
@@ -117,6 +128,11 @@ public class LogUtil {
       sConfigFactory
           .globalRuntimeConf()
           .setValue(LOGGING_MAX_HISTORY_KEY, String.valueOf(maxHistory));
+    }
+    if (applicationLogFileNamePrefix != null) {
+      sConfigFactory
+          .globalRuntimeConf()
+          .setValue(LOGGING_FILE_PREFIX_KEY, applicationLogFileNamePrefix);
     }
   }
 
@@ -127,6 +143,7 @@ public class LogUtil {
     boolean outputToFile = config.isOutputToFile();
     String rolloverPattern = config.getRolloverPattern();
     int maxHistory = config.getMaxHistory();
+    String auditLogFileNamePrefix = config.getFileNamePrefix();
 
     sConfigFactory
         .globalRuntimeConf()
@@ -138,6 +155,11 @@ public class LogUtil {
     sConfigFactory
         .globalRuntimeConf()
         .setValue(AUDIT_LOG_MAX_HISTORY_KEY, String.valueOf(maxHistory));
+    if (auditLogFileNamePrefix != null) {
+      sConfigFactory
+          .globalRuntimeConf()
+          .setValue(AUDIT_LOG_FILE_PREFIX_KEY, auditLogFileNamePrefix);
+    }
   }
 
   /**
@@ -147,20 +169,28 @@ public class LogUtil {
    * @param level The new log level to be set
    */
   public static void updateApplicationLoggingContext(
-      @NotNull String level, @Nullable String rolloverPattern, @Nullable Integer maxHistory)
+      @NotNull String level,
+      @Nullable String rolloverPattern,
+      @Nullable Integer maxHistory,
+      @Nullable String applicationLogFileNamePrefix)
       throws JoranException {
     String curLevel = System.getProperty(APPLICATION_LOG_LEVEL_SYS_PROPERTY);
     String curRolloverPattern = System.getProperty(LOG_ROLLOVER_PATTERN_SYS_PROPERTY);
     String curMaxHistoryStr = System.getProperty(LOG_MAX_HISTORY_SYS_PROPERTY);
-    setApplicationLoggingSystemProperties(level, rolloverPattern, maxHistory, false);
+    String curApplicationLogFileNamePrefix =
+        System.getProperty(APPLICATION_LOG_FILE_PREFIX_SYS_PROPERTY);
+    setApplicationLoggingSystemProperties(
+        level, rolloverPattern, maxHistory, applicationLogFileNamePrefix, false);
     LOG.debug(
-        "Update logging context: '{}' '{}' '{}' (current '{}' '{}' '{}')",
+        "Update logging context: '{}' '{}' '{}' '{}' (current '{}' '{}' '{}' '{}')",
         level,
         rolloverPattern,
         maxHistory,
+        applicationLogFileNamePrefix,
         curLevel,
         curRolloverPattern,
-        curMaxHistoryStr);
+        curMaxHistoryStr,
+        curApplicationLogFileNamePrefix);
     try {
       restartLogback();
     } catch (JoranException e) {
@@ -169,6 +199,7 @@ public class LogUtil {
           curLevel,
           curRolloverPattern,
           curMaxHistoryStr == null ? null : Integer.valueOf(curMaxHistoryStr),
+          curApplicationLogFileNamePrefix,
           true);
       restartLogback();
       throw e;
@@ -180,29 +211,38 @@ public class LogUtil {
     boolean outputToFile = config.isOutputToFile();
     String rolloverPattern = config.getRolloverPattern();
     int maxHistory = config.getMaxHistory();
-    updateAuditLoggingContext(outputToStdout, outputToFile, rolloverPattern, maxHistory);
+    String auditLogFileNamePrefix = config.getFileNamePrefix();
+    updateAuditLoggingContext(
+        outputToStdout, outputToFile, rolloverPattern, maxHistory, auditLogFileNamePrefix);
   }
 
   public static void updateAuditLoggingContext(
-      boolean outputToStdout, boolean outputToFile, String rolloverPattern, int maxHistory)
+      boolean outputToStdout,
+      boolean outputToFile,
+      String rolloverPattern,
+      int maxHistory,
+      String auditLogFileNamePrefix)
       throws JoranException {
 
     String curOutputToStdout = System.getProperty(AUDIT_LOG_OUTPUT_TO_STDOUT_SYS_PROPERTY);
     String curOutputToFile = System.getProperty(AUDIT_LOG_OUTPUT_TO_FILE_SYS_PROPERTY);
     String curRolloverPattern = System.getProperty(AUDIT_LOG_ROLLOVER_PATTERN_SYS_PROPERTY);
     String curMaxHistoryStr = System.getProperty(AUDIT_LOG_MAX_HISTORY_SYS_PROPERTY);
+    String curAuditLogFileNamePrefix = System.getProperty(AUDIT_LOG_FILE_PREFIX_SYS_PROPERTY);
     setAuditLoggingSystemProperties(
-        outputToStdout, outputToFile, rolloverPattern, maxHistory, false);
+        outputToStdout, outputToFile, rolloverPattern, maxHistory, auditLogFileNamePrefix, false);
     LOG.debug(
-        "Update logging context: '{}' '{}' '{}' '{}' (current '{}' '{}' '{}' '{}')",
+        "Update logging context: '{}' '{}' '{}' '{}' '{}' (current '{}' '{}' '{}' '{}' '{}')",
         outputToStdout,
         outputToFile,
         rolloverPattern,
         maxHistory,
+        auditLogFileNamePrefix,
         curOutputToStdout,
         curOutputToFile,
         curRolloverPattern,
-        curMaxHistoryStr);
+        curMaxHistoryStr,
+        curAuditLogFileNamePrefix);
     try {
       restartLogback();
     } catch (JoranException e) {
@@ -212,6 +252,7 @@ public class LogUtil {
           curOutputToFile == null ? null : Boolean.valueOf(curOutputToFile),
           curRolloverPattern,
           curMaxHistoryStr == null ? null : Integer.valueOf(curMaxHistoryStr),
+          auditLogFileNamePrefix,
           true);
       restartLogback();
       throw e;
@@ -229,6 +270,7 @@ public class LogUtil {
       @NotNull String level,
       @Nullable String rolloverPattern,
       @Nullable Integer maxHistory,
+      @Nullable String applicationLogFileNamePrefix,
       boolean eraseIfEmpty) {
     setSystemProperty(APPLICATION_LOG_LEVEL_SYS_PROPERTY, level, eraseIfEmpty);
     setSystemProperty(LOG_ROLLOVER_PATTERN_SYS_PROPERTY, rolloverPattern, eraseIfEmpty);
@@ -236,6 +278,8 @@ public class LogUtil {
         LOG_MAX_HISTORY_SYS_PROPERTY,
         maxHistory == null ? null : String.valueOf(maxHistory),
         eraseIfEmpty);
+    setSystemProperty(
+        APPLICATION_LOG_FILE_PREFIX_SYS_PROPERTY, applicationLogFileNamePrefix, eraseIfEmpty);
   }
 
   private static void setAuditLoggingSystemProperties(
@@ -243,6 +287,7 @@ public class LogUtil {
       Boolean outputToFile,
       String rolloverPattern,
       Integer maxHistory,
+      String auditLogFileNamePrefix,
       boolean eraseIfEmpty) {
     setSystemProperty(
         AUDIT_LOG_OUTPUT_TO_STDOUT_SYS_PROPERTY,
@@ -257,6 +302,7 @@ public class LogUtil {
         AUDIT_LOG_MAX_HISTORY_SYS_PROPERTY,
         maxHistory == null ? null : String.valueOf(maxHistory),
         eraseIfEmpty);
+    setSystemProperty(AUDIT_LOG_FILE_PREFIX_SYS_PROPERTY, auditLogFileNamePrefix, eraseIfEmpty);
   }
 
   public static void configureFixedLogbackSystemProperties(Config config) {

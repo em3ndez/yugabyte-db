@@ -1,8 +1,8 @@
 // Copyright (c) YugaByte, Inc.
 
 import static com.yugabyte.yw.commissioner.Commissioner.SUBTASK_ABORT_POSITION_PROPERTY;
+import static com.yugabyte.yw.commissioner.Commissioner.SUBTASK_PAUSE_POSITION_PROPERTY;
 
-import akka.stream.Materializer;
 import com.google.inject.Inject;
 import com.google.inject.Singleton;
 import com.typesafe.config.Config;
@@ -11,6 +11,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletionStage;
 import java.util.function.Function;
+import org.apache.pekko.stream.Materializer;
 import org.slf4j.MDC;
 import play.mvc.Filter;
 import play.mvc.Http;
@@ -21,7 +22,8 @@ import play.mvc.Result;
 public class RequestHeaderFilter extends Filter {
 
   // Register the header names here.
-  private static final String[] REGISTERED_HEADERS = new String[] {SUBTASK_ABORT_POSITION_PROPERTY};
+  private static final String[] REGISTERED_HEADERS =
+      new String[] {SUBTASK_ABORT_POSITION_PROPERTY, SUBTASK_PAUSE_POSITION_PROPERTY};
 
   private final List<String> enabledHeaders = new ArrayList<>();
 

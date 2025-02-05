@@ -13,7 +13,11 @@
 
 #include "yb/util/debug/lock_debug.h"
 
-#include <glog/logging.h>
+#include "yb/util/debug-util.h"
+#include "yb/util/logging.h"
+#include "yb/util/rwc_lock.h"
+
+using namespace std::literals;
 
 namespace yb {
 
@@ -25,6 +29,8 @@ thread_local NonRecursiveSharedLockBase* head = nullptr;
 
 NonRecursiveSharedLockBase::NonRecursiveSharedLockBase(void* mutex)
     : mutex_(mutex), next_(head) {
+  RWCLock::CheckNoReadLockConflict(mutex);
+
   auto current = head;
   while (current != nullptr) {
     LOG_IF(DFATAL, current->mutex_ == mutex) << "Recursive shared lock";
@@ -35,6 +41,37 @@ NonRecursiveSharedLockBase::NonRecursiveSharedLockBase(void* mutex)
 
 NonRecursiveSharedLockBase::~NonRecursiveSharedLockBase() {
   head = next_;
+}
+
+void SingleThreadedMutex::lock() {
+  auto old_value = locked_.exchange(true, std::memory_order_acq_rel);
+  LOG_IF(DFATAL, old_value) << "Thread collision on lock";
+}
+
+void SingleThreadedMutex::unlock() {
+  auto old_value = locked_.exchange(false, std::memory_order_acq_rel);
+  LOG_IF(DFATAL, !old_value) << "Unlock of not locked mutex";
+}
+
+bool SingleThreadedMutex::try_lock() {
+  return !locked_.exchange(true, std::memory_order_acq_rel);
+}
+
+void TimeTrackedLockBase::Acquired() {
+  start_ = CoarseMonoClock::now();
+}
+
+void TimeTrackedLockBase::Released(const char* name) {
+  CHECK(start_ != CoarseTimePoint());
+  MonoDelta passed(CoarseMonoClock::now() - start_);
+  if (passed > 1s) {
+    LOG(INFO) << "Long " << name << " " << passed << ":\n" << GetStackTrace();
+  }
+  start_ = CoarseTimePoint();
+}
+
+void TimeTrackedLockBase::Assign(const TimeTrackedLockBase& rhs) {
+  start_ = rhs.start_;
 }
 
 }  // namespace yb

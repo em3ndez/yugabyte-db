@@ -44,6 +44,8 @@ Options:
     we believe "address already in use" only happens a small percentage of the time.
   --test-args "<arguments>"
     Pass additional arguments to the test.
+  --vmodule "<arguments>"
+    The same as --test-args --vmodule=<arguments>. To simplify passing vmodule to the test.
   --clang
     Use binaries built with Clang (e.g. to distinguish between debug/release builds made with
     gcc vs. clang). If YB_COMPILER_TYPE is set, it will take precedence, and this option will not
@@ -158,6 +160,10 @@ while [[ $# -gt 0 ]]; do
       more_test_args+=" $2"
       shift
     ;;
+    --vmodule)
+      more_test_args+=" --vmodule=$2"
+      shift
+    ;;
     --clang)
       if [[ -n ${YB_COMPILER_TYPE:-} && ${YB_COMPILER_TYPE:-} != "clang" ]]; then
         fatal "YB_COMPILER_TYPE is set to '$YB_COMPILER_TYPE'," \
@@ -194,7 +200,7 @@ set_build_root
 set_sanitizer_runtime_options
 
 declare -i -r num_pos_args=${#positional_args[@]}
-if "$is_java_test"; then
+if [[ ${is_java_test} == "true" ]]; then
   if [[ $num_pos_args -ne 2 ]]; then
     fatal "Expected two positional arguments for Java tests, not including build type:" \
           "<maven_module_name> <class_name_with_package>"
@@ -229,9 +235,9 @@ if [[ $test_filter != "all_tests" ]]; then
   gtest_filter_arg="--gtest_filter=$test_filter"
 fi
 
-if ! "$is_java_test"; then
+if [[ $is_java_test == "false" ]]; then
   abs_test_binary_path=$( find_test_binary "$test_binary_name" )
-  rel_test_binary=${abs_test_binary_path#$BUILD_ROOT/}
+  rel_test_binary=${abs_test_binary_path#"$BUILD_ROOT/"}
   if [[ $rel_test_binary == "$abs_test_binary_path" ]]; then
     fatal "Expected absolute test binary path ('$abs_test_binary_path') to start with" \
           "BUILD_ROOT ('$BUILD_ROOT')"
@@ -248,13 +254,13 @@ fi
 failure_flag_file_path="$log_dir/failure_flag"
 
 if [[ $iteration -gt 0 ]]; then
-  if "$stop_at_failure" && [[ -f $failure_flag_file_path ]]; then
+  if [[ $stop_at_failure == "true" && -f $failure_flag_file_path ]]; then
     exit
   fi
   # One iteration with a specific "id" ($iteration).
   test_log_path_prefix=$log_dir/$iteration
   test_log_path=$test_log_path_prefix.log
-  if "$is_java_test"; then
+  if [[ ${is_java_test} == "true" ]]; then
     export YB_SUREFIRE_REPORTS_DIR=$test_log_path_prefix.reports
   fi
   export YB_FATAL_DETAILS_PATH_PREFIX=$test_log_path_prefix.fatal_failure_details
@@ -264,12 +270,12 @@ if [[ $iteration -gt 0 ]]; then
   export TEST_TMPDIR=/tmp/yb_tests__${current_timestamp}__$RANDOM.$RANDOM.$RANDOM
   mkdir -p "$TEST_TMPDIR"
   set_expected_core_dir "$TEST_TMPDIR"
-  if ! "$is_java_test"; then
+  if [[ $is_java_test == "false" ]]; then
     determine_test_timeout
   fi
 
   # TODO: deduplicate the setup here against run_one_cxx_test() in common-test-env.sh.
-  if "$is_java_test"; then
+  if [[ ${is_java_test} == "true" ]]; then
     test_wrapper_cmd_line=(
       "$YB_BUILD_SUPPORT_DIR"/run-test.sh "${positional_args[@]}"
     )
@@ -287,7 +293,7 @@ if [[ $iteration -gt 0 ]]; then
   start_time_sec=$( date +%s )
   (
     cd "$TEST_TMPDIR"
-    if "$verbose"; then
+    if [[ ${verbose} == "true" ]]; then
       log "Iteration $iteration logging to $test_log_path"
     fi
     ulimit -c unlimited
@@ -302,10 +308,10 @@ if [[ $iteration -gt 0 ]]; then
   keep_log=$keep_all_logs
   pass_or_fail="PASSED"
   if ! did_test_succeed "$exit_code" "$test_log_path"; then
-    if ! "$is_java_test"; then
+    if [[ $is_java_test == "false" ]]; then
       process_core_file
     fi
-    if "$skip_address_already_in_use" && \
+    if [[ $skip_address_already_in_use == "true" ]] && \
        ( grep -Eq '\bAddress already in use\b' "$test_log_path" ||
          grep -Eq '\bWebserver: Could not start on address\b' "$test_log_path" ); then
       # TODO: perhaps we should not skip some types of errors that did_test_succeed finds in the
@@ -316,9 +322,9 @@ if [[ $iteration -gt 0 ]]; then
       keep_log=true
     fi
   fi
-  if "$keep_log"; then
-    if ! "$skip_log_compression"; then
-      if "$is_java_test"; then
+  if [[ ${keep_log} == "true" ]]; then
+    if [[ $skip_log_compression == "false" ]]; then
+      if [[ ${is_java_test} == "true" ]]; then
         # Compress Java test log.
         mv "$test_log_path" "$YB_SUREFIRE_REPORTS_DIR"
         pushd "$log_dir"
@@ -362,7 +368,7 @@ if [[ $iteration -gt 0 ]]; then
     comment+="; test log path: $test_log_path"
   else
     rm -f "$test_log_path"
-    if "$is_java_test"; then
+    if [[ ${is_java_test} == "true" ]]; then
       set +e
       rm -rf "$YB_SUREFIRE_REPORTS_DIR"
       set -e
@@ -397,7 +403,7 @@ else
   log "$gtest_filter_info"
   if [[ -n ${YB_EXTRA_GTEST_FLAGS:-} ]]; then
     log "Extra test flags from YB_EXTRA_GTEST_FLAGS: $YB_EXTRA_GTEST_FLAGS"
-  elif "$verbose"; then
+  elif [[ ${verbose} == "true" ]]; then
     log "YB_EXTRA_GTEST_FLAGS is not set"
   fi
   log "Saving repeated test execution logs to: $log_dir"

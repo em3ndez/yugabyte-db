@@ -3,34 +3,16 @@ title: Benchmark YCQL performance with key-value workloads
 headerTitle: Key-value workload
 linkTitle: Key-value workload
 description: Benchmark YCQL performance with key-value workloads.
-image: /images/section_icons/explore/high_performance.png
-headcontent: Test YugabyteDB performance with a key-value workload.
+headcontent: Benchmark YCQL performance with key-value workloads
 menu:
   stable:
     identifier: key-value-workload-1-ycql
     parent: benchmark
     weight: 6
-showAsideToc: true
-isTocNested: true
+type: docs
 ---
 
-<ul class="nav nav-tabs-alt nav-tabs-yb">
-
-  <li >
-    <a href="{{< relref "./key-value-workload-ysql.md" >}}" class="nav-link">
-      <i class="icon-postgres" aria-hidden="true"></i>
-      YSQL
-    </a>
-  </li>
-
-  <li >
-    <a href="{{< relref "./key-value-workload-ycql.md" >}}" class="nav-link active">
-      <i class="icon-cassandra" aria-hidden="true"></i>
-      YCQL
-    </a>
-  </li>
-
-</ul>
+{{<api-tabs list="ycql">}}
 
 Use this benchmark to test the performance of YugabyteDB using a key-value workload.
 
@@ -60,26 +42,24 @@ For this benchmark, you will set up a three-node YugabyteDB cluster with a repli
 
 ### Benchmark tool
 
-We will use the [YugabyteDB Workload Generator](https://github.com/yugabyte/yb-sample-apps) to perform this benchmark. 
+We will use the [YugabyteDB Workload Generator](https://github.com/yugabyte/yb-sample-apps) to perform this benchmark.
 
-To get the tool (``yb-sample-apps.jar`), run the following command.
+Download the YugabyteDB workload generator JAR file (`yb-sample-apps.jar`) as follows:
 
-```sh
-$ wget https://github.com/yugabyte/yb-sample-apps/releases/download/1.3.9/yb-sample-apps.jar?raw=true -O yb-sample-apps.jar
-```
+{{% yb-sample-apps-path %}}
 
 To run the workload generator tool, you must have:
 
 - Java runtime or JDK installed.
 - Set the environment variable  $ENDPOINTS to the IP addresses (including hosts and ports) for the nodes of the cluster.
 
-```
+```output
 ENDPOINTS="X.X.X.X:9042,X.X.X.X:9042,X.X.X.X:9042"
 ```
 
 ## Run the write-heavy key-value workload
 
-Run the key-value workload with higher number of write threads (representing write-heavy workload).  
+Run the key-value workload with higher number of write threads (representing write-heavy workload).
 
 Load 1B keys of 256 bytes each across 256 writer threads
 
@@ -121,15 +101,15 @@ $ java -jar ./yb-sample-apps.jar  \
 
 ### Expected results
 
-Name    | Observation
---------|------
-(Read) Ops/sec | ~150k
-(Read) Latency | ~1.66 ms/op
-CPU (User + Sys) | 60%
+| Name | Observation |
+| :--- | :---------- |
+| (Read) Ops/sec | ~150k |
+| (Read) Latency | ~1.66 ms/op |
+| CPU (User + Sys) | 60% |
 
 ## Batch write-heavy KV workload
 
-Run the key-value workload in batch mode and higher number of write threads (representing batched, write-heavy workload).  
+Run the key-value workload in batch mode and higher number of write threads (representing batched, write-heavy workload).
 
 Load 1B keys of 256 bytes each across 64 writer threads in batches of 25 each.
 
@@ -147,8 +127,8 @@ $ java -jar ./yb-sample-apps.jar      \
 
 ### Expected results
 
-Name    | Observation
---------|------
-(Batch Write) Ops/sec | ~140k
-(Batch Write) Latency | ~9.0 ms/op
-CPU (User + Sys) | 80%
+| Name | Observation |
+| :--- | :---------- |
+| (Batch Write) Ops/sec | ~140k |
+| (Batch Write) Latency | ~9.0 ms/op |
+| CPU (User + Sys) | 80% |

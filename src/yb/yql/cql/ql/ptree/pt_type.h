@@ -15,8 +15,7 @@
 // Tree node definitions for datatypes.
 //--------------------------------------------------------------------------------------------------
 
-#ifndef YB_YQL_CQL_QL_PTREE_PT_TYPE_H_
-#define YB_YQL_CQL_QL_PTREE_PT_TYPE_H_
+#pragma once
 
 #include "yb/client/schema.h"
 
@@ -43,7 +42,7 @@ class PTBaseType : public TreeNode {
   virtual ~PTBaseType() {
   }
 
-  virtual CHECKED_STATUS Analyze(SemContext *sem_context) {
+  virtual Status Analyze(SemContext *sem_context) {
     return Status::OK();
   }
 
@@ -309,7 +308,7 @@ class PTMap : public PTPrimitiveType<InternalType::kMapValue, DataType::MAP, fal
     return ql_type_;
   }
 
-  virtual CHECKED_STATUS Analyze(SemContext *sem_context);
+  virtual Status Analyze(SemContext *sem_context);
 
  protected:
   PTBaseType::SharedPtr keys_type_;
@@ -337,7 +336,7 @@ class PTSet : public PTPrimitiveType<InternalType::kSetValue, DataType::SET, fal
     return ql_type_;
   }
 
-  virtual CHECKED_STATUS Analyze(SemContext *sem_context);
+  virtual Status Analyze(SemContext *sem_context);
 
  protected:
   PTBaseType::SharedPtr elems_type_;
@@ -364,7 +363,7 @@ class PTList : public PTPrimitiveType<InternalType::kListValue, DataType::LIST, 
     return ql_type_;
   }
 
-  virtual CHECKED_STATUS Analyze(SemContext *sem_context);
+  virtual Status Analyze(SemContext *sem_context);
 
  protected:
   PTBaseType::SharedPtr elems_type_;
@@ -389,7 +388,7 @@ class PTUserDefinedType : public PTPrimitiveType<InternalType::kMapValue,
     return MCMakeShared<PTUserDefinedType>(memctx, std::forward<TypeArgs>(args)...);
   }
 
-  virtual CHECKED_STATUS Analyze(SemContext *sem_context);
+  virtual Status Analyze(SemContext *sem_context);
 
   virtual std::shared_ptr<QLType> ql_type() const {
     return ql_type_;
@@ -418,7 +417,7 @@ class PTFrozen : public PTPrimitiveType<InternalType::kFrozenValue, DataType::FR
     return MCMakeShared<PTFrozen>(memctx, std::forward<TypeArgs>(args)...);
   }
 
-  virtual CHECKED_STATUS Analyze(SemContext *sem_context);
+  virtual Status Analyze(SemContext *sem_context);
 
   virtual std::shared_ptr<QLType> ql_type() const {
     return ql_type_;
@@ -431,5 +430,3 @@ class PTFrozen : public PTPrimitiveType<InternalType::kFrozenValue, DataType::FR
 
 }  // namespace ql
 }  // namespace yb
-
-#endif  // YB_YQL_CQL_QL_PTREE_PT_TYPE_H_

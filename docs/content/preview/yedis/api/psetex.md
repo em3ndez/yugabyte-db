@@ -9,13 +9,13 @@ menu:
 aliases:
   - /preview/api/redis/psetex
   - /preview/api/yedis/psetex
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 ## Synopsis
 
-<b>`PSETEX key ttl_in_msec string_value`</b><br>
+**`PSETEX key ttl_in_msec string_value`**
+
 This command sets the value of `key` to be `string_value`, and sets the key to expire in `ttl_in_msec` milli-seconds.
 
 ## Return Value

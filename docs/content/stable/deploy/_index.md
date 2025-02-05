@@ -2,14 +2,13 @@
 title: Deploy
 headerTitle: Deploy YugabyteDB
 linkTitle: Deploy
-description: Deploy to any public cloud or private data center of your choice.
-headcontent: Deploy to any public cloud or private data center of your choice.
-image: /images/section_icons/index/deploy.png
-section: YUGABYTEDB CORE
+description: How to deploy the YugabyteDB database to any public cloud or private data center or Kubernetes. Includes checklist and manual deployment options as well.
+headcontent: Deploy to the public cloud, a private data center, or Kubernetes
 menu:
   stable:
     identifier: deploy
-    weight: 634
+    parent: launch-and-manage
+type: indexpage
 ---
 
 <div class="row">
@@ -28,7 +27,6 @@ menu:
     <a class="section-link icon-offset" href="manual-deployment/">
       <div class="head">
         <img class="icon" src="/images/section_icons/deploy/manual-deployment.png" aria-hidden="true" />
-        <div class="articles">5 articles</div>
         <div class="title">Manual deployment</div>
       </div>
       <div class="body">
@@ -41,7 +39,6 @@ menu:
     <a class="section-link icon-offset" href="public-clouds/">
       <div class="head">
         <img class="icon" src="/images/section_icons/deploy/public-clouds.png" aria-hidden="true" />
-        <div class="articles">3 articles</div>
         <div class="title">Public clouds</div>
       </div>
       <div class="body">
@@ -54,7 +51,6 @@ menu:
     <a class="section-link icon-offset" href="kubernetes/">
       <div class="head">
         <img class="icon" src="/images/section_icons/deploy/kubernetes.png" aria-hidden="true" />
-        <div class="articles">5 chapters</div>
         <div class="title">Kubernetes</div>
       </div>
       <div class="body">
@@ -64,25 +60,9 @@ menu:
   </div>
 
   <div class="col-12 col-md-6 col-lg-12 col-xl-6">
-    <a class="section-link icon-offset" href="docker/docker-swarm/">
-      <div class="head">
-        <div class="icon">
-          <i class="fab fa-docker"></i>
-        </div>
-        <div class="articles">2 articles</div>
-        <div class="title">Docker</div>
-      </div>
-      <div class="body">
-        Orchestrated deployment of YugabyteDB in Docker Swarm and Docker Compose.
-      </div>
-    </a>
-  </div>
-
-  <div class="col-12 col-md-6 col-lg-12 col-xl-6">
     <a class="section-link icon-offset" href="multi-dc/">
       <div class="head">
         <img class="icon" src="/images/section_icons/explore/planet_scale.png" aria-hidden="true" />
-        <div class="articles">4 chapters</div>
         <div class="title">Multi-DC deployments</div>
       </div>
       <div class="body">
@@ -90,6 +70,5 @@ menu:
       </div>
     </a>
   </div>
-
 
 </div>

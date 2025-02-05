@@ -4,12 +4,11 @@ headerTitle: Test the date-time multiplication overloads
 linkTitle: Test multiplication overloads
 description: Presents code that tests the date-time multiplication overloads. [YSQL]
 menu:
-  preview:
+  preview_api:
     identifier: test-date-time-multiplication-overloads
     parent: date-time-operators
     weight: 40
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 Try this:

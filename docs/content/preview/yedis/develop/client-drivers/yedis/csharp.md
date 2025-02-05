@@ -9,15 +9,14 @@ menu:
   preview:
     identifier: client-drivers-yedis-csharp
     parent: develop-yedis
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 ## Prerequisites
 
 This tutorial assumes that you have:
 
-- installed YugabyteDB, created a universe, and are able to interact with it using the Redis shell. If not, follow the steps in [Quick start](../../../../quick-start/).
+- installed YugabyteDB, created a universe, and are able to interact with it using the Redis shell. If not, follow the steps in [Quick start](/preview/tutorials/quick-start/macos/).
 - installed Visual Studio.
 
 ## Write a HelloWorld C# application

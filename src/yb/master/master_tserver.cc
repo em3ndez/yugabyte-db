@@ -19,7 +19,7 @@
 #include <boost/preprocessor/cat.hpp>
 #include <boost/preprocessor/stringize.hpp>
 
-#include "yb/client/async_initializer.h"
+#include "yb/common/pg_types.h"
 
 #include "yb/master/catalog_manager_if.h"
 #include "yb/master/master.h"
@@ -29,11 +29,17 @@
 #include "yb/tablet/tablet_peer.h"
 
 #include "yb/tserver/tserver.pb.h"
+#include "yb/tserver/pg_client.pb.h"
+#include "yb/tserver/pg_client_session.h"
 
 #include "yb/util/atomic.h"
 #include "yb/util/metric_entity.h"
 #include "yb/util/monotime.h"
 #include "yb/util/status_format.h"
+
+#include "yb/yql/pgwrapper/libpq_utils.h"
+
+DECLARE_bool(create_initial_sys_catalog_snapshot);
 
 namespace yb {
 namespace master {
@@ -60,32 +66,31 @@ const scoped_refptr<MetricEntity>& MasterTabletServer::MetricEnt() const {
   return metric_entity_;
 }
 
-Status MasterTabletServer::GetTabletPeer(const string& tablet_id,
-                                         std::shared_ptr<tablet::TabletPeer>* tablet_peer) const {
-  if (tablet_id == kSysCatalogTabletId) {
-    *tablet_peer = master_->catalog_manager()->tablet_peer();
-    return Status::OK();
-  }
-  return STATUS_FORMAT(NotFound, "tablet $0 not found", tablet_id);
+Result<tablet::TabletPeerPtr> MasterTabletServer::GetServingTablet(
+    const TabletId& tablet_id) const {
+  return master_->catalog_manager()->GetServingTablet(tablet_id);
+}
+
+Result<tablet::TabletPeerPtr> MasterTabletServer::GetServingTablet(const Slice& tablet_id) const {
+  return master_->catalog_manager()->GetServingTablet(tablet_id);
 }
 
 Status MasterTabletServer::GetTabletStatus(const tserver::GetTabletStatusRequestPB* req,
                                            tserver::GetTabletStatusResponsePB* resp) const {
-  std::shared_ptr<tablet::TabletPeer> tablet_peer;
   // Tablets for YCQL virtual tables have no peer and we will return the NotFound status. That is
   // ok because GetTabletStatus is called for the cases when a tablet is moved or otherwise down
   // and being boostrapped, which should not happen to those tables.
-  RETURN_NOT_OK(GetTabletPeer(req->tablet_id(), &tablet_peer));
+  auto tablet_peer = VERIFY_RESULT(GetServingTablet(req->tablet_id()));
   tablet_peer->GetTabletStatusPB(resp->mutable_tablet_status());
   return Status::OK();
 }
 
 bool MasterTabletServer::LeaderAndReady(const TabletId& tablet_id, bool allow_stale) const {
-  std::shared_ptr<tablet::TabletPeer> tablet_peer;
-  if (!GetTabletPeer(tablet_id, &tablet_peer).ok()) {
+  auto tablet_peer = GetServingTablet(tablet_id);
+  if (!tablet_peer.ok()) {
     return false;
   }
-  return tablet_peer->LeaderStatus(allow_stale) == consensus::LeaderStatus::LEADER_AND_READY;
+  return (**tablet_peer).LeaderStatus(allow_stale) == consensus::LeaderStatus::LEADER_AND_READY;
 }
 
 const NodeInstancePB& MasterTabletServer::NodeInstance() const {
@@ -102,6 +107,12 @@ Status MasterTabletServer::StartRemoteBootstrap(const StartRemoteBootstrapReques
 
 void MasterTabletServer::get_ysql_catalog_version(uint64_t* current_version,
                                                   uint64_t* last_breaking_version) const {
+  get_ysql_db_catalog_version(kPgInvalidOid, current_version, last_breaking_version);
+}
+
+void MasterTabletServer::get_ysql_db_catalog_version(uint32_t db_oid,
+                                                     uint64_t* current_version,
+                                                     uint64_t* last_breaking_version) const {
   auto fill_vers = [current_version, last_breaking_version](){
     /*
      * This should never happen, but if it does then we cannot guarantee that user requests
@@ -119,20 +130,17 @@ void MasterTabletServer::get_ysql_catalog_version(uint64_t* current_version,
   // Ensure that we are currently the Leader before handling catalog version.
   {
     SCOPED_LEADER_SHARED_LOCK(l, master_->catalog_manager_impl());
-    if (!l.catalog_status().ok()) {
-      LOG(WARNING) << "Catalog status failure: " << l.catalog_status().ToString();
-      fill_vers();
-      return;
-    }
-    if (!l.leader_status().ok()) {
-      LOG(WARNING) << "Leader status failure: " << l.leader_status().ToString();
+    if (!l.IsInitializedAndIsLeader()) {
+      LOG(WARNING) << l.failed_status_string();
       fill_vers();
       return;
     }
   }
 
-  Status s = master_->catalog_manager()->GetYsqlCatalogVersion(current_version,
-                                                               last_breaking_version);
+  Status s = db_oid == kPgInvalidOid ?
+    master_->catalog_manager()->GetYsqlCatalogVersion(current_version, last_breaking_version) :
+    master_->catalog_manager()->GetYsqlDBCatalogVersion(
+        db_oid, current_version, last_breaking_version);
   if (!s.ok()) {
     LOG(ERROR) << "Could not get YSQL catalog version for master's tserver API: "
                << s.ToUserMessage();
@@ -144,13 +152,31 @@ tserver::TServerSharedData& MasterTabletServer::SharedObject() {
   return master_->shared_object();
 }
 
-const std::shared_future<client::YBClient*>& MasterTabletServer::client_future() const {
-  return master_->async_client_initializer().get_client_future();
+Status MasterTabletServer::get_ysql_db_oid_to_cat_version_info_map(
+    const tserver::GetTserverCatalogVersionInfoRequestPB& req,
+    tserver::GetTserverCatalogVersionInfoResponsePB* resp) const {
+  return master_->get_ysql_db_oid_to_cat_version_info_map(req, resp);
 }
 
-CHECKED_STATUS MasterTabletServer::GetLiveTServers(
+const std::shared_future<client::YBClient*>& MasterTabletServer::client_future() const {
+  return master_->client_future();
+}
+
+Status MasterTabletServer::GetLiveTServers(
     std::vector<master::TSInformationPB> *live_tservers) const {
   return Status::OK();
+}
+
+Result<std::vector<client::internal::RemoteTabletServerPtr>>
+    MasterTabletServer::GetRemoteTabletServers() const {
+  return STATUS_FORMAT(NotSupported,
+                       Format("GetRemoteTabletServers not implemented for master_tserver"));
+}
+
+Result<std::vector<client::internal::RemoteTabletServerPtr>>
+    MasterTabletServer::GetRemoteTabletServers(const std::unordered_set<std::string>&) const {
+  return STATUS_FORMAT(NotSupported,
+                       Format("GetRemoteTabletServers not implemented for master_tserver"));
 }
 
 const std::shared_ptr<MemTracker>& MasterTabletServer::mem_tracker() const {
@@ -158,6 +184,60 @@ const std::shared_ptr<MemTracker>& MasterTabletServer::mem_tracker() const {
 }
 
 void MasterTabletServer::SetPublisher(rpc::Publisher service) {
+}
+
+client::TransactionPool& MasterTabletServer::TransactionPool() {
+  LOG(FATAL) << "Unexpected call of TransactionPool()";
+  client::TransactionPool* temp = nullptr;
+  return *temp;
+}
+
+rpc::Messenger* MasterTabletServer::GetMessenger(ash::Component component) const {
+  return nullptr;
+}
+
+void MasterTabletServer::ClearAllMetaCachesOnServer() {
+  client()->ClearAllMetaCachesOnServer();
+}
+
+Status MasterTabletServer::ClearMetacache(const std::string& namespace_id) {
+  return client()->ClearMetacache(namespace_id);
+}
+
+Status MasterTabletServer::YCQLStatementStats(const tserver::PgYCQLStatementStatsRequestPB& req,
+    tserver::PgYCQLStatementStatsResponsePB* resp) const {
+  LOG(FATAL) << "Unexpected call of YCQLStatementStats()";
+  return Status::OK();
+}
+
+Result<std::vector<tablet::TabletStatusPB>> MasterTabletServer::GetLocalTabletsMetadata() const {
+  LOG(DFATAL) << "Unexpected call of GetLocalTabletsMetadata()";
+  return STATUS_FORMAT(InternalError, "Unexpected call of GetLocalTabletsMetadata()");
+}
+
+Result<std::vector<TserverMetricsInfoPB>> MasterTabletServer::GetMetrics() const {
+  LOG(DFATAL) << "Unexpected call of GetMetrics()";
+  return STATUS_FORMAT(InternalError, "Unexpected call of GetMetrics()");
+}
+
+Result<pgwrapper::PGConn> MasterTabletServer::CreateInternalPGConn(
+    const std::string& database_name, const std::optional<CoarseTimePoint>& deadline) {
+  LOG(DFATAL) << "Unexpected call of CreateInternalPGConn()";
+  return STATUS_FORMAT(InternalError, "Unexpected call of CreateInternalPGConn()");
+}
+
+Result<tserver::PgTxnSnapshot> MasterTabletServer::GetLocalPgTxnSnapshot(
+  const tserver::PgTxnSnapshotLocalId& snapshot_id) {
+  LOG(WARNING) << "Unexpected call of " << __PRETTY_FUNCTION__;
+  return STATUS_FORMAT(InternalError, "Unexpected call of $0", __PRETTY_FUNCTION__);
+}
+
+bool MasterTabletServer::SkipCatalogVersionChecks() {
+  return master_->catalog_manager()->SkipCatalogVersionChecks();
+}
+
+const std::string& MasterTabletServer::permanent_uuid() const {
+  return master_->permanent_uuid();
 }
 
 } // namespace master

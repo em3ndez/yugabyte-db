@@ -67,14 +67,65 @@ std::string SstFileMetaData::Name() const {
   return MakeTableFileName(/* path= */ "", name_id);
 }
 
-std::string SstFileMetaData::FullName() const {
+std::string SstFileMetaData::BaseFilePath() const {
   return MakeTableFileName(db_path, name_id);
+}
+
+std::string SstFileMetaData::DataFilePath() const {
+  return MakeTableDataFilePath(db_path, name_id);
 }
 
 std::string LiveFileMetaData::ToString() const {
   return YB_STRUCT_TO_STRING(
       total_size, base_size, uncompressed_size, name_id, db_path, imported,
       being_compacted, column_family_name, level, smallest, largest);
+}
+
+void UpdateUserValue(
+    UserBoundaryValues* values, UserBoundaryTag tag, const Slice& new_value,
+    UpdateUserValueType type) {
+  int compare_sign = static_cast<int>(type);
+  for (auto& value : *values) {
+    if (value.tag == tag) {
+      if (value.CompareTo(new_value) * compare_sign > 0) {
+        value.value.Assign(new_value);
+      }
+      return;
+    }
+  }
+  values->emplace_back(tag, new_value);
+}
+
+void UpdateUserValue(
+    UserBoundaryValues* values, const UserBoundaryValueRef& new_value, UpdateUserValueType type) {
+  UpdateUserValue(values, new_value.tag, new_value.AsSlice(), type);
+}
+
+void UpdateUserValue(
+    UserBoundaryValues* values, const UserBoundaryValue& new_value, UpdateUserValueType type) {
+  UpdateUserValue(values, new_value.tag, new_value.AsSlice(), type);
+}
+
+void UpdateUserValues(
+    const UserBoundaryValueRefs& source, UpdateUserValueType type, UserBoundaryValues* values) {
+  for (const auto& user_value : source) {
+    UpdateUserValue(values, user_value, type);
+  }
+}
+
+void UpdateUserValues(
+    const UserBoundaryValues& source, UpdateUserValueType type, UserBoundaryValues* values) {
+  for (const auto& user_value : source) {
+    UpdateUserValue(values, user_value, type);
+  }
+}
+
+void UpdateFrontiers(UserFrontiersPtr& frontiers, const UserFrontiers& update) {
+  if (frontiers) {
+    frontiers->MergeFrontiers(update);
+  } else {
+    frontiers = update.Clone();
+  }
 }
 
 } // namespace rocksdb

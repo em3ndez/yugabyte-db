@@ -63,6 +63,7 @@ export const RESET_PROVIDER_BOOTSTRAP = 'RESET_PROVIDER_BOOTSTRAP';
 
 export const LIST_ACCESS_KEYS = 'LIST_ACCESS_KEYS';
 export const LIST_ACCESS_KEYS_RESPONSE = 'LIST_ACCESS_KEYS_RESPONSE';
+export const LIST_ACCESS_KEYS_REQUEST_COMPLETED = 'LIST_ACCESS_KEYS_REQUEST_COMPLETED';
 
 export const GET_EBS_TYPE_LIST = 'GET_EBS_TYPES';
 export const GET_EBS_TYPE_LIST_RESPONSE = 'GET_EBS_TYPES_RESPONSE';
@@ -94,6 +95,9 @@ export const BOOTSTRAP_PROVIDER_RESPONSE = 'BOOTSTRAP_PROVIDER_RESPONSE';
 
 export const DELETE_INSTANCE = 'DELETE_INSTANCE';
 export const DELETE_INSTANCE_RESPONSE = 'DELETE_INSTANCE_RESPONSE';
+
+export const CHANGE_NODE_INSTANCE_STATUS = 'CHANGE_NODE_INSTANCE_STATUS';
+export const CHANGE_NODE_INSTANCE_STATUS_RESPONSE = 'CHANGE_NODE_INSTANCE_STATUS_RESPONSE';
 
 export const PRECHECK_INSTANCE = 'PRECHECK_INSTANCE';
 export const PRECHECK_INSTANCE_RESPONSE = 'PRECHECK_INSTANCE_RESPONSE';
@@ -272,6 +276,13 @@ export function createRegion(providerUUID, formValues) {
     type: CREATE_REGION,
     payload: request
   };
+}
+
+export function getKubeConfig() {
+  const customerUUID = localStorage.getItem('customerId');
+
+  const url = `${ROOT_URL}/customers/${customerUUID}/providers/suggested_kubernetes_config`;
+  return axios.get(url);
 }
 
 export function createRegionResponse(result) {
@@ -521,6 +532,12 @@ export function listAccessKeysResponse(response) {
   };
 }
 
+export function listAccessKeysReqCompleted() {
+  return {
+    type: LIST_ACCESS_KEYS_REQUEST_COMPLETED
+  };
+}
+
 export function getEBSTypeList() {
   const request = axios.get(`${ROOT_URL}/metadata/ebs_types`);
   return {
@@ -680,6 +697,22 @@ export function deleteInstance(providerUUID, instanceIP) {
 export function deleteInstanceResponse(response) {
   return {
     type: DELETE_INSTANCE_RESPONSE,
+    payload: response
+  };
+}
+
+export function changeNodeInstanceStatus(providerUUID, instanceIP, nodeInstanceStatus) {
+  const uri = `${getProviderEndpoint(providerUUID)}/instances/${instanceIP}/state`;
+  const request = axios.put(uri, nodeInstanceStatus);
+  return {
+    type: CHANGE_NODE_INSTANCE_STATUS,
+    payload: request
+  };
+}
+
+export function changeNodeInstanceStatusResponse(response) {
+  return {
+    type: CHANGE_NODE_INSTANCE_STATUS_RESPONSE,
     payload: response
   };
 }

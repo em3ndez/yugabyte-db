@@ -2,106 +2,121 @@
 title: Create a multi-region universe
 headerTitle: Create a multi-region universe
 linkTitle: Multi-region universe
-description: Create a YugabyteDB universe that spans multiple geographic regions using Yugabyte Platform.
+description: Create a YugabyteDB universe that spans multiple geographic regions.
 menu:
-  stable:
+  stable_yugabyte-platform:
     identifier: create-universe-multi-region
     parent: create-deployments
     weight: 30
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
-This section will describe how to create a universe spanning multiple geographic regions. In this example, we are first going to deploy a universe across Oregon (US-West), Northern Virginia (US-East) and Tokyo (Asia-Pacific). Once ready, we are going to connect to each node and perform the following:
+YugabyteDB Anywhere allows you to create a universe spanning multiple geographic regions.
 
-- Run the CassandraKeyValue workload
-- Write data with global consistency (higher latencies because we chose nodes in far away regions)
-- Read data from the local data center (low latency timeline consistent reads)
-- Verify the latencies of the overall app
+For example, you can deploy a universe across Oregon (US-West), South Carolina (US-East), and Tokyo (Asia-Northeast).
 
-## 1. Create the universe
+## Prerequisites
 
-We are going to enter the following values to create a multi-region universe on [GCP](../../configure-yugabyte-platform/set-up-cloud-provider/gcp) provider. Click **Create Universe** and enter the following intent.
+Before you start creating a universe, ensure that you have created a provider configuration as described in [Create provider configurations](../../configure-yugabyte-platform/).
 
-- Enter a universe name: **helloworld2**
-- Enter the set of regions: **Oregon**, **Northern Virginia**, **Tokyo**
-- Change instance type: **n1-standard-8**
-- Add the following flag for Master and T-Server: `leader_failure_max_missed_heartbeat_periods = 10`. Because the data is globally replicated, RPC latencies are higher. We use this flag to increase the failure detection interval in such a higher RPC latency deployment. See the screenshot below.
+## Create a universe
 
-Click **Create**.
+After you have created a provider configuration, such as, for example [Google Cloud Provider](../../configure-yugabyte-platform/gcp/) (GCP), navigate to **Universes**, click **Create Universe**, and enter the following sample values:
 
-![Create multi-region universe on GCP](/images/ee/multi-region-create-universe.png)
+- In the **Name** field, enter **helloworld2**.
 
-## 2. Examine the universe
+- In the **Provider** field, select the cloud provider you configured.
 
-Wait for the universe to get created. Note that Yugabyte Platform can manage multiple universes as shown below.
+- Use the **Regions** field to select the regions where you want to deploy nodes.
 
-![Multiple universes in Yugabyte Platform console](/images/ee/multi-region-multiple-universes.png)
+- Choose the **Linux version** to be provisioned on the nodes of the universe.
 
-Once the universe is created, you should see something like the screenshot below in the universe overview.
+- In the **Instance Type** field, select a suitable instance type; these will vary depending on the cloud provider.
 
-![Nodes for a Pending Universe](/images/ee/multi-region-universe-overview.png)
+  ![Create multi-region universe1 on GCP](/images/yp/create-deployments/create-multi-region-uni1.png)
 
-### Universe nodes
+- Provide any other desired settings for [Security Configurations](../create-universe-multi-zone/#security-configurations), and [Advanced Configuration](../create-universe-multi-zone/#advanced-configuration).
 
-You can browse to the **Nodes** tab of the universe to see a list of nodes. Note that the nodes are across the different geographic regions.
+- For **G-Flags**, click **Add Flags**, **Add to Master**, and add the following flags for Master:
 
-![Nodes for a Pending Universe](/images/ee/multi-region-universe-nodes.png)
+  ```properties
+  leader_failure_max_missed_heartbeat_periods 5
+  raft_heartbeat_interval_ms 1500
+  leader_lease_duration_ms 6000
+  ```
 
-Browse to the cloud provider's instances page. In this example, since we are using Google Cloud Platform as the cloud provider, browse to `Compute Engine` -> `VM Instances` and search for instances that have `helloworld2` in their name. You should see something as follows. It is easy to verify that the instances were created in the appropriate regions.
+  And add the following flags for T-Server:
 
-![Instances for a Pending Universe](/images/ee/multi-region-universe-gcp-instances.png)
+  ```properties
+  leader_failure_max_missed_heartbeat_periods 5
+  raft_heartbeat_interval_ms 1500
+  leader_lease_duration_ms 6000
+  ```
 
-## 3. Run a global application
+  Note that because the data is globally replicated, RPC latencies are higher; these flags are used for increasing the failure detection interval in a higher RPC latency deployment.
 
-In this section, we are going to connect to each node and perform the following:
+  ![Create multi-region universe on GCP](/images/yp/create-deployments/create-multi-region-uni2.png)
 
-- Run the `CassandraKeyValue` workload
-- Write data with global consistency (higher latencies because we chose nodes in far away regions)
-- Read data from the local data center (low latency, timeline-consistent reads)
+- Click **Create**.
 
-Browse to the **Nodes** tab to find the nodes and click **Connect**. This should bring up a dialog showing how to connect to the nodes.
+Note that all YugabyteDB universes created using YugabyteDB Anywhere have the YB Controller automatically installed on their nodes. The YB Controller works in the background to speed up backup and restore of universes.
 
-![Multi-region universe nodes](/images/ee/multi-region-universe-nodes-connect.png)
+## Examine the universe
+
+When the universe is created, you can access it via **Universes** or **Dashboard**.
+
+To see a list of nodes that belong to this universe, select **Nodes**. Notice that the nodes are distributed across geographic regions.
+
+You can also verify that the instances were created in the appropriate regions by clicking on the node name to access the cloud provider's instances page. For GCP, you navigate to **Compute Engine > VM Instances** and search for instances that contain `helloworld2` in their name.
+
+## Run a global application
+
+Before you can run a workload, you need to connect to each node of your universe and perform the following:
+
+- Run the `CassandraKeyValue` workload.
+- Write data with global consistency (higher latencies are expected).
+- Read data from the local data center (low latency timeline consistent reads).
+
+The first step is to navigate to **Nodes**, click **Connect**, and then use the **Connect** dialog to provide the required endpoints.
 
 ### Connect to the nodes
 
-Create three Bash terminals and connect to each of the nodes by running the commands shown in the popup above. We are going to start a workload from each of the nodes. Below is a screenshot of the terminals.
+You start by creating three Bash terminals. Then, for each node, click its corresponding **Actions > Connect**, copy the sudo command displayed in the **Access your node** dialog, and paste it into a Bash terminal.
+
+<!--
+
+, as per the following illustration:
 
 ![Multi-region universe node terminals](/images/ee/multi-region-universe-node-shells.png)
 
-On each of the terminals, do the following.
+-->
 
-1. Install Java.
+With the goal of starting a workload from each node, perform the following on every terminal:
 
-```sh
-$ sudo yum install java-1.8.0-openjdk.x86_64 -y
-```
+1. Install Java by executing the following command:
 
-2. Switch to the `yugabyte` user.
+    ```sh
+    sudo yum install java-1.8.0-openjdk.x86_64 -y
+    ```
 
-```sh
-$ sudo su - yugabyte
-```
+1. Switch to the `yugabyte` user by executing the following command:
 
-3. Export the `YCQL_ENDPOINTS` environment variable.
+    ```sh
+    sudo su - yugabyte
+    ```
 
-Export an environment variable telling us the IP addresses for nodes in the cluster. Browse to the **Universe Overview** tab in Yugabyte Platform console and click **YCQL Endpoints**. A new tab opens displaying a list of IP addresses.
+1. Export the `YCQL_ENDPOINTS` environment variable (IP addresses for nodes in the cluster) by navigating to **Nodes**, clicking **Connect**, then using the **Connect** dialog to copy endpoints under the relevant category, and finally pasting this into a Shell variable on the database node `yb-dev-helloworld2-n1` to which you are connected, as per the following example:
 
-![YCQL end points](/images/ee/multi-zone-universe-ycql-endpoints.png)
-
-Export this into a shell variable on the database node `yb-dev-helloworld1-n1` you connected to. Remember to replace the IP addresses below with those shown in the Yugabyte Platform console.
-
-```sh
-$ export YCQL_ENDPOINTS="10.138.0.3:9042,10.138.0.4:9042,10.138.0.5:9042"
-```
+    ```shell
+    export YCQL_ENDPOINTS="10.138.0.3:9042,10.138.0.4:9042,10.138.0.5:9042"
+    ```
 
 ### Run the workload
 
-Run the following command on each of the nodes. Remember to substitute `<REGION>` with the region code for each node.
+Run the following command on each of the nodes, substituting *REGION* with the region code for each node:
 
 ```sh
-$ java -jar /home/yugabyte/tserver/java/yb-sample-apps.jar \
+java -jar /home/yugabyte/tserver/java/yb-sample-apps.jar \
             --workload CassandraKeyValue \
             --nodes $YCQL_ENDPOINTS \
             --num_threads_write 1 \
@@ -111,28 +126,13 @@ $ java -jar /home/yugabyte/tserver/java/yb-sample-apps.jar \
             --with_local_dc <REGION>
 ```
 
-You can find the region codes for each of the nodes by browsing to the **Nodes** tab for this universe in the Yugabyte Platform console. A screenshot is shown below. In this example, the value for `<REGION>` is:
+You can find the region code of each node by navigating to **Nodes** and looking under the **CLOUD INFO** column: the first part before the slash indicates the region. For example, `us-west1`.
 
-- `us-east4` for node `yb-dev-helloworld2-n1`
-- `asia-northeast1` for node `yb-dev-helloworld2-n2`
-- `us-west1` for node `yb-dev-helloworld2-n3`
+## Check the performance
 
-![Region Codes For Universe Nodes](/images/ee/multi-region-universe-node-regions.png)
-
-## 4. Check the performance characteristics of the app
-
-Recall that we expect the app to have the following characteristics based on its deployment configuration:
+The application is expected to have the following characteristics based on its deployment configuration:
 
 - Global consistency on writes, which would cause higher latencies in order to replicate data across multiple geographic regions.
-- Low latency reads from the nearest data center, which offers timeline consistency (similar to async replication).
+- Low latency reads from the nearest data center, which offers timeline consistency (similar to asynchronous replication).
 
-Let us verify this by browse to the **Metrics** tab of the universe in the Yugabyte Platform console to see the overall performance of the app. It should look similar to the screenshot below.
-
-![YCQL Load Metrics](/images/ee/multi-region-read-write-metrics.png)
-
-Note the following:
-
-* Write latency is **139ms** because it has to replicate data to a quorum of nodes across multiple geographic regions.
-* Read latency is **0.23 ms** across all regions. Note that the app is performing **100K reads/sec** across the regions (about 33K reads/sec in each region).
-
-It is possible to repeat the same experiment with the `RedisKeyValue` app and get similar results.
+You can verify this by navigating to **Metrics** and checking the overall performance of the application.

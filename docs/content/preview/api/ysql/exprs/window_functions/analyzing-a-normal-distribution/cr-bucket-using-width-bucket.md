@@ -4,12 +4,11 @@ linkTitle: cr_bucket_using_width_bucket.sql
 headerTitle: cr_bucket_using_width_bucket.sql
 description: cr_bucket_using_width_bucket.sql - Part of the code kit for the "Analyzing a normal distribution" section within the YSQL window functions documentation.
 menu:
-  preview:
+  preview_api:
     identifier: cr-bucket-using-width-bucket
     parent: analyzing-a-normal-distribution
     weight: 70
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 Save this script as `cr_bucket_using_width_bucket.sql`.
 ```plpgsql

@@ -1,14 +1,14 @@
 // Copyright (c) YugaByte, Inc.
 
-import React, { Component } from 'react';
+import { Component } from 'react';
 import moment from 'moment';
-import { YBFormattedNumber } from '../../common/descriptors';
+import { YBFormattedNumber, YBResourceCount } from '../../common/descriptors';
 import { getPromiseState } from '../../../utils/PromiseUtils';
 import { YBLoading } from '../../common/indicators';
-import { YBResourceCount } from '../../common/descriptors';
+
 import './HighlightedStatsPanel.scss';
 import { isDefinedNotNull, isNonEmptyObject } from '../../../utils/ObjectUtils';
-import { getUniverseNodes } from '../../../utils/UniverseUtils';
+import { getUniverseNodeCount } from '../../../utils/UniverseUtils';
 import { isAvailable } from '../../../utils/LayoutUtils';
 
 export default class HighlightedStatsPanel extends Component {
@@ -19,6 +19,7 @@ export default class HighlightedStatsPanel extends Component {
     } = this.props;
     let numNodes = 0;
     let totalCost = 0;
+    let numOfCores = 0;
     if (getPromiseState(universeList).isLoading()) {
       return <YBLoading />;
     }
@@ -29,7 +30,8 @@ export default class HighlightedStatsPanel extends Component {
     if (universeList.data) {
       universeList.data.forEach(function (universeItem) {
         if (isNonEmptyObject(universeItem.universeDetails)) {
-          numNodes += getUniverseNodes(universeItem.universeDetails.clusters);
+          numNodes += getUniverseNodeCount(universeItem.universeDetails.nodeDetailsSet);
+          numOfCores += universeItem.resources.numCores;
         }
         if (isDefinedNotNull(universeItem.pricePerHour)) {
           totalCost += universeItem.pricePerHour * 24 * moment().daysInMonth();
@@ -51,6 +53,7 @@ export default class HighlightedStatsPanel extends Component {
           size={isDefinedNotNull(universeList.data) ? universeList.data.length : 0}
         />
         <YBResourceCount kind="Nodes" size={numNodes} />
+        <YBResourceCount kind="Cores" size={numOfCores} />
         {isAvailable(currentCustomer.data.features, 'costs.stats_panel') && (
           <YBResourceCount kind="Per Month" size={formattedCost} />
         )}

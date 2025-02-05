@@ -11,8 +11,7 @@
 // under the License.
 //
 
-#ifndef YB_COMMON_PGSQL_ERROR_H
-#define YB_COMMON_PGSQL_ERROR_H
+#pragma once
 
 #include "yb/common/pgsql_protocol.pb.h"
 
@@ -85,6 +84,41 @@ struct RelationOidTag : IntegralErrorTag<unsigned int> {
 
 typedef StatusErrorCodeImpl<RelationOidTag> RelationOid;
 
-} // namespace yb
+struct AuxilaryMessageTag : StringBackedErrorTag {
+  // It is part of the wire protocol and should not be changed once released.
+  static constexpr uint8_t kCategory = 21;
 
-#endif // YB_COMMON_PGSQL_ERROR_H
+  static std::string ToMessage(const Value& value) {
+    return value;
+  }
+
+  static std::string DecodeToString(const uint8_t* source) {
+    return ToMessage(Decode(source));
+  }
+};
+
+typedef StatusErrorCodeImpl<AuxilaryMessageTag> AuxilaryMessage;
+
+struct PgsqlMessageArgsTag : StringVectorBackedErrorTag {
+  // It is part of the wire protocol and should not be changed once released.
+  static constexpr uint8_t kCategory = 22;
+
+  static std::string ToMessage(const Value& value) {
+    return Format("Pgsql Message Arguments: $0", value);
+  }
+};
+
+typedef yb::StatusErrorCodeImpl<PgsqlMessageArgsTag> PgsqlMessageArgs;
+
+struct FuncNameTag : StringBackedErrorTag {
+  // It is part of the wire protocol and should not be changed once released.
+  static constexpr uint8_t kCategory = 23;
+
+  static std::string ToMessage(const Value& value) {
+    return Format("Function: $0", value);
+  }
+};
+
+typedef yb::StatusErrorCodeImpl<FuncNameTag> FuncName;
+
+} // namespace yb

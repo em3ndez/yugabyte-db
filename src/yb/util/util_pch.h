@@ -11,6 +11,7 @@
 #include <float.h>
 #include <ifaddrs.h>
 #include <inttypes.h>
+#include <jwt-cpp/jwt.h>
 #include <math.h>
 #include <netinet/in.h>
 #include <openssl/bn.h>
@@ -47,6 +48,7 @@
 #include <cfloat>
 #include <chrono>
 #include <cmath>
+#include <compare>
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
@@ -54,6 +56,7 @@
 #include <cstring>
 #include <ctime>
 #include <deque>
+#include <filesystem>
 #include <fstream>
 #include <functional>
 #include <future>
@@ -68,7 +71,7 @@
 #include <mutex>
 #include <new>
 #include <numeric>
-#include <ostream>
+#include <optional>
 #include <queue>
 #include <random>
 #include <regex>
@@ -77,6 +80,7 @@
 #include <sstream>
 #include <stack>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <tuple>
 #include <type_traits>
@@ -86,7 +90,9 @@
 #include <vector>
 
 #include <boost/algorithm/string.hpp>
+#include <boost/algorithm/string/classification.hpp>
 #include <boost/algorithm/string/predicate.hpp>
+#include <boost/algorithm/string/split.hpp>
 #include <boost/algorithm/string/trim.hpp>
 #include <boost/archive/iterators/base64_from_binary.hpp>
 #include <boost/archive/iterators/binary_from_base64.hpp>
@@ -102,6 +108,7 @@
 #include <boost/container/small_vector.hpp>
 #include <boost/container/stable_vector.hpp>
 #include <boost/core/demangle.hpp>
+#include <boost/core/enable_if.hpp>
 #include <boost/date_time/c_local_time_adjustor.hpp>
 #include <boost/date_time/local_time/local_time.hpp>
 #include <boost/function.hpp>
@@ -122,6 +129,7 @@
 #include <boost/optional/optional.hpp>
 #include <boost/optional/optional_fwd.hpp>
 #include <boost/preprocessor/cat.hpp>
+#include <boost/preprocessor/config/config.hpp>
 #include <boost/preprocessor/expr_if.hpp>
 #include <boost/preprocessor/facilities/apply.hpp>
 #include <boost/preprocessor/if.hpp>
@@ -133,6 +141,7 @@
 #include <boost/preprocessor/variadic/to_seq.hpp>
 #include <boost/ptr_container/ptr_vector.hpp>
 #include <boost/range/adaptor/indirected.hpp>
+#include <boost/range/algorithm_ext/erase.hpp>
 #include <boost/range/iterator_range.hpp>
 #include <boost/signals2/dummy_mutex.hpp>
 #include <boost/smart_ptr/detail/yield_k.hpp>
@@ -140,8 +149,10 @@
 #include <boost/static_assert.hpp>
 #include <boost/system/error_code.hpp>
 #include <boost/tti/has_type.hpp>
+#include <boost/type_traits.hpp>
 #include <boost/type_traits/is_const.hpp>
 #include <boost/type_traits/make_signed.hpp>
+#include <boost/unordered_map.hpp>
 #include <boost/utility/binary.hpp>
 #include <boost/uuid/detail/sha1.hpp>
 #include <boost/uuid/nil_generator.hpp>

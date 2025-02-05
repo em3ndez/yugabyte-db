@@ -13,14 +13,15 @@
 
 package org.yb.pgsql;
 
-import com.google.common.collect.Lists;
+import static org.yb.AssertionWrappers.*;
+import static org.junit.Assume.*;
+
 import org.hamcrest.CoreMatchers;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.yb.util.MiscUtil.ThrowingRunnable;
-import org.yb.util.YBTestRunnerNonTsanOnly;
+import org.yb.YBTestRunner;
 
 import java.sql.Connection;
 import java.sql.ResultSet;
@@ -29,27 +30,16 @@ import java.sql.Statement;
 import java.sql.Timestamp;
 import java.util.Calendar;
 import java.util.Date;
-import java.util.List;
 import java.util.Map;
-import java.util.Set;
-import java.util.TreeMap;
-import java.util.TreeSet;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 
-import static org.yb.AssertionWrappers.assertEquals;
-import static org.yb.AssertionWrappers.assertFalse;
-import static org.yb.AssertionWrappers.assertNotEquals;
-import static org.yb.AssertionWrappers.assertThat;
-import static org.yb.AssertionWrappers.assertTrue;
-import static org.yb.AssertionWrappers.fail;
-
 /**
  * Tests for PostgreSQL RBAC.
  */
-@RunWith(value = YBTestRunnerNonTsanOnly.class)
+@RunWith(value = YBTestRunner.class)
 public class TestPgAuthorization extends BasePgSQLTest {
   private static final Logger LOG = LoggerFactory.getLogger(TestPgAuthorization.class);
 
@@ -66,6 +56,14 @@ public class TestPgAuthorization extends BasePgSQLTest {
   protected Map<String, String> getTServerFlags() {
     Map<String, String> flags = super.getTServerFlags();
     flags.put("ysql_hba_conf", CUSTOM_PG_HBA_CONFIG);
+    if(isTestRunningWithConnectionManager()) {
+       flags.put("allowed_preview_flags_csv",
+                "ysql_conn_mgr_version_matching,"
+                + "ysql_conn_mgr_version_matching_connect_higher_version");
+      flags.put("enable_ysql_conn_mgr", "true");
+      flags.put("ysql_conn_mgr_version_matching", "true");
+      flags.put("ysql_conn_mgr_version_matching_connect_higher_version", "true");
+    }
     return flags;
   }
 
@@ -86,6 +84,8 @@ public class TestPgAuthorization extends BasePgSQLTest {
       statement.execute("CREATE ROLE su LOGIN SUPERUSER");
       statement.execute("CREATE ROLE some_role LOGIN");
       statement.execute("CREATE ROLE some_group ROLE some_role");
+      statement.execute("CREATE ROLE yb_db_admin_member LOGIN");
+      statement.execute("GRANT yb_db_admin TO yb_db_admin_member");
     }
 
     try (Connection connection = getConnectionBuilder().withUser("su").connect();
@@ -172,6 +172,7 @@ public class TestPgAuthorization extends BasePgSQLTest {
       // Non-superuser cannot set session authorization to other roles.
       runInvalidQuery(statement, "SET SESSION AUTHORIZATION some_group", PERMISSION_DENIED);
       runInvalidQuery(statement, "SET SESSION AUTHORIZATION unprivileged", PERMISSION_DENIED);
+      runInvalidQuery(statement, "SET SESSION AUTHORIZATION yb_db_admin", PERMISSION_DENIED);
 
       assertEquals("some_role", getSessionUser(statement));
       assertEquals("some_role", getCurrentUser(statement));
@@ -186,6 +187,22 @@ public class TestPgAuthorization extends BasePgSQLTest {
 
       assertEquals("some_role", getSessionUser(statement));
       assertEquals("some_role", getCurrentUser(statement));
+    }
+
+    // Test yb_db_admin members can set session authorization.
+    try (Connection connection = getConnectionBuilder().withUser("yb_db_admin_member").connect();
+         Statement statement = connection.createStatement()) {
+      // Users have been reset, since this is a new session.
+      statement.execute("SET SESSION AUTHORIZATION unprivileged");
+      assertEquals("unprivileged", getSessionUser(statement));
+      assertEquals("unprivileged", getCurrentUser(statement));
+    }
+
+    // Test yb_db_admin members cannot set session authorization to a superuser.
+    try (Connection connection = getConnectionBuilder().withUser("yb_db_admin_member").connect();
+        Statement statement = connection.createStatement()) {
+      // yb_db_admin members cannot set session authorization to superuser role.
+      runInvalidQuery(statement, "SET SESSION AUTHORIZATION su", PERMISSION_DENIED);
     }
 
     final AtomicInteger state = new AtomicInteger(0);
@@ -347,6 +364,11 @@ public class TestPgAuthorization extends BasePgSQLTest {
 
   @Test
   public void testAttributes() throws Exception {
+    // (DB-10760) Role OID-based pool design is needed in addition to waiting
+    // for connection count-related statistics for this test to pass when
+    // Connection Manager is enabled. Skipping this test temporarily.
+    assumeFalse(BasePgSQLTest.RECREATE_USER_SUPPORT_NEEDED, isTestRunningWithConnectionManager());
+
     // NOTE: The INHERIT attribute is tested separately in testMembershipInheritance.
     try (Statement statement = connection.createStatement()) {
       statement.execute("CREATE ROLE unprivileged");
@@ -434,7 +456,7 @@ public class TestPgAuthorization extends BasePgSQLTest {
         runInvalidQuery(
             statement,
             "ALTER ROLE su LOGIN",
-            "must be superuser to alter superusers"
+            "must be superuser to alter superuser roles or change superuser attribute"
         );
       });
 
@@ -486,7 +508,11 @@ public class TestPgAuthorization extends BasePgSQLTest {
 
       ConnectionBuilder limitRoleUserConnBldr = getConnectionBuilder().withUser("limit_role");
       try (Connection ignored1 = limitRoleUserConnBldr.connect()) {
+        // TODO(GH #18886) While running the test on ysql conn mgr port, add a wait for
+        // ysql conn mgr stats to get updated to check if conn limit is exceeded or not.
         try (Connection connection2 = limitRoleUserConnBldr.connect()) {
+          // TODO(GH #18886) While running the test on ysql conn mgr port, add a wait for
+          // ysql conn mgr stats to get updated to check if conn limit is exceeded or not.
           // Third concurrent connection causes error.
           try (Connection ignored3 = limitRoleUserConnBldr.connect()) {
             fail("Expected third login attempt to fail");
@@ -499,7 +525,8 @@ public class TestPgAuthorization extends BasePgSQLTest {
 
           // Close second connection.
           connection2.close();
-
+          // TODO(GH #18886) While running the test on ysql conn mgr port, add a wait for
+          // ysql conn mgr stats to get updated to check if conn limit is exceeded or not.
           // New connection now succeeds.
           try (Connection ignored2 = limitRoleUserConnBldr.connect()) {
             // No-op.
@@ -2721,6 +2748,7 @@ public class TestPgAuthorization extends BasePgSQLTest {
          Statement statement1 = connection1.createStatement()) {
 
       statement1.execute("CREATE ROLE test_role LOGIN");
+      statement1.execute("CREATE ROLE test_role2 LOGIN");
 
       try (Connection connection2 = getConnectionBuilder().withTServer(1)
           .withUser("test_role").connect();
@@ -2728,6 +2756,7 @@ public class TestPgAuthorization extends BasePgSQLTest {
         runInvalidQuery(statement2, "CREATE ROLE tr", PERMISSION_DENIED);
         runInvalidQuery(statement2, "CREATE DATABASE tdb", PERMISSION_DENIED);
         runInvalidQuery(statement2, "CREATE ROLE su SUPERUSER", "must be superuser");
+        runInvalidQuery(statement2, "SET SESSION AUTHORIZATION test_role2",PERMISSION_DENIED);
 
         // Grant CREATEROLE from connection 1.
         statement1.execute("ALTER ROLE test_role CREATEROLE");
@@ -2738,6 +2767,7 @@ public class TestPgAuthorization extends BasePgSQLTest {
         statement2.execute("CREATE ROLE tr");
         runInvalidQuery(statement2, "CREATE DATABASE tdb", PERMISSION_DENIED);
         runInvalidQuery(statement2, "CREATE ROLE su SUPERUSER", "must be superuser");
+        runInvalidQuery(statement2, "SET SESSION AUTHORIZATION test_role2", PERMISSION_DENIED);
 
         // Grant CREATEDB from connection 1.
         statement1.execute("ALTER ROLE test_role CREATEDB");
@@ -2747,6 +2777,7 @@ public class TestPgAuthorization extends BasePgSQLTest {
         // New attribute observed on connection 2 after heartbeat.
         statement2.execute("CREATE DATABASE tdb");
         runInvalidQuery(statement2, "CREATE ROLE su SUPERUSER", "must be superuser");
+        runInvalidQuery(statement2, "SET SESSION AUTHORIZATION test_role2", PERMISSION_DENIED);
 
         // Grant SUPERUSER from connection 1.
         statement1.execute("ALTER ROLE test_role SUPERUSER");
@@ -2755,9 +2786,22 @@ public class TestPgAuthorization extends BasePgSQLTest {
 
         // New attribute observed on connection 2 after heartbeat.
         statement2.execute("CREATE ROLE su SUPERUSER");
+        runInvalidQuery(statement2, "SET SESSION AUTHORIZATION test_role2", PERMISSION_DENIED);
 
         // "test_role" still cannot set their session authorization, despite having
         // superuser privileges.
+        runInvalidQuery(statement2, "SET SESSION AUTHORIZATION su", PERMISSION_DENIED);
+
+        // Grant yb_db_admin from connection 1.
+        statement1.execute("GRANT yb_db_admin TO test_role");
+
+        waitForTServerHeartbeat();
+
+        // New attribute observed on connection 2 after heartbeat.
+        statement2.execute("SET SESSION AUTHORIZATION test_role2");
+
+        // "test_role" still cannot set their session authorization to a superuser,
+        // despite having yb_db_admin privileges.
         runInvalidQuery(statement2, "SET SESSION AUTHORIZATION su", PERMISSION_DENIED);
       }
     }
@@ -2809,6 +2853,9 @@ public class TestPgAuthorization extends BasePgSQLTest {
 
   @Test
   public void testConnectionLimitDecreasedMidSession() throws Exception {
+    // (DB-12741) Skip this test if running with connection manager.
+    assumeFalse(BasePgSQLTest.INCORRECT_CONN_STATE_BEHAVIOR, isTestRunningWithConnectionManager());
+
     try (Connection connection1 = getConnectionBuilder().withTServer(0).connect();
          Statement statement1 = connection1.createStatement()) {
 
@@ -2877,6 +2924,14 @@ public class TestPgAuthorization extends BasePgSQLTest {
 
   @Test
   public void testMembershipRevokedInsideGroup() throws Exception {
+
+    // The test fails with Connection Manager enabled as the role GUC variable
+    // is replayed at the beginning of every transaction boundary. This test
+    // requires that the role GUC variable is not changed even after revoking
+    // membership from a role group in order to succeed, which would not be the
+    // case when Connection Manager is enabled.
+    assumeFalse(BasePgSQLTest.GUC_REPLAY_AFFECTS_CONN_STATE, isTestRunningWithConnectionManager());
+
     try (Connection connection1 = getConnectionBuilder().withTServer(0).connect();
          Statement statement1 = connection1.createStatement()) {
       statement1.execute("CREATE ROLE test_role LOGIN");
@@ -3171,54 +3226,142 @@ public class TestPgAuthorization extends BasePgSQLTest {
     }
   }
 
-  private static void withRoles(
-      Statement statement,
-      Set<String> roles,
-      ThrowingRunnable runnable
-  ) throws Exception {
-    for (String role : roles) {
-      withRole(statement, role, runnable);
+  @Test
+  public void testLongPasswords() throws Exception {
+    try (Statement statement = connection.createStatement()) {
+      statement.execute("CREATE ROLE unprivileged");
+
+      StringBuilder builder = new StringBuilder(5000);
+      for (int i = 0; i < 5000; i++) {
+          builder.append("a");
+      }
+      String passwordWithLen5000 = builder.toString();
+      // "md5" + md5_hash("aaa..5000 times" + "pass_role").
+      // The role name "pass_role" is used as the salt.
+      String md5HashOfPassword = "md57a389663c1d96e12c7e25948d9325894";
+
+      /*
+       * PASSWORD
+       */
+
+      // Create role with password.
+      statement.execute("DROP ROLE IF EXISTS pass_role");
+      statement.execute("SET password_encryption = 'md5'");
+      statement.execute(
+          String.format("CREATE ROLE pass_role LOGIN PASSWORD '%s'", passwordWithLen5000));
+
+      // Password is encrypted, despite not being specified.
+      ResultSet password_result = statement.executeQuery(
+          "SELECT rolpassword FROM pg_authid WHERE rolname='pass_role'");
+      password_result.next();
+      String password_hash = password_result.getString(1);
+      // We need an exact equals check here because it is not enough to just check that the long
+      // passwords work for login. It could happen that we have the same truncation during role
+      // creation as well as login. In that case, a long password will still work since we will
+      // truncate to the same length and calculate the hash in both the cases.
+      // Example: If password is "abcd" and the stored password gets truncated to "ab", the login
+      // will still work if we have the same truncation during login.
+      assertEquals(password_hash, md5HashOfPassword);
+
+      ConnectionBuilder passRoleUserConnBldr = getConnectionBuilder().withUser("pass_role");
+
+      // Can login with password.
+      try (Connection ignored = passRoleUserConnBldr.withPassword(passwordWithLen5000).connect()) {
+        // No-op.
+      }
+
+      // Cannot login without password.
+      try (Connection ignored = passRoleUserConnBldr.connect()) {
+        fail("Expected login attempt to fail");
+      } catch (SQLException sqle) {
+        assertThat(
+            sqle.getMessage(),
+            CoreMatchers.containsString("no password was provided")
+        );
+      }
+
+      // Cannot login with incorrect password.
+      try (Connection ignored = passRoleUserConnBldr.withPassword("wrong").connect()) {
+        fail("Expected login attempt to fail");
+      } catch (SQLException sqle) {
+        assertThat(
+            sqle.getMessage(),
+            CoreMatchers.containsString("password authentication failed for user \"pass_role\"")
+        );
+      }
+
+      // Password does not imply login.
+      statement.execute("DROP ROLE IF EXISTS pass_role");
+      statement.execute("CREATE ROLE pass_role PASSWORD 'pass1'");
+      try (Connection ignored = passRoleUserConnBldr.withPassword("pass1").connect()) {
+        fail("Expected login attempt to fail");
+      } catch (SQLException sqle) {
+        assertThat(
+            sqle.getMessage(),
+            CoreMatchers.containsString("role \"pass_role\" is not permitted to log in")
+        );
+      }
+
+      /*
+       * ENCRYPTED PASSWORD
+       */
+
+      // Create role with encrypted password.
+      statement.execute("DROP ROLE IF EXISTS pass_role");
+      statement.execute(String.format(
+          "CREATE ROLE pass_role LOGIN ENCRYPTED PASSWORD '%s'", passwordWithLen5000));
+
+      // Password is encrypted.
+      password_result = statement.executeQuery(
+          "SELECT rolpassword FROM pg_authid WHERE rolname='pass_role'");
+      password_result.next();
+      password_hash = password_result.getString(1);
+      // We need an exact equals check here because it is not enough to just check that the long
+      // passwords work for login. It could happen that we have the same truncation during role
+      // creation as well as login. In that case, a long password will still work since we will
+      // truncate to the same length and calculate the hash in both the cases.
+      // Example: If password is "abcd" and the stored password gets truncated to "ab", the login
+      // will still work if we have the same truncation during login.
+      assertEquals(password_hash, md5HashOfPassword);
+
+      // Can login with password.
+      try (Connection ignored = passRoleUserConnBldr.withPassword(passwordWithLen5000).connect()) {
+        // No-op.
+      }
+
+      // Cannot login without password.
+      try (Connection ignored = passRoleUserConnBldr.connect()) {
+        fail("Expected login attempt to fail");
+      } catch (SQLException sqle) {
+        assertThat(
+            sqle.getMessage(),
+            CoreMatchers.containsString("no password was provided")
+        );
+      }
+
+      // Cannot login with incorrect password.
+      try (Connection ignored = passRoleUserConnBldr.withPassword("wrong").connect()) {
+        fail("Expected login attempt to fail");
+      } catch (SQLException sqle) {
+        assertThat(
+            sqle.getMessage(),
+            CoreMatchers.containsString("password authentication failed for user \"pass_role\"")
+        );
+      }
     }
   }
 
-  private static void withRole(
-      Statement statement,
-      String role,
-      ThrowingRunnable runnable
-  ) throws Exception {
-    String sessionUser = getSessionUser(statement);
-
-    statement.execute(String.format("SET SESSION AUTHORIZATION %s", role));
-    runnable.run();
-    statement.execute(String.format("SET SESSION AUTHORIZATION %s", sessionUser));
-  }
-
-  private static class RoleSet extends TreeSet<String> {
-    RoleSet(String... roles) {
-      super();
-      addAll(Lists.newArrayList(roles));
+  @Test
+  public void testPgLocksAuthorization() throws Exception {
+    try (Statement statement = connection.createStatement()) {
+      statement.execute("CREATE ROLE yb_lock_status_user LOGIN");
+      statement.execute("GRANT yb_db_admin TO yb_lock_status_user");
     }
 
-    RoleSet(Set<String> roles) {
-      super(roles);
+    try (Connection connection = getConnectionBuilder().withUser("yb_lock_status_user").connect();
+         Statement statement = connection.createStatement()) {
+      // yb_db_admin_member should be able to query pg_locks without superuser access.
+      statement.executeQuery("SELECT * FROM pg_locks");
     }
-
-    RoleSet excluding(String... roles) {
-      RoleSet newSet = new RoleSet(this);
-      newSet.removeAll(Lists.newArrayList(roles));
-      return newSet;
-    }
-  }
-
-  private static String getSessionUser(Statement statement) throws Exception {
-    ResultSet resultSet = statement.executeQuery("SELECT SESSION_USER");
-    resultSet.next();
-    return resultSet.getString(1);
-  }
-
-  private static String getCurrentUser(Statement statement) throws Exception {
-    ResultSet resultSet = statement.executeQuery("SELECT CURRENT_USER");
-    resultSet.next();
-    return resultSet.getString(1);
   }
 }

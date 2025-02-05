@@ -4,11 +4,10 @@ headerTitle: ABORT
 linkTitle: ABORT
 description: Use the ABORT statement to roll back the current transaction and discards all updates by the transaction.
 menu:
-  stable:
+  stable_api:
     identifier: txn_abort
     parent: statements
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 ## Synopsis
@@ -17,29 +16,9 @@ Use the `ABORT` statement to roll back the current transaction and discards all 
 
 ## Syntax
 
-<ul class="nav nav-tabs nav-tabs-yb">
-  <li >
-    <a href="#grammar" class="nav-link active" id="grammar-tab" data-toggle="tab" role="tab" aria-controls="grammar" aria-selected="true">
-      <i class="fas fa-file-alt" aria-hidden="true"></i>
-      Grammar
-    </a>
-  </li>
-  <li>
-    <a href="#diagram" class="nav-link" id="diagram-tab" data-toggle="tab" role="tab" aria-controls="diagram" aria-selected="false">
-      <i class="fas fa-project-diagram" aria-hidden="true"></i>
-      Diagram
-    </a>
-  </li>
-</ul>
-
-<div class="tab-content">
-  <div id="grammar" class="tab-pane fade show active" role="tabpanel" aria-labelledby="grammar-tab">
-    {{% includeMarkdown "../../syntax_resources/the-sql-language/statements/abort.grammar.md" /%}}
-  </div>
-  <div id="diagram" class="tab-pane fade" role="tabpanel" aria-labelledby="diagram-tab">
-    {{% includeMarkdown "../../syntax_resources/the-sql-language/statements/abort.diagram.md" /%}}
-  </div>
-</div>
+{{%ebnf%}}
+  abort
+{{%/ebnf%}}
 
 ## Semantics
 
@@ -66,7 +45,7 @@ yugabyte=# CREATE TABLE sample(k1 int, k2 int, v1 int, v2 text, PRIMARY KEY (k1,
 Begin a transaction and insert some rows.
 
 ```plpgsql
-yugabyte=# BEGIN TRANSACTION; SET TRANSACTION ISOLATION LEVEL REPEATABLE READ; 
+yugabyte=# BEGIN TRANSACTION; SET TRANSACTION ISOLATION LEVEL REPEATABLE READ;
 ```
 
 ```plpgsql
@@ -153,6 +132,7 @@ yugabyte=# SELECT * FROM sample; -- run in second shell.
 
 ## See also
 
-- [`BEGIN`](../txn_begin)
+- [`BEGIN`](../txn_begin/)
+- [`START TRANSACTION`](../txn_start/)
 - [`COMMIT`](../txn_commit)
 - [`ROLLBACK`](../txn_rollback)

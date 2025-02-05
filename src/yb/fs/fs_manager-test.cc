@@ -32,7 +32,7 @@
 
 #include <boost/algorithm/string/predicate.hpp>
 
-#include <glog/logging.h>
+#include "yb/util/logging.h"
 #include <glog/stl_logging.h>
 #include <gtest/gtest.h>
 
@@ -40,15 +40,19 @@
 
 #include "yb/gutil/strings/util.h"
 
+#include "yb/util/multi_drive_test_env.h"
 #include "yb/util/status.h"
 #include "yb/util/result.h"
 #include "yb/util/test_macros.h"
 #include "yb/util/test_util.h"
+#include "yb/fs/fs.pb.h"
 
-using std::shared_ptr;
+using std::string;
+using std::vector;
 
 DECLARE_string(fs_data_dirs);
 DECLARE_string(fs_wal_dirs);
+DECLARE_bool(TEST_fail_write_pb_container);
 
 namespace yb {
 
@@ -105,18 +109,18 @@ class FsManagerTestBase : public YBTest {
   void SetupFlagsAndBaseDirs(
       const string& data_path, const string& wal_path, FsManagerOpts* out_opts) {
     // Setup data in case empty.
-    FLAGS_fs_data_dirs = data_path;
+    ANNOTATE_UNPROTECTED_WRITE(FLAGS_fs_data_dirs) = data_path;
     if (!data_path.empty()) {
       string path = GetTestPath(data_path);
       ASSERT_OK(env_->CreateDir(path));
-      FLAGS_fs_data_dirs = path;
+      ANNOTATE_UNPROTECTED_WRITE(FLAGS_fs_data_dirs) = path;
     }
     // Setup wal in case empty.
-    FLAGS_fs_wal_dirs = wal_path;
+    ANNOTATE_UNPROTECTED_WRITE(FLAGS_fs_wal_dirs) = wal_path;
     if (!wal_path.empty()) {
       string path = GetTestPath(wal_path);
       ASSERT_OK(env_->CreateDir(path));
-      FLAGS_fs_wal_dirs = path;
+      ANNOTATE_UNPROTECTED_WRITE(FLAGS_fs_wal_dirs) = path;
     }
     // Setup opts from flags and add server type.
     FsManagerOpts opts;
@@ -198,7 +202,7 @@ TEST_F(FsManagerTestBase, TestDuplicatePaths) {
 }
 
 TEST_F(FsManagerTestBase, TestListTablets) {
-  auto tablet_ids = ASSERT_RESULT(fs_manager()->ListTabletIds());
+  auto tablet_ids = ASSERT_RESULT(fs_manager()->ListTabletIds(CleanupTemporaryFiles::kTrue));
   ASSERT_EQ(0, tablet_ids.size());
 
   string path = fs_manager()->GetRaftGroupMetadataDirs()[0];
@@ -212,7 +216,7 @@ TEST_F(FsManagerTestBase, TestListTablets) {
   ASSERT_OK(env_->NewWritableFile(
       JoinPathSegments(path, "a_tablet_sort_of"), &writer));
 
-  tablet_ids = ASSERT_RESULT(fs_manager()->ListTabletIds());
+  tablet_ids = ASSERT_RESULT(fs_manager()->ListTabletIds(CleanupTemporaryFiles::kTrue));
   ASSERT_EQ(1, tablet_ids.size()) << tablet_ids;
 }
 
@@ -305,58 +309,58 @@ TEST_F(FsManagerTestBase, MultiDriveWithoutMeta) {
 
   // Deleted tablet-meta should be created
   ASSERT_OK(fs_manager()->CheckAndOpenFileSystemRoots());
-  ASSERT_OK(fs_manager()->ListTabletIds());
+  ASSERT_OK(fs_manager()->ListTabletIds(CleanupTemporaryFiles::kTrue));
 }
 
-class FailedEmuEnv : public EnvWrapper {
- public:
-  FailedEmuEnv() : EnvWrapper(Env::Default()) { }
+TEST_F(FsManagerTestBase, AutoFlagsTest) {
+  auto path1 = GetTestPath("ad1");
+  auto path2 = GetTestPath("ad2");
+  const auto paths = {path1, path2};
+  ReinitFsManager(paths, paths);
+  BlockIdPB msg;
+  msg.set_id(123);
 
-  Status NewRandomAccessFile(const std::string& f,
-                             std::unique_ptr<RandomAccessFile>* r) override {
-    if (IsFailed(f)) {
-      return STATUS(IOError, "Test Error");
-    }
-    return target()->NewRandomAccessFile(f, r);
-  }
+  ASSERT_TRUE(fs_manager()->GetAutoFlagsConfigPath().empty());
 
-  Status NewTempWritableFile(const WritableFileOptions& o, const std::string& t,
-                             std::string* f, std::unique_ptr<WritableFile>* r) override {
-    if (IsFailed(t)) {
-      return STATUS(IOError, "Test Error");
-    }
-    return target()->NewTempWritableFile(o, t, f, r);
-  }
+  // Verify read required before write
+  ASSERT_NOK(fs_manager()->WriteAutoFlagsConfig(&msg));
+  ASSERT_TRUE(fs_manager()->ReadAutoFlagsConfig(&msg).IsNotFound());
+  ASSERT_TRUE(fs_manager()->ReadAutoFlagsConfig(&msg).IsNotFound());
 
-  void AddFailedPath(const std::string& path) {
-    std::lock_guard<std::mutex> lock(data_mutex_);
-    failed_set_.emplace(path);
-  }
+  string auto_flags_path = fs_manager()->GetAutoFlagsConfigPath();
+  ASSERT_FALSE(auto_flags_path.empty());
 
- private:
-  bool IsFailed(const std::string& filename) const {
-    std::lock_guard<std::mutex> lock(data_mutex_);
-    if (failed_set_.empty()) {
-      return false;
-    }
-    auto it = failed_set_.lower_bound(filename);
-    if ((it == failed_set_.end() || *it != filename) && it != failed_set_.begin()) {
-      --it;
-    }
-    return boost::starts_with(filename, *it);
-  }
+  // Read should still fail with same error
+  ASSERT_TRUE(fs_manager()->ReadAutoFlagsConfig(&msg).IsNotFound());
 
-  std::set<std::string> failed_set_ GUARDED_BY(data_mutex_);
-  mutable std::mutex data_mutex_;
-};
+  // Verify clean write
+  ASSERT_OK(fs_manager()->WriteAutoFlagsConfig(&msg));
+  ASSERT_EQ(fs_manager()->GetAutoFlagsConfigPath(), auto_flags_path);
+
+  // Verify failure mid write
+  msg.set_id(456);
+  ANNOTATE_UNPROTECTED_WRITE(FLAGS_TEST_fail_write_pb_container) = true;
+  ASSERT_NOK(fs_manager()->WriteAutoFlagsConfig(&msg));
+  ANNOTATE_UNPROTECTED_WRITE(FLAGS_TEST_fail_write_pb_container) = false;
+  ASSERT_OK(fs_manager()->ReadAutoFlagsConfig(&msg));
+  ASSERT_EQ(msg.id(), 123);
+
+  // Swap paths and validate
+  const auto paths2 = {path2, path1};
+  ReinitFsManager(paths2, paths2);
+  ASSERT_OK(fs_manager()->ReadAutoFlagsConfig(&msg));
+  ASSERT_EQ(msg.id(), 123);
+  ASSERT_EQ(fs_manager()->GetAutoFlagsConfigPath(), auto_flags_path);
+
+  // Delete of file system should delete the config file
+  ASSERT_OK(fs_manager()->DeleteFileSystemLayout(ShouldDeleteLogs::kFalse));
+  ASSERT_FALSE(env_->FileExists(auto_flags_path));
+}
 
 class FsManagerTestDriveFault : public YBTest {
  public:
-  FsManagerTestDriveFault()
-      : metric_entity_(METRIC_ENTITY_server.Instantiate(&metric_registry_, "FsManagerTest")) {}
-
   void SetUp() override {
-    FailedEmuEnv* new_env = new FailedEmuEnv();
+    MultiDriveTestEnv* new_env = new MultiDriveTestEnv();
     env_.reset(new_env);
     new_env->AddFailedPath(GetTestPath(kFailedDrive));
     YBTest::SetUp();
@@ -382,7 +386,7 @@ class FsManagerTestDriveFault : public YBTest {
     opts.wal_paths = wal_paths;
     opts.data_paths = data_paths;
     opts.server_type = kServerType;
-    opts.metric_entity = metric_entity_;
+    opts.metric_registry = &metric_registry_;
     fs_manager_ = std::make_unique<FsManager>(env_.get(), opts);
   }
 
@@ -395,7 +399,6 @@ class FsManagerTestDriveFault : public YBTest {
  private:
   std::unique_ptr<FsManager> fs_manager_;
   MetricRegistry metric_registry_;
-  scoped_refptr<MetricEntity> metric_entity_;
 };
 
 TEST_F(FsManagerTestDriveFault, SingleDriveFault) {

@@ -4,11 +4,10 @@ headerTitle: lastval()
 linkTitle: lastval()
 description: Returns the value returned from the last call to nextval(), for any sequence, in the current session.
 menu:
-  stable:
+  stable_api:
     identifier: api-ysql-exprs-lastval
     parent: api-ysql-exprs
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 ## Synopsis
@@ -77,7 +76,8 @@ yugabyte=# SELECT lastval()
 
 ## See also
 
-[`CREATE SEQUENCE`](../../the-sql-language/statements/ddl_create_sequence)
-[`DROP SEQUENCE`](../../the-sql-language/statements/ddl_drop_sequence)
-[`currval()`](../func_currval)
-[`nextval()`](../func_nextval)
+- [`CREATE SEQUENCE`](../../the-sql-language/statements/ddl_create_sequence)
+- [`DROP SEQUENCE`](../../the-sql-language/statements/ddl_drop_sequence)
+- [`currval()`](../func_currval)
+- [`nextval()`](../func_nextval)
+- [`setval()`](../func_setval)

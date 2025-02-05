@@ -5,23 +5,30 @@ package com.yugabyte.yw.commissioner.tasks;
 import static com.yugabyte.yw.models.TaskInfo.State.Failure;
 import static com.yugabyte.yw.models.TaskInfo.State.Success;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import com.google.common.collect.ImmutableList;
+import com.yugabyte.yw.common.ApiUtils;
+import com.yugabyte.yw.common.PlacementInfoUtil;
 import com.yugabyte.yw.common.ShellResponse;
 import com.yugabyte.yw.forms.UniverseDefinitionTaskParams;
 import com.yugabyte.yw.forms.UniverseDefinitionTaskParams.Cluster;
+import com.yugabyte.yw.models.CustomerTask;
 import com.yugabyte.yw.models.TaskInfo;
 import com.yugabyte.yw.models.Universe;
 import com.yugabyte.yw.models.helpers.NodeDetails;
+import com.yugabyte.yw.models.helpers.PlacementInfo;
 import com.yugabyte.yw.models.helpers.TaskType;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -41,41 +48,57 @@ public class CreateUniverseTest extends UniverseModifyBaseTest {
 
   private static final List<TaskType> UNIVERSE_CREATE_TASK_SEQUENCE =
       ImmutableList.of(
+          TaskType.FreezeUniverse,
+          TaskType.InstanceExistCheck,
           TaskType.SetNodeStatus,
           TaskType.AnsibleCreateServer,
           TaskType.AnsibleUpdateNodeInfo,
+          TaskType.RunHooks, // PreNodeProvision
           TaskType.AnsibleSetupServer,
+          TaskType.RunHooks, // PostNodeProvision
+          TaskType.CheckLocale,
+          TaskType.CheckGlibc,
           TaskType.AnsibleConfigureServers,
           TaskType.AnsibleConfigureServers, // GFlags
           TaskType.AnsibleConfigureServers, // GFlags
           TaskType.SetNodeStatus,
+          TaskType.WaitForClockSync, // Ensure clock skew is low enough
           TaskType.AnsibleClusterServerCtl, // master
           TaskType.WaitForServer,
           TaskType.AnsibleClusterServerCtl, // tserver
           TaskType.WaitForServer,
+          TaskType.WaitForServer, // wait for postgres
           TaskType.SetNodeState,
           TaskType.WaitForMasterLeader,
+          TaskType.AnsibleConfigureServers,
           TaskType.UpdatePlacementInfo,
           TaskType.WaitForTServerHeartBeats,
           TaskType.SwamperTargetsFileUpdate,
-          TaskType.CreateTable,
           TaskType.CreateAlertDefinitions,
+          TaskType.CreateTable,
+          TaskType.UpdateConsistencyCheck,
           TaskType.ChangeAdminPassword,
           TaskType.UniverseUpdateSucceeded);
 
   private static final List<TaskType> UNIVERSE_CREATE_TASK_RETRY_SEQUENCE =
       ImmutableList.of(
+          TaskType.FreezeUniverse,
+          TaskType.InstanceExistCheck,
+          TaskType.WaitForClockSync, // Ensure clock skew is low enough
           TaskType.AnsibleClusterServerCtl, // master
           TaskType.WaitForServer,
           TaskType.AnsibleClusterServerCtl, // tserver
           TaskType.WaitForServer,
+          TaskType.WaitForServer, // wait for postgres
           TaskType.SetNodeState,
           TaskType.WaitForMasterLeader,
+          TaskType.AnsibleConfigureServers,
           TaskType.UpdatePlacementInfo,
           TaskType.WaitForTServerHeartBeats,
           TaskType.SwamperTargetsFileUpdate,
-          TaskType.CreateTable,
           TaskType.CreateAlertDefinitions,
+          TaskType.CreateTable,
+          TaskType.UpdateConsistencyCheck,
           TaskType.ChangeAdminPassword,
           TaskType.UniverseUpdateSucceeded);
 
@@ -111,6 +134,8 @@ public class CreateUniverseTest extends UniverseModifyBaseTest {
       when(mockClient.getMasterClusterConfig()).thenReturn(mockConfigResponse);
       when(mockClient.changeMasterClusterConfig(any())).thenReturn(mockMasterChangeConfigResponse);
       when(mockClient.listTabletServers()).thenReturn(mockListTabletServersResponse);
+      mockClockSyncResponse(mockNodeUniverseManager);
+      mockLocaleCheckResponse(mockNodeUniverseManager);
     } catch (Exception e) {
       fail();
     }
@@ -131,7 +156,7 @@ public class CreateUniverseTest extends UniverseModifyBaseTest {
         .validateAdminPassword(any(), any());
     ShellResponse successResponse = new ShellResponse();
     successResponse.message = "Command output:\nCREATE TABLE";
-    when(mockNodeUniverseManager.runYsqlCommand(any(), any(), any(), (any())))
+    when(mockNodeUniverseManager.runYsqlCommand(any(), any(), any(), (any()), anyBoolean()))
         .thenReturn(successResponse);
   }
 
@@ -148,7 +173,7 @@ public class CreateUniverseTest extends UniverseModifyBaseTest {
   private UniverseDefinitionTaskParams getTaskParams(boolean enableAuth) {
     Universe result =
         Universe.saveDetails(
-            defaultUniverse.universeUUID,
+            defaultUniverse.getUniverseUUID(),
             u -> {
               UniverseDefinitionTaskParams universeDetails = u.getUniverseDetails();
               Cluster primaryCluster = universeDetails.getPrimaryCluster();
@@ -167,9 +192,9 @@ public class CreateUniverseTest extends UniverseModifyBaseTest {
               }
             });
     UniverseDefinitionTaskParams universeDetails = result.getUniverseDetails();
-    universeDetails.universeUUID = defaultUniverse.universeUUID;
-    universeDetails.firstTry = true;
-    universeDetails.previousTaskUUID = null;
+    universeDetails.creatingUser = defaultUser;
+    universeDetails.setUniverseUUID(defaultUniverse.getUniverseUUID());
+    universeDetails.setPreviousTaskUUID(null);
     return universeDetails;
   }
 
@@ -197,10 +222,9 @@ public class CreateUniverseTest extends UniverseModifyBaseTest {
     Map<Integer, List<TaskInfo>> subTasksByPosition =
         subTasks.stream().collect(Collectors.groupingBy(TaskInfo::getPosition));
     assertTaskSequence(UNIVERSE_CREATE_TASK_SEQUENCE, subTasksByPosition);
-    taskInfo = TaskInfo.getOrBadRequest(taskInfo.getTaskUUID());
-    taskParams = Json.fromJson(taskInfo.getTaskDetails(), UniverseDefinitionTaskParams.class);
-    taskParams.previousTaskUUID = taskInfo.getTaskUUID();
-    taskParams.firstTry = false;
+    taskInfo = TaskInfo.getOrBadRequest(taskInfo.getUuid());
+    taskParams = Json.fromJson(taskInfo.getTaskParams(), UniverseDefinitionTaskParams.class);
+    taskParams.setPreviousTaskUUID(taskInfo.getUuid());
     // Retry the task.
     taskInfo = submitTask(taskParams);
     assertEquals(Success, taskInfo.getTaskState());
@@ -219,10 +243,9 @@ public class CreateUniverseTest extends UniverseModifyBaseTest {
     Map<Integer, List<TaskInfo>> subTasksByPosition =
         subTasks.stream().collect(Collectors.groupingBy(TaskInfo::getPosition));
     assertTaskSequence(UNIVERSE_CREATE_TASK_SEQUENCE, subTasksByPosition);
-    taskInfo = TaskInfo.getOrBadRequest(taskInfo.getTaskUUID());
-    taskParams = Json.fromJson(taskInfo.getTaskDetails(), UniverseDefinitionTaskParams.class);
-    taskParams.previousTaskUUID = taskInfo.getTaskUUID();
-    taskParams.firstTry = false;
+    taskInfo = TaskInfo.getOrBadRequest(taskInfo.getUuid());
+    taskParams = Json.fromJson(taskInfo.getTaskParams(), UniverseDefinitionTaskParams.class);
+    taskParams.setPreviousTaskUUID(taskInfo.getUuid());
     primaryCluster.userIntent.enableYCQL = true;
     primaryCluster.userIntent.enableYCQLAuth = true;
     primaryCluster.userIntent.ycqlPassword = "Admin@123";
@@ -232,5 +255,109 @@ public class CreateUniverseTest extends UniverseModifyBaseTest {
     taskInfo = submitTask(taskParams);
     // Task is already successful, so the passwords must have been cleared.
     assertEquals(Failure, taskInfo.getTaskState());
+  }
+
+  @Test
+  public void testCreateDedicatedUniverseSuccess() {
+    UniverseDefinitionTaskParams taskParams = getTaskParams(true);
+    taskParams.getPrimaryCluster().userIntent.dedicatedNodes = true;
+    PlacementInfoUtil.SelectMastersResult selectMastersResult =
+        PlacementInfoUtil.selectMasters(
+            null, taskParams.nodeDetailsSet, null, true, taskParams.clusters);
+    selectMastersResult.addedMasters.forEach(taskParams.nodeDetailsSet::add);
+    PlacementInfoUtil.dedicateNodes(taskParams.nodeDetailsSet);
+    TaskInfo taskInfo = submitTask(taskParams);
+    assertEquals(Success, taskInfo.getTaskState());
+    defaultUniverse = Universe.getOrBadRequest(defaultUniverse.getUniverseUUID());
+    Map<UniverseTaskBase.ServerType, List<NodeDetails>> byDedicatedType =
+        defaultUniverse.getNodes().stream().collect(Collectors.groupingBy(n -> n.dedicatedTo));
+    List<NodeDetails> masterNodes = byDedicatedType.get(UniverseTaskBase.ServerType.MASTER);
+    List<NodeDetails> tserverNodes = byDedicatedType.get(UniverseTaskBase.ServerType.TSERVER);
+    assertEquals(
+        defaultUniverse.getUniverseDetails().getPrimaryCluster().userIntent.replicationFactor,
+        masterNodes.size());
+    assertEquals(
+        defaultUniverse.getUniverseDetails().getPrimaryCluster().userIntent.numNodes,
+        tserverNodes.size());
+    for (NodeDetails masterNode : masterNodes) {
+      assertTrue(masterNode.isMaster);
+      assertFalse(masterNode.isTserver);
+    }
+    for (NodeDetails tserverNode : tserverNodes) {
+      assertFalse(tserverNode.isMaster);
+      assertTrue(tserverNode.isTserver);
+    }
+  }
+
+  @Test
+  public void testCreateUniverseWithReadReplicaSuccess() {
+    UniverseDefinitionTaskParams taskParams = getTaskParams(true);
+    UniverseDefinitionTaskParams.UserIntent intent =
+        taskParams.getPrimaryCluster().userIntent.clone();
+    intent.replicationFactor = 1;
+    intent.numNodes = 1;
+    PlacementInfo placementInfo =
+        PlacementInfoUtil.getPlacementInfo(
+            UniverseDefinitionTaskParams.ClusterType.ASYNC,
+            intent,
+            1,
+            null,
+            Collections.emptyList());
+    Universe updated =
+        Universe.saveDetails(
+            defaultUniverse.getUniverseUUID(),
+            ApiUtils.mockUniverseUpdaterWithReadReplica(intent, placementInfo));
+    taskParams.clusters.add(updated.getUniverseDetails().getReadOnlyClusters().get(0));
+    taskParams.nodeDetailsSet = updated.getUniverseDetails().nodeDetailsSet;
+    taskParams.nodeDetailsSet.forEach(
+        node -> {
+          node.nodeName = null;
+          node.state = NodeDetails.NodeState.ToBeAdded;
+        });
+    TaskInfo taskInfo = submitTask(taskParams);
+    assertEquals(Success, taskInfo.getTaskState());
+    int tserversStarted =
+        (int)
+            taskInfo.getSubTasks().stream()
+                .filter(t -> t.getTaskType() == TaskType.AnsibleClusterServerCtl)
+                .map(t -> t.getTaskParams())
+                .filter(t -> t.has("process") && t.get("process").asText().equals("tserver"))
+                .filter(t -> t.has("command") && t.get("command").asText().equals("start"))
+                .count();
+    assertEquals(taskParams.getPrimaryCluster().userIntent.numNodes + 1, tserversStarted);
+  }
+
+  @Test
+  public void testCreateUniverseRetries() {
+    UniverseDefinitionTaskParams taskParams = getTaskParams(true);
+    UniverseDefinitionTaskParams.UserIntent intent =
+        taskParams.getPrimaryCluster().userIntent.clone();
+    intent.replicationFactor = 1;
+    intent.numNodes = 1;
+    PlacementInfo placementInfo =
+        PlacementInfoUtil.getPlacementInfo(
+            UniverseDefinitionTaskParams.ClusterType.ASYNC,
+            intent,
+            1,
+            null,
+            Collections.emptyList());
+    Universe updated =
+        Universe.saveDetails(
+            defaultUniverse.getUniverseUUID(),
+            ApiUtils.mockUniverseUpdaterWithReadReplica(intent, placementInfo));
+    taskParams.clusters.add(updated.getUniverseDetails().getReadOnlyClusters().get(0));
+    taskParams.nodeDetailsSet = updated.getUniverseDetails().nodeDetailsSet;
+    taskParams.nodeDetailsSet.forEach(
+        node -> {
+          node.nodeName = null;
+          node.state = NodeDetails.NodeState.ToBeAdded;
+        });
+    super.verifyTaskRetries(
+        defaultCustomer,
+        CustomerTask.TaskType.Create,
+        CustomerTask.TargetType.Universe,
+        updated.getUniverseUUID(),
+        TaskType.CreateUniverse,
+        taskParams);
   }
 }

@@ -14,18 +14,16 @@
 #include "yb/yql/cql/ql/ptree/pt_expr.h"
 #include "yb/yql/cql/ql/ptree/pt_option.h"
 #include "yb/yql/cql/ql/ptree/sem_context.h"
+#include "yb/util/flags.h"
 
-DEFINE_bool(cql_raise_index_where_clause_error, false,
+DEFINE_UNKNOWN_bool(cql_raise_index_where_clause_error, false,
             "Raise unsupported error if where clause is specified for create index");
 
 namespace yb {
 namespace ql {
 
-using std::shared_ptr;
-using std::to_string;
-using client::YBColumnSchema;
+using std::string;
 using client::YBSchema;
-using client::YBTableName;
 
 //--------------------------------------------------------------------------------------------------
 
@@ -57,14 +55,14 @@ PTCreateIndex::~PTCreateIndex() {
 
 namespace {
 
-CHECKED_STATUS SetupCoveringColumn(PTIndexColumn *node, SemContext *sem_context) {
+Status SetupCoveringColumn(PTIndexColumn *node, SemContext *sem_context) {
   RETURN_NOT_OK(node->SetupCoveringIndexColumn(sem_context));
   return Status::OK();
 }
 
 } // namespace
 
-CHECKED_STATUS PTCreateIndex::Analyze(SemContext *sem_context) {
+Status PTCreateIndex::Analyze(SemContext *sem_context) {
   // Look up indexed table.
   bool is_system_ignored;
   RETURN_NOT_OK(relation_->AnalyzeName(sem_context, ObjectType::TABLE));
@@ -189,7 +187,6 @@ CHECKED_STATUS PTCreateIndex::Analyze(SemContext *sem_context) {
     }
   }
 
-  // TODO: create local index when co-partition table is available.
   if (is_local_) {
     LOG(WARNING) << "Creating local secondary index " << yb_table_name().ToString()
                  << " as global index.";
@@ -200,7 +197,7 @@ CHECKED_STATUS PTCreateIndex::Analyze(SemContext *sem_context) {
   // predicate.
   if (where_clause_.get()) {
     IdxPredicateState idx_predicate_state(sem_context->PTempMem(), opcode());
-    SemState sem_state(sem_context, QLType::Create(BOOL), InternalType::kBoolValue);
+    SemState sem_state(sem_context, QLType::Create(DataType::BOOL), InternalType::kBoolValue);
     sem_state.SetIdxPredicateState(&idx_predicate_state);
     RETURN_NOT_OK(where_clause_->Analyze(sem_context));
     where_clause_column_refs_ = idx_predicate_state.column_refs();

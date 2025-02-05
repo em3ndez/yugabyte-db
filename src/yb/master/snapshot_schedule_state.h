@@ -11,8 +11,7 @@
 // under the License.
 //
 
-#ifndef YB_MASTER_SNAPSHOT_SCHEDULE_STATE_H
-#define YB_MASTER_SNAPSHOT_SCHEDULE_STATE_H
+#pragma once
 
 #include "yb/common/hybrid_time.h"
 #include "yb/common/snapshot.h"
@@ -53,11 +52,14 @@ using SnapshotScheduleOperations = std::vector<SnapshotScheduleOperation>;
 class SnapshotScheduleState {
  public:
   SnapshotScheduleState(
-      SnapshotCoordinatorContext* context, const CreateSnapshotScheduleRequestPB& req);
+      SnapshotCoordinatorContext* context, const SnapshotScheduleOptionsPB& req);
 
   SnapshotScheduleState(
       SnapshotCoordinatorContext* context, const SnapshotScheduleId& id,
       const SnapshotScheduleOptionsPB& options);
+
+  static Result<SnapshotScheduleState> Create(
+      SnapshotCoordinatorContext* context, const SnapshotScheduleOptionsPB& options);
 
   const SnapshotScheduleId& id() const {
     return id_;
@@ -86,17 +88,23 @@ class SnapshotScheduleState {
   Result<SnapshotScheduleOperation> ForceCreateSnapshot(HybridTime last_snapshot_time);
   void SnapshotFinished(const TxnSnapshotId& snapshot_id, const Status& status);
 
-  Result<docdb::KeyBytes> EncodedKey() const;
-  static Result<docdb::KeyBytes> EncodedKey(
+  Result<dockv::KeyBytes> EncodedKey() const;
+  static Result<dockv::KeyBytes> EncodedKey(
       const SnapshotScheduleId& schedule_id, SnapshotCoordinatorContext* context);
 
-  CHECKED_STATUS StoreToWriteBatch(docdb::KeyValueWriteBatchPB* write_batch) const;
-  CHECKED_STATUS ToPB(SnapshotScheduleInfoPB* pb) const;
+  Status StoreToWriteBatch(docdb::KeyValueWriteBatchPB* write_batch) const;
+  Status StoreToWriteBatch(
+      const SnapshotScheduleOptionsPB& options, docdb::KeyValueWriteBatchPB* out) const;
+  Status ToPB(SnapshotScheduleInfoPB* pb) const;
   std::string ToString() const;
 
   const CreatingSnapshotData& creating_snapshot_data() const {
     return creating_snapshot_data_;
   }
+
+  Result<SnapshotScheduleOptionsPB> GetUpdatedOptions(
+      const EditSnapshotScheduleRequestPB& edit_request) const;
+  static Status ValidateOptions(const SnapshotScheduleOptionsPB& new_options);
 
  private:
   std::string LogPrefix() const;
@@ -116,5 +124,3 @@ class SnapshotScheduleState {
 
 } // namespace master
 } // namespace yb
-
-#endif  // YB_MASTER_SNAPSHOT_SCHEDULE_STATE_H

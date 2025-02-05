@@ -10,8 +10,7 @@ menu:
     identifier: deploy-in-azure-2-aks
     parent: public-clouds
     weight: 650
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 <ul class="nav nav-tabs-alt nav-tabs-yb">
@@ -23,7 +22,7 @@ showAsideToc: true
   </li>
   <li >
     <a href="../aks/" class="nav-link active">
-      <i class="fas fa-cubes" aria-hidden="true"></i>
+      <i class="fa-regular fa-dharmachakra" aria-hidden="true"></i>
       Azure Kubernetes Service (AKS)
     </a>
   </li>

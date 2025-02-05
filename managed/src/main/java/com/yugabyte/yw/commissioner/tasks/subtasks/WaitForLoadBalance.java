@@ -38,7 +38,10 @@ public class WaitForLoadBalance extends AbstractTaskBase {
   }
 
   // Parameters for data move wait task.
-  public static class Params extends UniverseTaskParams {}
+  public static class Params extends UniverseTaskParams {
+    // Default usecase is 0.
+    public int numTservers;
+  }
 
   @Override
   protected Params taskParams() {
@@ -47,22 +50,31 @@ public class WaitForLoadBalance extends AbstractTaskBase {
 
   @Override
   public String getName() {
-    return super.getName() + "(" + taskParams().universeUUID + ")";
+    return super.getName() + "(" + taskParams().getUniverseUUID() + ")";
   }
 
   @Override
   public void run() {
-    Universe universe = Universe.getOrBadRequest(taskParams().universeUUID);
+    Universe universe = Universe.getOrBadRequest(taskParams().getUniverseUUID());
     String hostPorts = universe.getMasterAddresses();
     String certificate = universe.getCertificateNodetoNode();
-    int numTservers = universe.getTServers().size();
     boolean ret = false;
     YBClient client = null;
     try {
-      log.info("Running {}: hostPorts={}, numTservers={}.", getName(), hostPorts, numTservers);
+      log.info(
+          "Running {}: hostPorts={}, numTservers={}.",
+          getName(),
+          hostPorts,
+          taskParams().numTservers);
       client = ybService.getClient(hostPorts, certificate);
       waitFor(Duration.ofSeconds(getSleepMultiplier() * SLEEP_TIME));
-      ret = client.waitForLoadBalance(TIMEOUT_SERVER_WAIT_MS, numTservers);
+      // When an AZ is down and Platform is unaware(external failure) then load balancing will not
+      // work if we pass in the expected number of TServers to the API as the first step for load
+      // balancing is the liveness check. All those TServers will be expected to be alive at the
+      // minimum. The TServer which is down becuase of an external fault will fail this liveness
+      // check, so load will not be balanced. NOTE: Zero implies load distribution can be checked
+      // across all servers which the master leader knows about.
+      ret = client.waitForLoadBalance(TIMEOUT_SERVER_WAIT_MS, taskParams().numTservers);
     } catch (Exception e) {
       log.error("{} hit error : {}", getName(), e.getMessage());
       Throwables.propagate(e);
@@ -72,5 +84,10 @@ public class WaitForLoadBalance extends AbstractTaskBase {
     if (!ret) {
       throw new RuntimeException(getName() + " did not complete.");
     }
+    log.info(
+        "Completed {}: hostPorts={}, numTservers={}.",
+        getName(),
+        hostPorts,
+        taskParams().numTservers);
   }
 }

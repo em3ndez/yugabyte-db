@@ -4,12 +4,11 @@ linkTitle: jsonb_array_length()
 headerTitle: jsonb_array_length() and json_array_length()
 description: Return the count of values in an array using jsonb_array_length() and json_array_length().
 menu:
-  preview:
+  preview_api:
     identifier: jsonb-array-length
     parent: json-functions-operators
     weight: 80
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 **Purpose:** Return the count of values (primitive or compound) in the array. You can use this to iterate over the elements of a JSON _array_ using the [`->`](../subvalue-operators/) operator.

@@ -8,6 +8,7 @@ menu:
     identifier: deploy-in-gcp-1-deployment-manager
     parent: public-clouds
     weight: 640
+type: docs
 ---
 
 <ul class="nav nav-tabs-alt nav-tabs-yb">
@@ -21,7 +22,7 @@ menu:
 
   <li>
     <a href="../gke/" class="nav-link">
-      <i class="fas fa-cubes" aria-hidden="true"></i>
+      <i class="fa-regular fa-dharmachakra" aria-hidden="true"></i>
       Google Kubernetes Engine (GKE)
     </a>
   </li>
@@ -37,27 +38,27 @@ menu:
 
 ## Prerequisites
 
-* Download and Install [gcloud](https://cloud.google.com/sdk/docs/) command line tool.
-* Clone git repo from [here](https://github.com/yugabyte/gcp-deployment-manager.git)
+* Download and Install [Google Cloud CLI](https://cloud.google.com/sdk/docs/).
+* Clone the [Google Cloud Deployment Manager for YugabyteDB](https://github.com/yugabyte/gcp-deployment-manager.git) repository.
 
-## Deploying using Cloud Shell
+## Deploy using Google Cloud Deployment Manager
 
-<a href="https://console.cloud.google.com/cloudshell/editor?cloudshell_git_repo=https%3A%2F%2Fgithub.com%2Fyugabyte%2Fgcp-deployment-manager.git" target="_blank">
-    <img src="https://gstatic.com/cloudssh/images/open-btn.svg"/>
-</a>
+[![Open in Google Cloud Shell](https://www.gstatic.com/cloudssh/images/open-btn.svg)](https://console.cloud.google.com/cloudshell/editor?cloudshell_git_repo=https%3A%2F%2Fgithub.com%2Fyugabyte%2Fgcp-deployment-manager.git)
 
-* Change current directory to cloned git repo directory
-* Use gcloud command to create deployment-manager deployment <br/>
+To deploy using Google Cloud Deployment Manager:
 
-    ```
+1. Change the current directory to the cloned repository.
+1. Use the following `gcloud` command to create the deployment-manager deployment:
+
+    ```sh
     $ gcloud deployment-manager deployments create <your-deployment-name> --config=yugabyte-deployment.yaml
     ```
 
-* Wait for 5-10 minutes after the creation of all resources is complete by the above command.
-* Once the deployment creation is complete, you can describe it as shown below. <br/>
+1. Wait 5-10 minutes for the creation of all resources to complete.
+1. After the deployment creation is complete, you can describe it as follows:
 
-    ```
+    ```sh
     $ gcloud deployment-manager deployments describe <your-deployment-name>
     ```
 
-    In the output, you will get the YugabyteDB admin URL, JDBC URL, YSQL, YCQL and YEDIS connection string. You can use YugabyteDB admin URL to access admin portal.
+The output includes the YugabyteDB Admin URL, JDBC URL, and YSQL, and YCQL connection strings. You can use the YugabyteDB Admin URL to access the Admin portal.

@@ -3,16 +3,16 @@ title: YSQL aggregate functions signature and purpose
 linkTitle: Per function signature and purpose
 headerTitle: Signature and purpose of each aggregate function
 description: This section summarizes the signature and purpose of each of the YSQL aggregate functions and links to their individual accounts.
-image: /images/section_icons/api/ysql.png
+image: /images/section_icons/api/subsection.png
 menu:
-  preview:
+  preview_api:
     identifier: aggregate-function-syntax-semantics
     parent: aggregate-functions
     weight: 90
 aliases:
   - /preview/api/ysql/exprs/aggregate_functions
-isTocNested: true
-showAsideToc: true
+type: indexpage
+showRightNav: true
 ---
 
 The aggregate functions are categorized into four classes:
@@ -55,7 +55,7 @@ Arguably, `avg()` might be better classified as a statistical aggregate function
 | [`min()`](./avg-count-max-min-sum/#max-min) | Computes the least value among the values in the set using the rule that is used for the particular data type in the ORDER BY clause. nulls are removed before sorting the values. |
 | [`string_agg()`](./array-string-jsonb-jsonb-object-agg/#string-agg) | Returns a single value produced by concatenating the aggregated values (first argument) separated by a mandatory separator (second argument). The first overload has `text` inputs and returns `text`. The second overload has `bytea` inputs and returns `bytea`. |
 | [`sum()`](./avg-count-max-min-sum/#sum) | Computes the sum of a set of summable values by adding them all together. If the set contains nulls, then these are simply ignored. |
-| [`xmlagg()`](https://www.postgresql.org/docs/11/functions-aggregate.html) | This is not supported through Version YB 2.2. See [GitHub Issue #1043](https://github.com/yugabyte/yugabyte-db/issues/1043) |
+| [`xmlagg()`](https://www.postgresql.org/docs/15/functions-aggregate.html) | This is not supported through Version YB 2.2. See [GitHub Issue #1043](https://github.com/yugabyte/yugabyte-db/issues/1043) |
 
 ## Statistical aggregate functions
 
@@ -108,7 +108,3 @@ These functions as invoked, as within-group hypothetical-set aggregate functions
 | [`dense_rank()`](./rank-dense-rank-percent-rank-cume-dist/#dense-rank) | Returns the integer ordinal rank of the distinct value of each row according to what the window `ORDER` BY clause specifies. The series of values starts with 1 and, even when the window contains ties, the series is dense. See the account of [dense_rank()](../../window_functions/function-syntax-semantics/row-number-rank-dense-rank/#dense-rank) in the [Window functions](../../window_functions/) section for more information.|
 | [`percent_rank()`](./rank-dense-rank-percent-rank-cume-dist/#percent-rank) | Returns the percentile rank of each row within the window, with respect to the argument of the window_definition's window `ORDER BY` clause. See the account of [percent_rank()](../../window_functions/function-syntax-semantics/percent-rank-cume-dist-ntile/#percent-rank) in the [Window functions](../../window_functions/) section for more information. |
 | [`cume_dist()`](./rank-dense-rank-percent-rank-cume-dist/#cume-dist) | Returns a value that represents the number of rows with values less than or equal to the current row’s value divided by the total number of rows—in other words, the relative position of a value in a set of values. See the account of [cume_dist()](../../window_functions/function-syntax-semantics/percent-rank-cume-dist-ntile/#cume-dist) in the [Window functions](../../window_functions/) section for more information. |
-
-
-
-

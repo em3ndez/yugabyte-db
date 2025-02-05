@@ -28,14 +28,18 @@
 #include "yb/rocksdb/metadata.h"
 #include "yb/rocksdb/util/coding.h"
 
-#include "yb/util/flag_tags.h"
+#include "yb/util/flags.h"
 #include "yb/util/logging.h"
 #include "yb/util/slice.h"
 #include "yb/util/status_format.h"
 
-DEFINE_bool(use_per_file_metadata_for_flushed_frontier, false,
+DEFINE_UNKNOWN_bool(use_per_file_metadata_for_flushed_frontier, false,
             "Allows taking per-file metadata in version edits into account when computing the "
             "flushed frontier.");
+
+DEFINE_RUNTIME_bool(allow_sensitive_data_in_logs, false,
+            "Allows potentially-sensitive debug data to be written unencrypted into logs.");
+
 TAG_FLAG(use_per_file_metadata_for_flushed_frontier, hidden);
 TAG_FLAG(use_per_file_metadata_for_flushed_frontier, advanced);
 
@@ -45,6 +49,32 @@ uint64_t PackFileNumberAndPathId(uint64_t number, uint64_t path_id) {
   assert(number <= kFileNumberMask);
   return number | (path_id * (kFileNumberMask + 1));
 }
+
+namespace {
+  std::string SanitizeDebugStringHelper(const VersionEditPB& pb, bool short_debug) {
+    if (!FLAGS_allow_sensitive_data_in_logs) {
+      VersionEditPB pbcopy;
+      pbcopy.CopyFrom(pb);
+      pbcopy.clear_new_files();
+      for(auto& file : pb.new_files()) {
+        NewFilePB* new_file_copy = pbcopy.add_new_files();
+        new_file_copy->CopyFrom(file);
+        new_file_copy->clear_smallest();
+        new_file_copy->clear_largest();
+      }
+      return short_debug ? pbcopy.ShortDebugString() : pbcopy.DebugString();
+    }
+    return short_debug ? pb.ShortDebugString() : pb.DebugString();
+  }
+
+  std::string SanitizeDebugString(const VersionEditPB& pb) {
+    return SanitizeDebugStringHelper(pb, false /* short_debug */);
+  }
+
+  std::string SanitizeShortDebugString(const VersionEditPB& pb) {
+    return SanitizeDebugStringHelper(pb, true /* short_debug */);
+  }
+}  // namespace
 
 FileMetaData::FileMetaData()
     : refs(0),
@@ -61,14 +91,6 @@ FileMetaData::FileMetaData()
   largest.seqno = 0;
 }
 
-void FileMetaData::UpdateBoundaries(InternalKey key, const FileBoundaryValuesBase& source) {
-  largest.key = std::move(key);
-  if (smallest.key.empty()) {
-    smallest.key = largest.key;
-  }
-  UpdateBoundariesExceptKey(source, UpdateBoundariesType::kAll);
-}
-
 bool FileMetaData::Unref(TableCache* table_cache) {
   refs--;
   if (refs <= 0) {
@@ -83,30 +105,48 @@ bool FileMetaData::Unref(TableCache* table_cache) {
   }
 }
 
-void FileMetaData::UpdateBoundariesExceptKey(const FileBoundaryValuesBase& source,
-                                             UpdateBoundariesType type) {
+void FileMetaData::UpdateKey(const Slice& key, UpdateBoundariesType type) {
+  if (type != UpdateBoundariesType::kLargest) {
+    smallest.key = InternalKey::DecodeFrom(key);
+  }
+  if (type != UpdateBoundariesType::kSmallest) {
+    largest.key = InternalKey::DecodeFrom(key);
+  }
+}
+
+void FileMetaData::UpdateBoundarySeqNo(SequenceNumber sequence_number) {
+  smallest.seqno = std::min(smallest.seqno, sequence_number);
+  largest.seqno = std::max(largest.seqno, sequence_number);
+}
+
+void FileMetaData::UpdateBoundaryUserValues(
+    const UserBoundaryValueRefs& source, UpdateBoundariesType type) {
+  if (type != UpdateBoundariesType::kLargest) {
+    UpdateUserValues(source, UpdateUserValueType::kSmallest, &smallest.user_values);
+  }
+  if (type != UpdateBoundariesType::kSmallest) {
+    UpdateUserValues(source, UpdateUserValueType::kLargest, &largest.user_values);
+  }
+}
+
+void FileMetaData::UpdateBoundariesExceptKey(
+    const BoundaryValues& source, UpdateBoundariesType type) {
   if (type != UpdateBoundariesType::kLargest) {
     smallest.seqno = std::min(smallest.seqno, source.seqno);
     UserFrontier::Update(
         source.user_frontier.get(), UpdateUserValueType::kSmallest, &smallest.user_frontier);
-
-    for (const auto& user_value : source.user_values) {
-      UpdateUserValue(&smallest.user_values, user_value, UpdateUserValueType::kSmallest);
-    }
+    UpdateUserValues(source.user_values, UpdateUserValueType::kSmallest, &smallest.user_values);
   }
   if (type != UpdateBoundariesType::kSmallest) {
     largest.seqno = std::max(largest.seqno, source.seqno);
     UserFrontier::Update(
         source.user_frontier.get(), UpdateUserValueType::kLargest, &largest.user_frontier);
-
-    for (const auto& user_value : source.user_values) {
-      UpdateUserValue(&largest.user_values, user_value, UpdateUserValueType::kLargest);
-    }
+    UpdateUserValues(source.user_values, UpdateUserValueType::kLargest, &largest.user_values);
   }
 }
 
 Slice FileMetaData::UserFilter() const {
-  return largest.user_frontier ? largest.user_frontier->Filter() : Slice();
+  return largest.user_frontier ? largest.user_frontier->FilterAsSlice() : Slice();
 }
 
 std::string FileMetaData::FrontiersToString() const {
@@ -148,8 +188,8 @@ void EncodeBoundaryValues(const FileBoundaryValues<InternalKey>& values, Boundar
 
   for (const auto& user_value : values.user_values) {
     auto* value = out->add_user_values();
-    value->set_tag(user_value->Tag());
-    auto encoded_user_value = user_value->Encode();
+    value->set_tag(user_value.tag);
+    auto encoded_user_value = user_value.AsSlice();
     value->set_data(encoded_user_value.data(), encoded_user_value.size());
   }
 }
@@ -164,15 +204,15 @@ Status DecodeBoundaryValues(BoundaryValuesExtractor* extractor,
       out->user_frontier = extractor->CreateFrontier();
       RETURN_NOT_OK(out->user_frontier->FromPB(values.user_frontier()));
     }
+    out->user_values.reserve(values.user_values().size());
     for (const auto &user_value : values.user_values()) {
-      UserBoundaryValuePtr decoded;
-      auto status = extractor->Decode(user_value.tag(), user_value.data(), &decoded);
-      if (!status.ok()) {
-        return status;
+      if (user_value.data().empty()) {
+        continue;
       }
-      if (decoded) {
-        out->user_values.push_back(std::move(decoded));
-      }
+      out->user_values.emplace_back(UserBoundaryValueRef {
+        .tag = user_value.tag(),
+        .value = user_value.data(),
+      });
     }
   } else if (values.has_user_frontier()) {
     return STATUS_FORMAT(
@@ -267,7 +307,7 @@ Status VersionEdit::DecodeFrom(BoundaryValuesExtractor* extractor, const Slice& 
     return STATUS(Corruption, "VersionEdit");
   }
 
-  VLOG(1) << "Parsed version edit: " << pb.ShortDebugString();
+  VLOG(1) << "Parsed version edit: " << SanitizeShortDebugString(pb);
 
   if (pb.has_comparator()) {
     comparator_ = std::move(*pb.mutable_comparator());
@@ -342,7 +382,7 @@ Status VersionEdit::DecodeFrom(BoundaryValuesExtractor* extractor, const Slice& 
       if (!flushed_frontier_) {
         LOG(DFATAL) << "Flushed frontier not present but a file's largest user frontier present: "
                     << meta.largest.user_frontier->ToString()
-                    << ", version edit protobuf:\n" << pb.DebugString();
+                    << ", version edit protobuf:\n" << SanitizeDebugString(pb);
       } else if (!flushed_frontier_->Dominates(*meta.largest.user_frontier,
                                                UpdateUserValueType::kLargest)) {
         // The flushed frontier of this VersionEdit must already include the information provided
@@ -351,7 +391,7 @@ Status VersionEdit::DecodeFrom(BoundaryValuesExtractor* extractor, const Slice& 
                     << "file boundary: flushed_frontier=" << flushed_frontier_->ToString()
                     << ", a file's larget user frontier: "
                     << meta.largest.user_frontier->ToString()
-                    << ", version edit protobuf:\n" << pb.DebugString();
+                    << ", version edit protobuf:\n" << SanitizeDebugString(pb);
       }
       UpdateUserFrontier(
           &flushed_frontier_, meta.largest.user_frontier, UpdateUserValueType::kLargest);
@@ -372,7 +412,7 @@ Status VersionEdit::DecodeFrom(BoundaryValuesExtractor* extractor, const Slice& 
 std::string VersionEdit::DebugString(bool hex_key) const {
   VersionEditPB pb;
   EncodeTo(&pb);
-  return pb.DebugString();
+  return SanitizeDebugString(pb);
 }
 
 void VersionEdit::InitNewDB() {

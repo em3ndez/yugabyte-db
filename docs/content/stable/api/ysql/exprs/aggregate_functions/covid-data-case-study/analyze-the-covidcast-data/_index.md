@@ -3,14 +3,14 @@ title: Analyze the COVIDcast data
 linkTitle: Analyze the COVIDcast data
 headerTitle: Using the YSQL linear regression analysis functions on the COVIDcast data—introduction
 description: Using regr_r2(), regr_slope(), regr_intercept() on the COVIDcast data—introduction
-image: /images/section_icons/api/ysql.png
+image: /images/section_icons/api/subsection.png
 menu:
-  stable:
+  stable_api:
     identifier: analyze-the-covidcast-data
     parent: covid-data-case-study
     weight: 30
-isTocNested: true
-showAsideToc: true
+type: indexpage
+showRightNav: true
 ---
 
 ## Introduction
@@ -95,7 +95,3 @@ from covidcast_fb_survey_results;
 - The section [Daily values for regr_r2(), regr_slope(), regr_intercept() for symptoms vs mask-wearing](./daily-regression-analysis/) describes the actual linear regression analysis code.
 
 - The section [Select the data for COVID-like symptoms vs mask-wearing by state scatter plot](./symptoms-vs-mask-wearing-by-state/) shows the SQL that lists out the _51_ individual _"(symptoms_pct, mask_wearing_pct)"_ tuples for the day that was arbitrarily chosen for drawing a scatter-plot on top of which the outcome of the regression analysis for that day is drawn.
-
-
-
-

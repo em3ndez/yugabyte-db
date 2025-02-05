@@ -18,7 +18,6 @@
 // under the License.
 //
 
-#ifndef ROCKSDB_LITE
 
 #include "yb/rocksdb/table/plain_table_builder.h"
 
@@ -138,6 +137,7 @@ void PlainTableBuilder::Add(const Slice& key, const Slice& value) {
   // temp buffer for metadata bytes between key and value.
   char meta_bytes_buf[6];
   size_t meta_bytes_buf_size = 0;
+  last_key_.assign(key.cdata(), key.size());
 
   ParsedInternalKey internal_key;
   ParseInternalKey(key, &internal_key);
@@ -307,5 +307,8 @@ uint64_t PlainTableBuilder::BaseFileSize() const {
   return TotalFileSize();
 }
 
+const std::string& PlainTableBuilder::LastKey() const {
+  return last_key_;
+}
+
 }  // namespace rocksdb
-#endif  // ROCKSDB_LITE

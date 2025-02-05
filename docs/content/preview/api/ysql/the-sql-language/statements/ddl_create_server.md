@@ -4,42 +4,21 @@ headerTitle: CREATE SERVER
 linkTitle: CREATE SERVER
 description: Use the CREATE SERVER statement to create a foreign server.
 menu:
-  preview:
+  preview_api:
     identifier: ddl_create_server
     parent: statements
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 ## Synopsis
 
-Use the `CREATE SERVER` command to create a foreign table. 
+Use the `CREATE SERVER` command to create a foreign table.
 
 ## Syntax
 
-<ul class="nav nav-tabs nav-tabs-yb">
-  <li >
-    <a href="#grammar" class="nav-link active" id="grammar-tab" data-toggle="tab" role="tab" aria-controls="grammar" aria-selected="true">
-      <i class="fas fa-file-alt" aria-hidden="true"></i>
-      Grammar
-    </a>
-  </li>
-  <li>
-    <a href="#diagram" class="nav-link" id="diagram-tab" data-toggle="tab" role="tab" aria-controls="diagram" aria-selected="false">
-      <i class="fas fa-project-diagram" aria-hidden="true"></i>
-      Diagram
-    </a>
-  </li>
-</ul>
-
-<div class="tab-content">
-  <div id="grammar" class="tab-pane fade show active" role="tabpanel" aria-labelledby="grammar-tab">
-    {{% includeMarkdown "../../syntax_resources/the-sql-language/statements/create_server.grammar.md" /%}}
-  </div>
-  <div id="diagram" class="tab-pane fade" role="tabpanel" aria-labelledby="diagram-tab">
-    {{% includeMarkdown "../../syntax_resources/the-sql-language/statements/create_server.diagram.md" /%}}
-  </div>
-</div>
+{{%ebnf%}}
+  create_server
+{{%/ebnf%}}
 
 ## Semantics
 
@@ -56,7 +35,7 @@ The `VERSION` clause can be optionally used to specify the server version.
 The `FOREIGN DATA WRAPPER` clause can be used to specify the name of the foreign-data wrapper.
 
 ### Options:
-The `OPTIONS` clause specifies options for the foreign server. They typically define the connection details of the server, but the actual permitted option names and values are specific to the server’s foreign data wrapper. 
+The `OPTIONS` clause specifies options for the foreign server. They typically define the connection details of the server, but the actual permitted option names and values are specific to the server’s foreign data wrapper.
 
 ## Examples
 

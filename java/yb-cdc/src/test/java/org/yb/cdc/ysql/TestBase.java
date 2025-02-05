@@ -18,35 +18,33 @@ import static org.yb.AssertionWrappers.*;
 import org.junit.Before;
 import org.junit.Test;
 
-import org.apache.log4j.Logger;
 
 import org.junit.runner.RunWith;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.yb.cdc.CdcService;
 import org.yb.cdc.CdcService.RowMessage.Op;
 import org.yb.cdc.common.CDCBaseClass;
 import org.yb.cdc.util.CDCSubscriber;
 import org.yb.cdc.common.ExpectedRecordYSQL;
-import org.yb.cdc.util.TestUtils;
-import org.yb.client.SetCheckpointResponse;
-import org.yb.util.YBTestRunnerNonTsanOnly;
+import org.yb.cdc.util.CDCTestUtils;
+import org.yb.YBTestRunner;
 
 import java.sql.*;
 import java.util.ArrayList;
 import java.util.List;
 
-@RunWith(value = YBTestRunnerNonTsanOnly.class)
+@RunWith(value = YBTestRunner.class)
 public class TestBase extends CDCBaseClass {
-  private Logger LOG = Logger.getLogger(TestBase.class);
+  private Logger LOG = LoggerFactory.getLogger(TestBase.class);
 
   private void executeScriptAssertRecords(ExpectedRecordYSQL<?>[] expectedRecords,
                                           String sqlScript) throws Exception {
     CDCSubscriber testSubscriber = new CDCSubscriber(getMasterAddresses());
     testSubscriber.createStream("proto");
 
-    testSubscriber.setCheckpoint(0, 0, true);
-
     if (!sqlScript.isEmpty()) {
-      TestUtils.runSqlScript(connection, sqlScript);
+      CDCTestUtils.runSqlScript(connection, sqlScript);
     } else {
       LOG.info("No SQL script specified...");
     }
@@ -74,6 +72,7 @@ public class TestBase extends CDCBaseClass {
   @Before
   public void setUp() throws Exception {
     super.setUp();
+    setServerFlag(getTserverHostAndPort(), CDC_POPULATE_SAFEPOINT_RECORD, "false");
     statement = connection.createStatement();
     statement.execute("drop table if exists test;");
     statement.execute("create table test (a int primary key, b int);");
@@ -113,7 +112,9 @@ public class TestBase extends CDCBaseClass {
       assertFalse(statement.execute("COMMIT;"));
 
       ExpectedRecordYSQL<?>[] expectedRecords = new ExpectedRecordYSQL[]{
-        new ExpectedRecordYSQL<>(1, 2, Op.INSERT)
+        new ExpectedRecordYSQL<>(-1, "", Op.BEGIN),
+        new ExpectedRecordYSQL<>(1, 2, Op.INSERT),
+        new ExpectedRecordYSQL<>(-1, "", Op.COMMIT)
       };
 
       executeScriptAssertRecords(expectedRecords, "cdc_insert_row_outside_txn.sql");
@@ -149,7 +150,6 @@ public class TestBase extends CDCBaseClass {
       CDCSubscriber testSubscriber = new CDCSubscriber(getMasterAddresses());
       testSubscriber.createStream("proto");
 
-      testSubscriber.setCheckpoint(0, 0, true);
       assertEquals(1, statement.executeUpdate("INSERT INTO test VALUES (1, 2);"));
       assertFalse(statement.execute("BEGIN;"));
       assertEquals(1, statement.executeUpdate("INSERT INTO test VALUES (1, 3) ON CONFLICT (a) " +
@@ -160,7 +160,9 @@ public class TestBase extends CDCBaseClass {
       testSubscriber.getResponseFromCDC(outputList);
 
       ExpectedRecordYSQL<?>[] expectedRecords = new ExpectedRecordYSQL[]{
+        new ExpectedRecordYSQL<>(-1, -1, Op.BEGIN),
         new ExpectedRecordYSQL<>(1, 2, Op.INSERT),
+        new ExpectedRecordYSQL<>(-1, -1, Op.COMMIT),
         new ExpectedRecordYSQL<>(-1, -1, Op.BEGIN),
         new ExpectedRecordYSQL<>(1, 3, Op.UPDATE),
         new ExpectedRecordYSQL<>(-1, -1, Op.COMMIT)

@@ -29,8 +29,7 @@
 // or implied.  See the License for the specific language governing permissions and limitations
 // under the License.
 //
-#ifndef YB_INTEGRATION_TESTS_CLUSTER_VERIFIER_H
-#define YB_INTEGRATION_TESTS_CLUSTER_VERIFIER_H
+#pragma once
 
 #include <string>
 
@@ -97,14 +96,14 @@ class ClusterVerifier {
                                 const MonoDelta& timeout);
 
  private:
-  CHECKED_STATUS DoYsck();
+  Status DoYsck();
 
   // Implementation for CheckRowCount -- returns a Status instead of firing
   // gtest assertions.
-  CHECKED_STATUS DoCheckRowCount(const client::YBTableName& table_name,
-                                 ComparisonMode mode,
-                                 size_t expected_row_count,
-                                 YBConsistencyLevel consistency);
+  Status DoCheckRowCount(const client::YBTableName& table_name,
+                         ComparisonMode mode,
+                         size_t expected_row_count,
+                         YBConsistencyLevel consistency);
 
 
   MiniClusterBase* cluster_;
@@ -115,4 +114,3 @@ class ClusterVerifier {
 };
 
 } // namespace yb
-#endif /* YB_INTEGRATION_TESTS_CLUSTER_VERIFIER_H */

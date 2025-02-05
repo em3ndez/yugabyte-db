@@ -6,11 +6,8 @@ import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.contains;
 import static org.hamcrest.Matchers.empty;
 import static org.hamcrest.Matchers.hasSize;
-import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
-import akka.actor.ActorSystem;
-import akka.actor.Scheduler;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.typesafe.config.Config;
@@ -19,6 +16,7 @@ import com.yugabyte.yw.common.AssertHelper;
 import com.yugabyte.yw.common.EmailHelper;
 import com.yugabyte.yw.common.FakeDBApplication;
 import com.yugabyte.yw.common.ModelFactory;
+import com.yugabyte.yw.common.PlatformScheduler;
 import com.yugabyte.yw.common.alerts.impl.AlertChannelEmail;
 import com.yugabyte.yw.common.config.RuntimeConfigFactory;
 import com.yugabyte.yw.metrics.MetricQueryHelper;
@@ -31,7 +29,9 @@ import com.yugabyte.yw.models.AlertConfiguration;
 import com.yugabyte.yw.models.AlertConfiguration.Severity;
 import com.yugabyte.yw.models.AlertDefinition;
 import com.yugabyte.yw.models.Customer;
+import com.yugabyte.yw.models.HighAvailabilityConfig;
 import com.yugabyte.yw.models.MetricKey;
+import com.yugabyte.yw.models.PlatformInstance;
 import com.yugabyte.yw.models.Universe;
 import com.yugabyte.yw.models.filters.AlertFilter;
 import com.yugabyte.yw.models.helpers.KnownAlertLabels;
@@ -53,16 +53,13 @@ import org.junit.runner.RunWith;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
-import scala.concurrent.ExecutionContext;
 
 @RunWith(JUnitParamsRunner.class)
 public class QueryAlertsTest extends FakeDBApplication {
 
   @Rule public MockitoRule rule = MockitoJUnit.rule();
 
-  @Mock private ExecutionContext executionContext;
-
-  @Mock private ActorSystem actorSystem;
+  @Mock PlatformScheduler mockPlatformScheduler;
 
   @Mock private MetricQueryHelper queryHelper;
 
@@ -95,9 +92,9 @@ public class QueryAlertsTest extends FakeDBApplication {
 
     SmtpData smtpData = new SmtpData();
     when(channelsManager.get(ChannelType.Email.name())).thenReturn(emailReceiver);
-    when(emailHelper.getDestinations(customer.uuid))
+    when(emailHelper.getDestinations(customer.getUuid()))
         .thenReturn(Collections.singletonList("to@to.com"));
-    when(emailHelper.getSmtpData(customer.uuid)).thenReturn(smtpData);
+    when(emailHelper.getSmtpData(customer.getUuid())).thenReturn(smtpData);
 
     alertChannelService = app.injector().instanceOf(AlertChannelService.class);
     alertDestinationService = app.injector().instanceOf(AlertDestinationService.class);
@@ -107,14 +104,13 @@ public class QueryAlertsTest extends FakeDBApplication {
             alertService,
             alertConfigurationService,
             alertChannelService,
+            app.injector().instanceOf(AlertChannelTemplateService.class),
             alertDestinationService,
             channelsManager,
             metricService);
-    when(actorSystem.scheduler()).thenReturn(mock(Scheduler.class));
     queryAlerts =
         new QueryAlerts(
-            executionContext,
-            actorSystem,
+            mockPlatformScheduler,
             alertService,
             queryHelper,
             metricService,
@@ -122,7 +118,7 @@ public class QueryAlertsTest extends FakeDBApplication {
             alertConfigurationService,
             alertManager);
 
-    universe = ModelFactory.createUniverse(customer.getCustomerId());
+    universe = ModelFactory.createUniverse(customer.getId());
     when(configFactory.forUniverse(universe)).thenReturn(universeConfig);
 
     definition = ModelFactory.createAlertDefinition(customer, universe);
@@ -405,6 +401,31 @@ public class QueryAlertsTest extends FakeDBApplication {
         metricService,
         MetricKey.builder().name(PlatformMetrics.ALERT_QUERY_NEW_ALERTS.getMetricName()).build(),
         null);
+  }
+
+  @Test
+  public void testStandbyInstance() {
+    when(queryHelper.isPrometheusManagementEnabled()).thenReturn(true);
+    ZonedDateTime raisedTime = ZonedDateTime.parse("2018-07-04T20:27:12.60602144+02:00");
+    when(queryHelper.queryAlerts()).thenReturn(Collections.emptyList());
+    HighAvailabilityConfig config = HighAvailabilityConfig.create("test");
+    PlatformInstance follower = PlatformInstance.create(config, "http://ghi.com", false, true);
+
+    Alert alert = createAlert(raisedTime);
+    alertService.save(alert);
+
+    queryAlerts.scheduleRunner();
+
+    AlertFilter alertFilter = AlertFilter.builder().customerUuid(customer.getUuid()).build();
+    List<Alert> alerts = alertService.list(alertFilter);
+
+    Alert expectedAlert =
+        createAlert(raisedTime)
+            .setUuid(alert.getUuid())
+            .setState(Alert.State.RESOLVED)
+            .setResolvedTime(alerts.get(0).getResolvedTime());
+    copyNotificationFields(expectedAlert, alerts.get(0));
+    assertThat(alerts, contains(expectedAlert));
   }
 
   private Alert createAlert(ZonedDateTime raisedTime) {

@@ -2,14 +2,13 @@
 title: Real timezones that observe DST [YSQL]
 headerTitle: Real timezones that observe Daylight Savings Time
 linkTitle: Real timezones with DST
-description: Table. [YSQL]
+description: Real timezones with DST table. [YSQL]
 menu:
-  preview:
+  preview_api:
     identifier: canonical-real-country-with-dst
     parent: extended-timezone-names
     weight: 20
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 This table shows canonically-named timezones that are associated with a specific country or region—in other words, they are _real_ timezones. It selects the timezones that observe Daylight Savings Time using the predicate _std_offset <> dst_offset_. The results that the table below presents are based on the view _canonical_real_country_with_dst_ and are ordered by the _utc_offset_ column and then by the _name_ column. Trivial code adds the Markdown table notation. The view is defined thus:

@@ -15,8 +15,7 @@
 // Tree node definitions for CREATE TYPE statement.
 //--------------------------------------------------------------------------------------------------
 
-#ifndef YB_YQL_CQL_QL_PTREE_PT_CREATE_TYPE_H
-#define YB_YQL_CQL_QL_PTREE_PT_CREATE_TYPE_H
+#pragma once
 
 #include "yb/yql/cql/ql/ptree/list_node.h"
 #include "yb/yql/cql/ql/ptree/tree_node.h"
@@ -56,7 +55,7 @@ class PTTypeField : public TreeNode {
   }
 
   // Node semantics analysis.
-  virtual CHECKED_STATUS Analyze(SemContext *sem_context) override;
+  virtual Status Analyze(SemContext *sem_context) override;
 
   const char *yb_name() const {
     return name_->c_str();
@@ -108,7 +107,7 @@ class PTCreateType : public TreeNode {
   }
 
   // Node semantics analysis.
-  virtual CHECKED_STATUS Analyze(SemContext *sem_context) override;
+  virtual Status Analyze(SemContext *sem_context) override;
   void PrintSemanticAnalysisResult(SemContext *sem_context);
 
   // column lists.
@@ -138,5 +137,3 @@ class PTCreateType : public TreeNode {
 
 }  // namespace ql
 }  // namespace yb
-
-#endif // YB_YQL_CQL_QL_PTREE_PT_CREATE_TYPE_H

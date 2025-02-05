@@ -9,6 +9,7 @@ import static org.junit.Assert.assertTrue;
 
 import com.yugabyte.yw.common.FakeDBApplication;
 import com.yugabyte.yw.common.ModelFactory;
+import com.yugabyte.yw.models.HealthCheck.Details;
 import java.util.Date;
 import java.util.List;
 import java.util.UUID;
@@ -24,18 +25,17 @@ public class HealthCheckTest extends FakeDBApplication {
   }
 
   private HealthCheck addCheck(UUID universeUUID) {
-    return addCheck(universeUUID, "{}");
+    return addCheck(universeUUID, new Details());
   }
 
-  private HealthCheck addCheck(UUID universeUUID, String detailsJson) {
+  private HealthCheck addCheck(UUID universeUUID, Details details) {
     try {
       // The checkTime is created internally and part of the primary key
       Thread.sleep(10);
     } catch (InterruptedException e) {
       // Ignore in test..
     }
-    HealthCheck check =
-        HealthCheck.addAndPrune(universeUUID, defaultCustomer.getCustomerId(), detailsJson);
+    HealthCheck check = HealthCheck.addAndPrune(universeUUID, defaultCustomer.getId(), details);
     assertNotNull(check);
     return check;
   }
@@ -70,7 +70,7 @@ public class HealthCheckTest extends FakeDBApplication {
     addChecks(universeUUID, HealthCheck.RECORD_LIMIT);
     List<HealthCheck> after = HealthCheck.getAll(universeUUID);
     for (HealthCheck check : after) {
-      assertTrue(now.compareTo(check.idKey.checkTime) < 0);
+      assertTrue(now.compareTo(check.getIdKey().checkTime) < 0);
     }
   }
 
@@ -81,7 +81,7 @@ public class HealthCheckTest extends FakeDBApplication {
     HealthCheck check2 = addCheck(universeUUID);
     HealthCheck latest = HealthCheck.getLatest(universeUUID);
     assertNotNull(latest);
-    assertEquals(latest.idKey.checkTime, check2.idKey.checkTime);
+    assertEquals(latest.getIdKey().checkTime, check2.getIdKey().checkTime);
   }
 
   @Test
@@ -90,15 +90,10 @@ public class HealthCheckTest extends FakeDBApplication {
     HealthCheck noDetails = addCheck(universeUUID);
     assertFalse(noDetails.hasError());
 
-    HealthCheck trueError = addCheck(universeUUID, "{\"" + "has_error" + "\": true}");
+    HealthCheck trueError = addCheck(universeUUID, new Details().setHasError(true));
     assertTrue(trueError.hasError());
 
-    HealthCheck falseError = addCheck(universeUUID, "{\"" + "has_error" + "\": false}");
+    HealthCheck falseError = addCheck(universeUUID, new Details().setHasError(false));
     assertFalse(falseError.hasError());
-  }
-
-  @Test(expected = RuntimeException.class)
-  public void testInvalidDetailsJson() {
-    HealthCheck shouldThrow = addCheck(UUID.randomUUID(), "invalid_json");
   }
 }

@@ -4,11 +4,10 @@ headerTitle: UUID data type
 linkTitle: UUID
 description: Represents Universally Unique Identifiers (UUIDs).
 menu:
-  stable:
+  stable_api:
     identifier: api-ysql-datatypes-uuid
     parent: api-ysql-datatypes
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 ## Synopsis
@@ -17,13 +16,13 @@ The `UUID` data type represents Universally Unique Identifiers (UUIDs). A UUID i
 
 ## Description
 
-```
+```ebnf
 type_specification ::= UUID
 ```
 
 ## Examples
 
-```
+```output
 ffffffff-ffff-ffff-ffff-ffffffffffff
 {aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa}
 12341234-1234-1234-1234-123412341234

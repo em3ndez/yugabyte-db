@@ -21,8 +21,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file. See the AUTHORS file for names of contributors.
 
-#ifndef YB_ROCKSDB_DB_VERSION_EDIT_H
-#define YB_ROCKSDB_DB_VERSION_EDIT_H
+#pragma once
 
 #include <stddef.h>
 #include <stdint.h>
@@ -143,12 +142,14 @@ struct FileMetaData {
 
   FileMetaData();
 
-  // REQUIRED: Keys must be given to the function in sorted order (it expects
-  // the last key to be the largest).
-  void UpdateBoundaries(InternalKey key, const FileBoundaryValuesBase& source);
+  void UpdateKey(const Slice& key, UpdateBoundariesType type);
 
   // Update all boundaries except key.
-  void UpdateBoundariesExceptKey(const FileBoundaryValuesBase& source, UpdateBoundariesType type);
+  void UpdateBoundariesExceptKey(const BoundaryValues& source, UpdateBoundariesType type);
+
+  void UpdateBoundarySeqNo(SequenceNumber sequence_number);
+
+  void UpdateBoundaryUserValues(const UserBoundaryValueRefs& source, UpdateBoundariesType type);
 
   bool Unref(TableCache* table_cache);
 
@@ -294,5 +295,3 @@ class VersionEdit {
 };
 
 }  // namespace rocksdb
-
-#endif // YB_ROCKSDB_DB_VERSION_EDIT_H

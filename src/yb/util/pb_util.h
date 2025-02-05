@@ -33,16 +33,58 @@
 // Utilities for dealing with protocol buffers.
 // These are mostly just functions similar to what are found in the protobuf
 // library itself, but using yb::faststring instances instead of STL strings.
-#ifndef YB_UTIL_PB_UTIL_H
-#define YB_UTIL_PB_UTIL_H
+#pragma once
 
 #include <string>
 
+#include <google/protobuf/repeated_field.h>
 #include <gtest/gtest_prod.h>
 
 #include "yb/util/faststring.h"
 #include "yb/util/slice.h"
 #include "yb/util/status_fwd.h"
+
+// Check that the provided fields have been set in the protobuf. If the check fails, this returns
+// an InvalidArgument Status who's message containing the list of missing fields.
+//
+// Ex: SCHECK_PB_FIELDS_SET(req, field_1, field_2, field_3);
+#define SCHECK_PB_FIELDS_SET(pb, ...) \
+  do { \
+    std::vector<std::string> _missing_fields; \
+    BOOST_PP_SEQ_FOR_EACH( \
+        INTERNAL_SCHECK_PB_FIELD_SET, (pb), BOOST_PP_VARIADIC_TO_SEQ(__VA_ARGS__)) \
+    SCHECK_FORMAT( \
+        _missing_fields.empty(), InvalidArgument, "Missing required arguments: $0", \
+        _missing_fields); \
+  } while (0)
+
+#define INTERNAL_SCHECK_PB_FIELD_SET(i, pb, field) \
+  if (!pb.BOOST_PP_CAT(has_, field)()) { \
+    _missing_fields.emplace_back(BOOST_PP_STRINGIZE(field)); \
+  }
+
+// Check that the provided fields are not empty in the protobuf.
+// This uses the empty() function for fields that support it (string and repeated types). For
+// repeated types all elements in the list are also checked individually. If the check fails, this
+// returns an InvalidArgument Status who's message containing the list of
+// empty fields. If the type does not implement empty() then it is treated as not empty.
+// SCHECK_PB_FIELDS_SET must be used for these types.
+//
+// Ex: SCHECK_PB_FIELDS_NOT_EMPTY(req, field_1, field_2, field_3);
+#define SCHECK_PB_FIELDS_NOT_EMPTY(pb, ...) \
+  do { \
+    std::vector<std::string> _missing_fields; \
+    BOOST_PP_SEQ_FOR_EACH( \
+        INTERNAL_SCHECK_PB_FIELD_NOT_EMPTY, (pb), BOOST_PP_VARIADIC_TO_SEQ(__VA_ARGS__)) \
+    SCHECK_FORMAT( \
+        _missing_fields.empty(), InvalidArgument, "Empty required arguments: $0", \
+        _missing_fields); \
+  } while (0)
+
+#define INTERNAL_SCHECK_PB_FIELD_NOT_EMPTY(i, pb, field) \
+  if (yb::pb_util_internal::IsPbFieldEmpty(pb.field())) { \
+    _missing_fields.emplace_back(BOOST_PP_STRINGIZE(field)); \
+  }
 
 namespace google {
 namespace protobuf {
@@ -52,13 +94,48 @@ class FileDescriptorSet;
 class MessageLite;
 class Message;
 
-template <class T>
-class RepeatedPtrField;
-
 } // namespace protobuf
 } // namespace google
 
 namespace yb {
+
+namespace pb_util_internal {
+template <class T>
+concept TypeWithEmpty = requires(const T& t) { empty(t); };
+
+template <class T>
+concept TypeWithoutEmpty = !TypeWithEmpty<T>;  // NOLINT
+
+template <TypeWithoutEmpty T>
+bool IsPbFieldEmpty(const T& field) {
+  return false;
+}
+
+template <TypeWithEmpty T>
+bool IsPbFieldEmpty(const T& field) {
+  return field.empty();
+}
+
+template <typename T>
+bool IsPbFieldEmpty(const google::protobuf::RepeatedField<T>& repeated_field) {
+  // RepeatedField only has basic types which do not implement empty().
+  return repeated_field.empty();
+}
+
+template <typename T>
+bool IsPbFieldEmpty(const google::protobuf::RepeatedPtrField<T>& repeated_field) {
+  if (repeated_field.empty()) {
+    return true;
+  }
+  for (const auto& field : repeated_field) {
+    if (IsPbFieldEmpty(field)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+}  // namespace pb_util_internal
 
 class Env;
 class RandomAccessFile;
@@ -69,6 +146,8 @@ class WritableFile;
 namespace pb_util {
 
 using google::protobuf::MessageLite;
+
+static const char* const kTmpTemplateSuffix = ".tmp.XXXXXX";
 
 enum SyncMode {
   SYNC,
@@ -81,14 +160,14 @@ enum CreateMode {
 };
 
 // See MessageLite::AppendToString
-void AppendToString(const MessageLite &msg, faststring *output);
+Status AppendToString(const MessageLite &msg, faststring *output);
 
 // See MessageLite::AppendPartialToString
-void AppendPartialToString(const MessageLite &msg, faststring *output);
-void AppendPartialToString(const MessageLite &msg, std::string *output);
+Status AppendPartialToString(const MessageLite &msg, faststring *output);
+Status AppendPartialToString(const MessageLite &msg, std::string *output);
 
 // See MessageLite::SerializeToString.
-void SerializeToString(const MessageLite &msg, faststring *output);
+Status SerializeToString(const MessageLite &msg, faststring *output);
 
 // See MessageLite::ParseFromZeroCopyStream
 // TODO: change this to return Status - differentiate IO error from bad PB
@@ -105,6 +184,20 @@ Result<T> ParseFromSlice(const Slice& slice) {
   return result;
 }
 
+template <typename T>
+std::string JoinRepeatedPBs(const google::protobuf::RepeatedPtrField<T>& pbs) {
+  std::string result;
+  bool first = true;
+  for (const auto& pb : pbs) {
+    if (!first) {
+      result += ", ";
+    }
+    result += pb.ShortDebugString();
+    first = false;
+  }
+  return result;
+}
+
 // Load a protobuf from the given path.
 Status ReadPBFromPath(Env* env, const std::string& path, MessageLite* msg);
 
@@ -116,6 +209,16 @@ Status WritePBToPath(Env* env, const std::string& path, const MessageLite& msg, 
 // Truncate any 'bytes' or 'string' fields of this message to max_len.
 // The text "<truncated>" is appended to any such truncated fields.
 void TruncateFields(google::protobuf::Message* message, int max_len);
+
+// Form a path ends with kTmpTemplateSuffix.
+inline std::string MakeTempPath(const std::string& path) {
+  return path + kTmpTemplateSuffix;
+}
+
+// Is the file ends with kTmpTemplateSuffix.
+inline bool IsTempFile(const std::string& path) {
+  return path.ends_with(kTmpTemplateSuffix);
+}
 
 // A protobuf "container" has the following format (all integers in
 // little-endian byte order):
@@ -212,14 +315,14 @@ class WritablePBContainerFile {
   //
   // 'msg' need not be populated; its type is used to "lock" the container
   // to a particular protobuf message type in Append().
-  CHECKED_STATUS Init(const google::protobuf::Message& msg);
+  Status Init(const google::protobuf::Message& msg);
 
   // Writes a protobuf message to the container, beginning with its size
   // and ending with its CRC32 checksum.
-  CHECKED_STATUS Append(const google::protobuf::Message& msg);
+  Status Append(const google::protobuf::Message& msg);
 
   // Asynchronously flushes all dirty container data to the filesystem.
-  CHECKED_STATUS Flush();
+  Status Flush();
 
   // Synchronizes all dirty container data to the filesystem.
   //
@@ -227,10 +330,10 @@ class WritablePBContainerFile {
   // container file was provided during construction, we don't know whether
   // it was created or reopened, and parent directory synchronization is
   // only needed in the former case.
-  CHECKED_STATUS Sync();
+  Status Sync();
 
   // Closes the container.
-  CHECKED_STATUS Close();
+  Status Close();
 
  private:
   FRIEND_TEST(TestPBUtil, TestPopulateDescriptorSet);
@@ -245,7 +348,7 @@ class WritablePBContainerFile {
 
   // Serialize the contents of 'msg' into 'buf' along with additional metadata
   // to aid in deserialization.
-  CHECKED_STATUS AppendMsgToBuffer(const google::protobuf::Message& msg, faststring* buf);
+  Status AppendMsgToBuffer(const google::protobuf::Message& msg, faststring* buf);
 
   bool closed_;
 
@@ -266,20 +369,20 @@ class ReadablePBContainerFile {
   ~ReadablePBContainerFile();
 
   // Reads the header information from the container and validates it.
-  CHECKED_STATUS Init();
+  Status Init();
 
   // Reads a protobuf message from the container, validating its size and
   // data using a CRC32 checksum.
-  CHECKED_STATUS ReadNextPB(google::protobuf::Message* msg);
+  Status ReadNextPB(google::protobuf::Message* msg);
 
   // Dumps any unread protobuf messages in the container to 'os'. Each
   // message's DebugString() method is invoked to produce its textual form.
   //
   // If 'oneline' is true, prints each message on a single line.
-  CHECKED_STATUS Dump(std::ostream* os, bool oneline);
+  Status Dump(std::ostream* os, bool oneline);
 
   // Closes the container.
-  CHECKED_STATUS Close();
+  Status Close();
 
   // Expected PB type and schema for each message to be read.
   //
@@ -301,8 +404,8 @@ class ReadablePBContainerFile {
   //
   // If 'eofOK' is EOF_OK, an EOF is returned as-is. Otherwise, it is
   // considered to be an invalid short read and returned as an error.
-  CHECKED_STATUS ValidateAndRead(size_t length, EofOK eofOK,
-                                 Slice* result, std::unique_ptr<uint8_t[]>* scratch);
+  Status ValidateAndRead(size_t length, EofOK eofOK,
+                         Slice* result, std::unique_ptr<uint8_t[]>* scratch);
 
   size_t offset_;
 
@@ -329,6 +432,9 @@ Status ReadPBContainerFromPath(Env* env, const std::string& path, const std::str
 // Serialize a "containerized" protobuf to the given path.
 //
 // If create == NO_OVERWRITE and 'path' already exists, the function will fail.
+// If create == OVERWRITE and 'path' already exists, then it is atomically replaced. If there is a
+// system crash during the operation, it is guaranteed that an intact copy of either the old or new
+// version of the file will continue to exist.
 // If sync == SYNC, the newly created file will be fsynced before returning.
 Status WritePBContainerToPath(Env* env, const std::string& path,
                               const google::protobuf::Message& msg,
@@ -348,5 +454,3 @@ bool ArePBsEqual(const google::protobuf::Message& prev_pb,
 using RepeatedBytes = google::protobuf::RepeatedPtrField<std::string>;
 
 } // namespace yb
-
-#endif // YB_UTIL_PB_UTIL_H

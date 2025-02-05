@@ -4,16 +4,15 @@ headerTitle: Modeling the internal representation and comparing the model with t
 linkTitle: Representation model
 description: Demonstrates a model of the internal representation of an interval value using PL/pgSQL. [YSQL]
 menu:
-  stable:
+  stable_api:
     identifier: internal-representation-model
     parent: interval-representation
     weight: 10
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 {{< tip title="Download and install the date-time utilities code." >}}
-The code on this page depends on the code presented in the section [User-defined _interval_ utility functions](../../interval-utilities/). This is included in the larger [code kit](../../../../download-date-time-utilities/) that includes all of the reusable code that the overall _[date-time](../../../../../type_datetime)_ section describes and uses.
+The code on this page depends on the code presented in the section [User-defined _interval_ utility functions](../../interval-utilities/). This is included in the larger [code kit](../../../../download-date-time-utilities/) that includes all of the reusable code that the overall _[date-time](../../../../../type_datetime/)_ section describes and uses.
 {{< /tip >}}
 
 Each of the [ad hoc examples](../ad-hoc-examples/) creates an _interval_ value by specifying any subset of its parameterization using _years_, _months_, _days_, _hours_, _minutes_, and _seconds_ from at least one of these through at most all six of them. (Omitting any of these six has the same effect as specifying _zero_ for that parameter.)

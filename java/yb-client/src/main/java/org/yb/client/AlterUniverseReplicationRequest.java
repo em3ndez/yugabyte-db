@@ -13,50 +13,90 @@
 package org.yb.client;
 
 import com.google.protobuf.Message;
-import java.util.Set;
-import org.jboss.netty.buffer.ChannelBuffer;
+import io.netty.buffer.ByteBuf;
 import org.yb.CommonNet;
 import org.yb.CommonNet.HostPortPB;
 import org.yb.master.MasterReplicationOuterClass;
 import org.yb.master.MasterTypes;
 import org.yb.util.Pair;
 
+import java.util.*;
+
 public class AlterUniverseReplicationRequest extends YRpc<AlterUniverseReplicationResponse> {
 
   private final String replicationGroupName;
-  private final Set<String> sourceTableIDsToAdd;
-  private final Set<String> sourceTableIDsToRemove;
+  private final Map<String, String> sourceTableIdsToAddBootstrapIdMap;
+  private final Set<String> sourceTableIdsToRemove;
   private final Set<HostPortPB> sourceMasterAddresses;
   private final String newReplicationGroupName;
+  private final boolean removeTableIgnoreErrors;
+  // Must be null for table level remove to be used.
+  private final String producerNamespaceIdToRemove;
 
   AlterUniverseReplicationRequest(
     YBTable table,
     String replicationGroupName,
-    Set<String> sourceTableIDsToAdd,
-    Set<String> sourceTableIDsToRemove,
-    Set<CommonNet.HostPortPB> sourceMasterAddresses,
-    String newReplicationGroupName) {
+    String producerNamespaceIdToRemove) {
     super(table);
     this.replicationGroupName = replicationGroupName;
-    this.sourceTableIDsToAdd = sourceTableIDsToAdd;
-    this.sourceTableIDsToRemove = sourceTableIDsToRemove;
+    this.sourceTableIdsToAddBootstrapIdMap = new HashMap<>();
+    this.sourceTableIdsToRemove = new HashSet<>();
+    this.sourceMasterAddresses = new HashSet<>();
+    this.newReplicationGroupName = null;
+    this.removeTableIgnoreErrors = true;
+    this.producerNamespaceIdToRemove = producerNamespaceIdToRemove;
+  }
+
+
+  AlterUniverseReplicationRequest(
+    YBTable table,
+    String replicationGroupName,
+    Map<String, String> sourceTableIdsToAddBootstrapIdMap,
+    Set<String> sourceTableIdsToRemove,
+    Set<CommonNet.HostPortPB> sourceMasterAddresses,
+    String newReplicationGroupName,
+    boolean removeTableIgnoreErrors) {
+    super(table);
+    this.replicationGroupName = replicationGroupName;
+    this.sourceTableIdsToAddBootstrapIdMap = sourceTableIdsToAddBootstrapIdMap;
+    this.sourceTableIdsToRemove = sourceTableIdsToRemove;
     this.sourceMasterAddresses = sourceMasterAddresses;
     this.newReplicationGroupName = newReplicationGroupName;
+    this.removeTableIgnoreErrors = removeTableIgnoreErrors;
+    this.producerNamespaceIdToRemove = null;
   }
 
   @Override
-  ChannelBuffer serialize(Message header) {
+  ByteBuf serialize(Message header) {
     assert header.isInitialized();
 
+    // Add table IDs and bootstrap IDs.
+    List<String> sourceTableIdsToAdd = new ArrayList<>();
+    List<String> sourceBootstrapIdstoAdd = new ArrayList<>();
+    sourceTableIdsToAddBootstrapIdMap.forEach((tableId, bootstrapId) -> {
+      sourceTableIdsToAdd.add(tableId);
+      sourceBootstrapIdstoAdd.add(bootstrapId);
+    });
+
     final MasterReplicationOuterClass.AlterUniverseReplicationRequestPB.Builder builder =
-      MasterReplicationOuterClass.AlterUniverseReplicationRequestPB.newBuilder()
-        .setProducerId(replicationGroupName)
-        .addAllProducerTableIdsToAdd(sourceTableIDsToAdd)
-        .addAllProducerTableIdsToRemove(sourceTableIDsToRemove)
-        .addAllProducerMasterAddresses(sourceMasterAddresses);
+        MasterReplicationOuterClass.AlterUniverseReplicationRequestPB.newBuilder()
+            .setReplicationGroupId(replicationGroupName)
+            .addAllProducerMasterAddresses(sourceMasterAddresses)
+            .addAllProducerTableIdsToAdd(sourceTableIdsToAdd)
+            .addAllProducerTableIdsToRemove(sourceTableIdsToRemove)
+            .setRemoveTableIgnoreErrors(removeTableIgnoreErrors);
 
     if (newReplicationGroupName != null) {
-      builder.setNewProducerUniverseId(newReplicationGroupName);
+      builder.setDEPRECATEDNewReplicationGroupId(newReplicationGroupName);
+    }
+
+    // If all bootstrap IDs are null, it is not required.
+    if (sourceBootstrapIdstoAdd.stream().anyMatch(Objects::nonNull)){
+      builder.addAllProducerBootstrapIdsToAdd(sourceBootstrapIdstoAdd);
+    }
+
+    if (producerNamespaceIdToRemove != null) {
+      builder.setProducerNamespaceIdToRemove(producerNamespaceIdToRemove);
     }
 
     return toChannelBuffer(header, builder.build());

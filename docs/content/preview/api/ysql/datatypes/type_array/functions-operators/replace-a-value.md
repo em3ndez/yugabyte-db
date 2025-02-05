@@ -4,11 +4,10 @@ linkTitle: array_replace() / set value
 headerTitle: array_replace() and setting an array value explicitly
 description: array_replace() and setting an array value explicitly
 menu:
-  preview:
+  preview_api:
     identifier: array-replace-a-value
     parent: array-functions-operators
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 Each of the approaches described in this section, using the `array_replace()` function and setting an addressed array value explicitly and in place, can be used to change values in an array. But the two approaches differ importantly:
 

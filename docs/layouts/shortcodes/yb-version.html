@@ -19,7 +19,7 @@ Formats:
 {{- $version := .Get "version" -}}
 {{- $format := .Get "format" -}}
 
-{{ range .Site.Data.currentVersions.docVersions }}
+{{ range .Site.Data.currentVersions.dbVersions }}
 
   {{- if eq $version "preview" -}}
     {{- if eq .alias "preview" -}}
@@ -52,7 +52,7 @@ Formats:
     {{- end -}}
 
   {{- else -}}
-    {{- if eq .name $version -}}
+    {{- if eq $version .series -}}
       {{- if eq $format "build" -}}
         {{ .appVersion }}
       {{- else if eq $format "short" -}}
@@ -63,7 +63,7 @@ Formats:
         {{ .display }}
       {{- else -}}
         {{ .version }}
-      {{ end }}
+      {{- end -}}
     {{- end -}}
   {{- end -}}
 

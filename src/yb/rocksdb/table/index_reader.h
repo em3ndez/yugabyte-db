@@ -11,8 +11,7 @@
 // under the License.
 //
 
-#ifndef YB_ROCKSDB_TABLE_INDEX_READER_H
-#define YB_ROCKSDB_TABLE_INDEX_READER_H
+#pragma once
 
 #include <stddef.h>
 
@@ -42,7 +41,7 @@ class IndexReader {
   explicit IndexReader(const ComparatorPtr& comparator)
       : comparator_(comparator) {}
 
-  virtual ~IndexReader() {}
+  virtual ~IndexReader() = default;
 
   // Create an iterator for index access.
   // If not null iter is passed in, implementation was able to update it and it should be used by
@@ -53,21 +52,39 @@ class IndexReader {
   // - top level index block iterator is passed and updated instead of the whole index iterator,
   // but return semantic is the same - the whole index iterator is returned.
   // - index_iterator_state is used to create secondary iterators on index.
-  virtual InternalIterator* NewIterator(BlockIter* iter = nullptr,
-                                        TwoLevelIteratorState* index_iterator_state = nullptr,
-                                        bool total_order_seek = true) = 0;
+  virtual InternalIterator* NewIterator(
+      BlockIter* iter,
+      std::unique_ptr<TwoLevelIteratorState> index_iterator_state,
+      bool total_order_seek) = 0;
+
+  // Version of NewIterator that creates an index iterator allowing to get more info from the data
+  // block this index iterator is pointing to. See DataBlockAwareIndexInternalIterator API
+  // description regarding exact functionality.
+  // We don't always return DataBlockAwareIndexInternalIterator from IndexReader because:
+  // 1) In most cases we don't care about data block content at this level.
+  // As of 2024-11 we only use this for improved YSQL ANALYZE query sampling algorithm.
+  // 2) For kBinarySearch and kHashSearch index types this enhanced functionality is provided via
+  // wrapping usual InternalIterator of an index block into enhanced wrapper which is less
+  // performant and requires more memory.
+  // So IndexReader::NewDataBlockAwareIterator API should only be used when you need to get index
+  // iterator which allows data block info access. In other cases use IndexReader::NewIterator.
+  virtual DataBlockAwareIndexInternalIterator* NewDataBlockAwareIterator(
+      BlockIter* iter,
+      std::unique_ptr<TwoLevelIteratorState> index_iterator_state,
+      std::unique_ptr<TwoLevelIteratorState> data_iterator_state,
+      bool total_order_seek) = 0;
 
   // Returns approximate middle key from the index. Key from the index might not match any key
   // actually written to SST file, because keys could be shortened and substituted before them are
   // written into the index (see ShortenedIndexBuilder).
-  virtual Result<Slice> GetMiddleKey() = 0;
+  virtual Result<std::string> GetMiddleKey() const = 0;
 
   // The size of the index.
   virtual size_t size() const = 0;
   // Memory usage of the index block
   virtual size_t usable_size() const = 0;
 
-  // Report an approximation of how much memory has been used other than memory
+  // Reports an approximation of how much memory has been used other than memory
   // that was allocated in block cache.
   virtual size_t ApproximateMemoryUsage() const = 0;
 
@@ -84,18 +101,29 @@ class BinarySearchIndexReader : public IndexReader {
   // `BinarySearchIndexReader`.
   // On success, index_reader will be populated; otherwise it will remain
   // unmodified.
-  static CHECKED_STATUS Create(
+  static Result<std::unique_ptr<BinarySearchIndexReader>> Create(
       RandomAccessFileReader* file, const Footer& footer, const BlockHandle& index_handle, Env* env,
-      const ComparatorPtr& comparator, std::unique_ptr<IndexReader>* index_reader,
-      const std::shared_ptr<yb::MemTracker>& mem_tracker);
+      const ComparatorPtr& comparator, const std::shared_ptr<yb::MemTracker>& mem_tracker);
 
   InternalIterator* NewIterator(
-      BlockIter* iter = nullptr,
+      BlockIter* iter,
       // Rest of parameters are ignored by BinarySearchIndexReader.
-      TwoLevelIteratorState* state = nullptr, bool total_order_seek = true) override {
-    auto new_iter = index_block_->NewIndexIterator(comparator_.get(), iter, true);
+      std::unique_ptr<TwoLevelIteratorState>,
+      bool) override {
+    auto new_iter =
+        index_block_->NewIndexBlockIterator(comparator_.get(), iter, /* total_order_seek = */ true);
     return iter ? nullptr : new_iter;
   }
+
+  void NewIterator(BlockIter* iter) {
+    index_block_->NewIndexBlockIterator(comparator_.get(), iter, /* total_order_seek = */ true);
+  }
+
+  DataBlockAwareIndexInternalIterator* NewDataBlockAwareIterator(
+      BlockIter* iter,
+      std::unique_ptr<TwoLevelIteratorState> index_iterator_state,
+      std::unique_ptr<TwoLevelIteratorState> data_iterator_state,
+      bool total_order_seek) override;
 
   size_t size() const override {
     DCHECK(index_block_);
@@ -112,7 +140,7 @@ class BinarySearchIndexReader : public IndexReader {
     return index_block_->ApproximateMemoryUsage();
   }
 
-  Result<Slice> GetMiddleKey() override;
+  Result<std::string> GetMiddleKey() const override;
 
  private:
   BinarySearchIndexReader(const ComparatorPtr& comparator,
@@ -121,8 +149,6 @@ class BinarySearchIndexReader : public IndexReader {
     DCHECK(index_block_);
   }
 
-  ~BinarySearchIndexReader() {}
-
   const std::unique_ptr<Block> index_block_;
 };
 
@@ -130,18 +156,24 @@ class BinarySearchIndexReader : public IndexReader {
 // key.
 class HashIndexReader : public IndexReader {
  public:
-  static CHECKED_STATUS Create(
+  static yb::Result<std::unique_ptr<IndexReader>> Create(
       const SliceTransform* hash_key_extractor, const Footer& footer, RandomAccessFileReader* file,
       Env* env, const ComparatorPtr& comparator, const BlockHandle& index_handle,
-      InternalIterator* meta_index_iter, std::unique_ptr<IndexReader>* index_reader,
-      bool hash_index_allow_collision, const std::shared_ptr<yb::MemTracker>& mem_tracker);
+      InternalIterator* meta_index_iter, bool hash_index_allow_collision,
+      const std::shared_ptr<yb::MemTracker>& mem_tracker);
 
   InternalIterator* NewIterator(
-      BlockIter* iter = nullptr, TwoLevelIteratorState* state = nullptr,
+      BlockIter* iter = nullptr, std::unique_ptr<TwoLevelIteratorState> state = nullptr,
       bool total_order_seek = true) override {
-    auto new_iter = index_block_->NewIndexIterator(comparator_.get(), iter, total_order_seek);
+    auto new_iter = index_block_->NewIndexBlockIterator(comparator_.get(), iter, total_order_seek);
     return iter ? nullptr : new_iter;
   }
+
+  DataBlockAwareIndexInternalIterator* NewDataBlockAwareIterator(
+      BlockIter* iter,
+      std::unique_ptr<TwoLevelIteratorState> index_iterator_state,
+      std::unique_ptr<TwoLevelIteratorState> data_iterator_state,
+      bool total_order_seek) override;
 
   size_t size() const override {
     DCHECK(index_block_);
@@ -158,15 +190,13 @@ class HashIndexReader : public IndexReader {
     return index_block_->ApproximateMemoryUsage() + prefixes_contents_.data.size();
   }
 
-  Result<Slice> GetMiddleKey() override;
+  Result<std::string> GetMiddleKey() const override;
 
  private:
   HashIndexReader(const ComparatorPtr& comparator, std::unique_ptr<Block>&& index_block)
       : IndexReader(comparator), index_block_(std::move(index_block)) {
     DCHECK(index_block_);
   }
-
-  ~HashIndexReader() {}
 
   void OwnPrefixesContents(BlockContents&& prefixes_contents) {
     prefixes_contents_ = std::move(prefixes_contents);
@@ -181,12 +211,12 @@ class MultiLevelIndexReader : public IndexReader {
  public:
   // Read the top level index from the file and create an instance for `MultiLevelIndexReader`.
   static Result<std::unique_ptr<MultiLevelIndexReader>> Create(
-      RandomAccessFileReader* file, const Footer& footer, int num_levels,
+      RandomAccessFileReader* file, const Footer& footer, uint32_t num_levels,
       const BlockHandle& top_level_index_handle, Env* env, const ComparatorPtr& comparator,
       const std::shared_ptr<yb::MemTracker>& mem_tracker);
 
   MultiLevelIndexReader(
-      const ComparatorPtr& comparator, int num_levels,
+      const ComparatorPtr& comparator, uint32_t num_levels,
       std::unique_ptr<Block> top_level_index_block)
       : IndexReader(comparator),
         num_levels_(num_levels),
@@ -197,9 +227,26 @@ class MultiLevelIndexReader : public IndexReader {
   ~MultiLevelIndexReader() {}
 
   InternalIterator* NewIterator(
-      BlockIter* iter, TwoLevelIteratorState* index_iterator_state, bool) override;
+      BlockIter* iter, std::unique_ptr<TwoLevelIteratorState> index_iterator_state,
+      // MultiLevelIndexReader ignores total_order_seek and always uses total order seek instead of
+      // prefix/hash seek (which is used only by HashIndexBuilder/Reader).
+      bool /* total_order_seek */) override;
 
-  Result<Slice> GetMiddleKey() override;
+  DataBlockAwareIndexInternalIterator* NewDataBlockAwareIterator(
+      BlockIter* iter,
+      std::unique_ptr<TwoLevelIteratorState> index_iterator_state,
+      std::unique_ptr<TwoLevelIteratorState> data_iterator_state,
+      bool) override;
+
+  Result<std::string> GetMiddleKey() const override;
+
+  uint32_t TEST_GetNumLevels() const {
+    return num_levels_;
+  }
+
+  uint32_t TEST_GetTopLevelBlockNumRestarts() const {
+    return top_level_index_block_->NumRestarts();
+  }
 
  private:
   size_t size() const override { return top_level_index_block_->size(); }
@@ -212,10 +259,8 @@ class MultiLevelIndexReader : public IndexReader {
     return top_level_index_block_->ApproximateMemoryUsage();
   }
 
-  const int num_levels_;
+  const uint32_t num_levels_;
   const std::unique_ptr<Block> top_level_index_block_;
 };
 
 } // namespace rocksdb
-
-#endif  // YB_ROCKSDB_TABLE_INDEX_READER_H

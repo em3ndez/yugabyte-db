@@ -35,6 +35,7 @@
 #include "yb/tablet/tablet_metadata.h"
 #include "yb/tablet/tablet_peer.h"
 
+#include "yb/util/backoff_waiter.h"
 #include "yb/util/format.h"
 #include "yb/util/logging.h"
 #include "yb/util/monotime.h"
@@ -43,8 +44,9 @@
 #include "yb/util/status_log.h"
 #include "yb/util/sync_point.h"
 #include "yb/util/test_thread_holder.h"
-#include "yb/util/test_util.h"
 #include "yb/util/tsan_util.h"
+
+using std::string;
 
 using namespace std::literals;  // NOLINT
 
@@ -65,24 +67,24 @@ DECLARE_int64(tablet_force_split_threshold_bytes);
 
 DECLARE_double(TEST_simulate_lookup_partition_list_mismatch_probability);
 DECLARE_bool(TEST_reject_delete_not_serving_tablet_rpc);
+DECLARE_bool(use_priority_thread_pool_for_flushes);
 
 namespace yb {
 
 namespace {
 
-size_t GetNumActiveTablets(MiniCluster* cluster) {
-  return ListTabletPeers(
-             cluster,
-             [](const std::shared_ptr<tablet::TabletPeer>& peer) -> bool {
-               const auto tablet_meta = peer->tablet_metadata();
-               const auto consensus = peer->shared_consensus();
-               return tablet_meta && consensus &&
-                      tablet_meta->table_type() != TableType::TRANSACTION_STATUS_TABLE_TYPE &&
-                      tablet_meta->tablet_data_state() !=
-                          tablet::TabletDataState::TABLET_DATA_SPLIT_COMPLETED &&
-                      consensus->GetLeaderStatus() != consensus::LeaderStatus::NOT_LEADER;
-             })
-      .size();
+Result<size_t> GetNumActiveTablets(
+    MiniCluster* cluster, const client::YBTableName& table_name, const MonoDelta&,
+    const RequireTabletsRunning require_tablets_running) {
+  master::GetTableLocationsResponsePB resp;
+  RETURN_NOT_OK(itest::GetTableLocations(
+      cluster, table_name, require_tablets_running, &resp));
+  if (VLOG_IS_ON(4)) {
+    for (const auto& tablet : resp.tablet_locations()) {
+      VLOG_WITH_FUNC(4) << "tablet_id: " << tablet.tablet_id();
+    }
+  }
+  return resp.tablet_locations_size();
 }
 
 Result<size_t> GetNumActiveTablets(
@@ -94,6 +96,49 @@ Result<size_t> GetNumActiveTablets(
   return resp.tablet_locations_size();
 }
 
+// If should_stop_func() returns true we are stopping writes and don't wait any more.
+// This can be used to abort the test in case of too much read/write errors accumulated.
+template <class MiniClusterType>
+Status WaitForActiveTablets(
+    MiniClusterType* cluster, const client::YBTableName& table_name,
+    const size_t num_expected_active_tablets, const MonoDelta& timeout,
+    std::atomic<bool>* stop_writes, std::function<bool()> should_stop_func) {
+  const auto deadline = CoarseMonoClock::Now() + timeout;
+  size_t num_active_tablets = 0;
+  while (CoarseMonoClock::Now() < deadline && !should_stop_func()) {
+    // When we get num_wait_for_active_tablets active tablets (not necessarily running), we stop
+    // writes to avoid creating too many post-split tablets and overloading local cluster.
+    // After stopping writes, we continue reads and wait for num_wait_for_active_tablets active
+    // running tablets.
+    auto num_active_tablets_res = GetNumActiveTablets(
+        cluster, table_name, 10s * kTimeMultiplier,
+        RequireTabletsRunning(stop_writes->load(std::memory_order_acquire)));
+    if (num_active_tablets_res.ok()) {
+      num_active_tablets = *num_active_tablets_res;
+      YB_LOG_EVERY_N_SECS(INFO, 3) << "Number of active tablets: " << num_active_tablets;
+      if (num_active_tablets >= num_expected_active_tablets) {
+        if (!stop_writes->exchange(true)) {
+          LOG(INFO) << "Stopping writes";
+        }
+        break;
+      }
+    }
+    SleepFor(500ms);
+  }
+  LOG(INFO) << "Number of active tablets: " << num_active_tablets;
+  if (CoarseMonoClock::Now() > deadline) {
+    return STATUS_FORMAT(
+        TimedOut, "Timed out waiting for $0 active tablets, only got $1",
+        num_expected_active_tablets, num_active_tablets);
+  }
+  if (num_active_tablets < num_expected_active_tablets) {
+    return STATUS_FORMAT(
+        IllegalState, "Expected $0 active tablets, only got $1", num_expected_active_tablets,
+        num_active_tablets);
+  }
+  return Status::OK();
+}
+
 } // namespace
 
 const auto kSecondaryIndexTestTableName =
@@ -102,34 +147,31 @@ const auto kSecondaryIndexTestTableName =
 class CqlTabletSplitTest : public CqlTestBase<MiniCluster> {
  protected:
   void SetUp() override {
-    FLAGS_yb_num_shards_per_tserver = 1;
-    FLAGS_enable_automatic_tablet_splitting = true;
+    itest::SetupQuickSplit(64_KB);
 
-    // Setting this very low will just cause to include metrics in every heartbeat, no overhead on
-    // setting it lower than FLAGS_heartbeat_interval_ms.
-    FLAGS_tserver_heartbeat_metrics_interval_ms = 1;
-    FLAGS_heartbeat_interval_ms = 1000;
+    ANNOTATE_UNPROTECTED_WRITE(FLAGS_yb_num_shards_per_tserver) = 1;
 
-    // Reduce cleanup waiting time, so tests are completed faster.
-    FLAGS_cleanup_split_tablets_interval_sec = 1;
-
-    FLAGS_tablet_split_low_phase_size_threshold_bytes = 0;
-    FLAGS_tablet_split_high_phase_size_threshold_bytes = 0;
-    FLAGS_tablet_split_low_phase_shard_count_per_node = 0;
-    FLAGS_tablet_split_high_phase_shard_count_per_node = 0;
-    FLAGS_tablet_force_split_threshold_bytes = 64_KB;
-    FLAGS_db_write_buffer_size = FLAGS_tablet_force_split_threshold_bytes;
-    FLAGS_db_block_size_bytes = 2_KB;
-    FLAGS_db_filter_block_size_bytes = 2_KB;
-    FLAGS_db_index_block_size_bytes = 2_KB;
+    ANNOTATE_UNPROTECTED_WRITE(FLAGS_tablet_force_split_threshold_bytes) = 64_KB;
+    ANNOTATE_UNPROTECTED_WRITE(FLAGS_db_write_buffer_size) =
+        FLAGS_tablet_force_split_threshold_bytes;
+    ANNOTATE_UNPROTECTED_WRITE(FLAGS_db_block_size_bytes) = 2_KB;
+    ANNOTATE_UNPROTECTED_WRITE(FLAGS_db_filter_block_size_bytes) = 2_KB;
+    ANNOTATE_UNPROTECTED_WRITE(FLAGS_db_index_block_size_bytes) = 2_KB;
     CqlTestBase::SetUp();
+
+    // We want to test default behaviour here without overrides done by
+    // YBMiniClusterTestBase::SetUp.
+    // See https://github.com/yugabyte/yugabyte-db/issues/8935#issuecomment-1142223006
+    ANNOTATE_UNPROTECTED_WRITE(FLAGS_use_priority_thread_pool_for_flushes) =
+        saved_use_priority_thread_pool_for_flushes_;
   }
 
   void WaitUntilAllCommittedOpsApplied(const MonoDelta timeout) {
     const auto splits_completion_deadline = MonoTime::Now() + timeout;
     for (auto& peer : ListTabletPeers(cluster_.get(), ListPeersFilter::kAll)) {
-      auto consensus = peer->shared_consensus();
-      if (consensus) {
+      auto consensus_result = peer->GetConsensus();
+      if (consensus_result) {
+        auto consensus = consensus_result->get();
         ASSERT_OK(Wait([consensus]() -> Result<bool> {
           return consensus->GetLastAppliedOpId() >= consensus->GetLastCommittedOpId();
         }, splits_completion_deadline, "Waiting for all committed ops to be applied"));
@@ -144,7 +186,9 @@ class CqlTabletSplitTest : public CqlTestBase<MiniCluster> {
     std::this_thread::sleep_for(1s * kTimeMultiplier);
     // Wait until followers also apply those split ops.
     ASSERT_NO_FATALS(WaitUntilAllCommittedOpsApplied(15s * kTimeMultiplier));
-    LOG(INFO) << "Number of active tablets: " << GetNumActiveTablets(cluster_.get());
+    LOG(INFO) << "Number of active tablets: " << GetNumActiveTablets(
+          cluster_.get(), kSecondaryIndexTestTableName, 60s * kTimeMultiplier,
+          RequireTabletsRunning::kTrue);
   }
 
   void DoTearDown() override {
@@ -157,11 +201,11 @@ class CqlTabletSplitTest : public CqlTestBase<MiniCluster> {
   void StartSecondaryIndexTest();
   void CompleteSecondaryIndexTest(int num_splits, MonoDelta timeout);
 
-  int writer_threads_ = 2;
-  int reader_threads_ = 4;
+  int writer_threads_ = RegularBuildVsSanitizers(2, 1);
+  int reader_threads_ = RegularBuildVsSanitizers(4, 2);
   int value_size_bytes_ = 1024;
-  int max_write_errors_ = 100;
-  int max_read_errors_ = 100;
+  size_t max_write_errors_ = 100;
+  size_t max_read_errors_ = 100;
   CassandraSession session_;
   std::atomic<bool> stop_requested_{false};
   std::unique_ptr<load_generator::SessionFactory> load_session_factory_;
@@ -313,7 +357,9 @@ void CqlTabletSplitTest::StartSecondaryIndexTest() {
       "CREATE INDEX $0_by_value ON $0(v) WITH transactions = { 'enabled' : true }",
       kSecondaryIndexTestTableName.table_name())));
 
-  start_num_active_tablets_ = GetNumActiveTablets(cluster_.get());
+  start_num_active_tablets_ = ASSERT_RESULT(GetNumActiveTablets(
+      cluster_.get(), kSecondaryIndexTestTableName, 60s * kTimeMultiplier,
+      RequireTabletsRunning::kTrue));
   LOG(INFO) << "Number of active tablets at workload start: " << start_num_active_tablets_;
 
   load_session_factory_ = std::make_unique<CqlSecondaryIndexSessionFactory>(driver_.get());
@@ -333,24 +379,12 @@ void CqlTabletSplitTest::StartSecondaryIndexTest() {
 }
 
 void CqlTabletSplitTest::CompleteSecondaryIndexTest(const int num_splits, const MonoDelta timeout) {
-  const auto num_wait_for_active_tablets = start_num_active_tablets_ + num_splits;
-  size_t num_active_tablets;
-
-  ASSERT_OK(LoggedWaitFor(
-      [&]() {
-        num_active_tablets = GetNumActiveTablets(cluster_.get());
-        YB_LOG_EVERY_N_SECS(INFO, 5) << "Number of active tablets: " << num_active_tablets;
-        if (!writer_->IsRunning()) {
-          return true;
-        }
-        if (num_active_tablets >= num_wait_for_active_tablets) {
-          return true;
-        }
-        return false;
-      },
-      timeout,
-      Format("Waiting for $0 active tablets or writer stopped", num_wait_for_active_tablets)));
-  LOG(INFO) << "Number of active tablets: " << num_active_tablets;
+  auto s = WaitForActiveTablets(
+      cluster_.get(), kSecondaryIndexTestTableName, start_num_active_tablets_ + num_splits, timeout,
+      &stop_requested_, [&]() {
+        return writer_->num_write_errors() > max_write_errors_ ||
+               reader_->num_read_errors() > max_read_errors_;
+      });
 
   writer_->Stop();
   reader_->Stop();
@@ -360,15 +394,16 @@ void CqlTabletSplitTest::CompleteSecondaryIndexTest(const int num_splits, const 
   LOG(INFO) << "Workload complete, num_writes: " << writer_->num_writes()
             << ", num_write_errors: " << writer_->num_write_errors()
             << ", num_reads: " << reader_->num_reads()
-            << ", num_read_errors: " << reader_->num_read_errors()
-            << ", splits done: " << num_active_tablets - start_num_active_tablets_;
+            << ", num_read_errors: " << reader_->num_read_errors();
   ASSERT_EQ(reader_->read_status_stopped(), load_generator::ReadStatus::kOk)
       << " reader stopped due to: " << AsString(reader_->read_status_stopped());
+  ASSERT_LE(reader_->num_read_errors(), max_read_errors_);
   ASSERT_LE(writer_->num_write_errors(), max_write_errors_);
+  ASSERT_OK(s);
 }
 
 TEST_F(CqlTabletSplitTest, SecondaryIndex) {
-  const auto kNumSplits = 10;
+  const auto kNumSplits = RegularBuildVsSanitizers(10, 3);
 
   ASSERT_NO_FATALS(StartSecondaryIndexTest());
   ANNOTATE_UNPROTECTED_WRITE(FLAGS_TEST_simulate_lookup_partition_list_mismatch_probability) = 0.5;
@@ -458,9 +493,11 @@ class CqlTabletSplitTestExt : public CqlTestBase<ExternalMiniCluster> {
 
     auto& tserver_flags = mini_cluster_opt_.extra_tserver_flags;
     tserver_flags.push_back(Format("--db_write_buffer_size=$0", kSplitThreshold));
+    tserver_flags.push_back("--rocksdb_max_write_buffer_number=2");
     // Lower SST block size to have multiple entries in index and be able to detect a split key.
     tserver_flags.push_back(Format(
         "--db_block_size_bytes=$0", std::min(FLAGS_db_block_size_bytes, kSplitThreshold / 8)));
+    tserver_flags.push_back("--cleanup_split_tablets_interval_sec=5");
 
     for (auto& flag : common_flags) {
       master_flags.push_back(flag);
@@ -482,7 +519,7 @@ struct BatchTimeseriesDataSource {
   std::atomic<int64_t> last_emitted_ts{-1};
 };
 
-CHECKED_STATUS RunBatchTimeSeriesTest(
+Status RunBatchTimeSeriesTest(
     ExternalMiniCluster* cluster, CppCassandraDriver* driver, const int num_splits,
     const MonoDelta timeout) {
   const auto kWriterThreads = 4;
@@ -537,7 +574,7 @@ CHECKED_STATUS RunBatchTimeSeriesTest(
 
   std::mutex random_mutex;
   auto get_random_source = [&rng, &random_mutex, &data_sources]() -> BatchTimeseriesDataSource* {
-    std::lock_guard<decltype(random_mutex)> lock(random_mutex);
+    std::lock_guard lock(random_mutex);
     return RandomElement(data_sources, &rng).get();
   };
 
@@ -616,6 +653,10 @@ CHECKED_STATUS RunBatchTimeSeriesTest(
       }
       YB_LOG_EVERY_N_SECS(INFO, 5)
           << "Completed " << num_writes << " writes, num_write_errors: " << num_write_errors;
+      if (IsSanitizer()) {
+        // Give some time for compaction to go.
+        std::this_thread::sleep_for(num_writes.load() * 1ms);
+      }
     }
   };
 
@@ -626,33 +667,12 @@ CHECKED_STATUS RunBatchTimeSeriesTest(
     io_threads.AddThreadFunctor(writer);
   }
 
-  const auto deadline = CoarseMonoClock::Now() + timeout;
-  const auto num_wait_for_active_tablets = start_num_active_tablets + num_splits;
-  size_t num_active_tablets = start_num_active_tablets;
-  while (CoarseMonoClock::Now() < deadline && num_read_errors < kMaxReadErrors &&
-         num_write_errors < kMaxWriteErrors) {
-    // When we get num_wait_for_active_tablets active tablets (not necessarily running), we stop
-    // writes to avoid creating too many post-split tablets and overloading local cluster.
-    // After stopping writes, we continue reads and wait for num_wait_for_active_tablets active
-    // running tablets.
-    auto num_active_tablets_res = GetNumActiveTablets(
-        cluster, kTableName, 10s * kTimeMultiplier,
-        RequireTabletsRunning(stop_writes.load(std::memory_order_acquire)));
-    if (num_active_tablets_res.ok()) {
-      num_active_tablets = *num_active_tablets_res;
-      YB_LOG_EVERY_N_SECS(INFO, 3) << "Number of active tablets: " << num_active_tablets;
-      if (num_active_tablets >= num_wait_for_active_tablets) {
-        if (stop_writes.load(std::memory_order_acquire)) {
-          break;
-        } else {
-          LOG(INFO) << "Stopping writes";
-          stop_writes = true;
-        }
-      }
-    }
-    SleepFor(500ms);
-  }
-  if (CoarseMonoClock::Now() >= deadline) {
+  auto s = WaitForActiveTablets(
+      cluster, kTableName, start_num_active_tablets + num_splits, timeout, &stop_writes,
+      [&]() {
+        return num_read_errors > kMaxReadErrors || num_write_errors > kMaxWriteErrors;
+      });
+  if (s.IsTimedOut()) {
     // Produce a core dump for investigation.
     for (auto* daemon : cluster->daemons()) {
       ERROR_NOT_OK(daemon->Kill(SIGSEGV), "Failed to crash process: ");
@@ -666,11 +686,7 @@ CHECKED_STATUS RunBatchTimeSeriesTest(
   LOG(INFO) << "num_write_errors: " << num_write_errors;
   EXPECT_LE(num_read_errors, kMaxReadErrors);
   EXPECT_LE(num_write_errors, kMaxWriteErrors);
-  SCHECK_GE(
-      num_active_tablets, num_wait_for_active_tablets, IllegalState,
-      Format("Didn't achieve $0 splits", num_splits));
-
-  return Status::OK();
+  return s;
 }
 
 TEST_F_EX(CqlTabletSplitTest, BatchTimeseries, CqlTabletSplitTestExt) {

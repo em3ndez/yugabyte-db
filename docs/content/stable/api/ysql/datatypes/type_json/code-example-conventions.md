@@ -4,12 +4,11 @@ linkTitle: Code example conventions
 summary: Code example conventions
 description: Code example conventions for JSON functions and operators.
 menu:
-  stable:
+  stable_api:
     identifier: code-example-conventions
     parent: api-ysql-datatypes-json
     weight: 30
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 ## Note about the code examples

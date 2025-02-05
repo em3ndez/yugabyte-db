@@ -30,8 +30,7 @@
 // under the License.
 //
 // Utility functions for dealing with a byte array as if it were a bitmap.
-#ifndef YB_UTIL_BITMAP_H
-#define YB_UTIL_BITMAP_H
+#pragma once
 
 #include <string>
 
@@ -256,7 +255,7 @@ class OneWayBitmap {
   static Result<OneWayBitmap> Decode(Slice* slice);
 
   // Removes encoded bitmap from slice prefix, w/o decoding slice.
-  static CHECKED_STATUS Skip(Slice* slice);
+  static Status Skip(Slice* slice);
 
  private:
   typedef uint8_t ElementType;
@@ -271,5 +270,3 @@ class OneWayBitmap {
 };
 
 } // namespace yb
-
-#endif // YB_UTIL_BITMAP_H

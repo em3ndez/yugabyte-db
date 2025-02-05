@@ -63,7 +63,7 @@ public class MetricServiceTest extends FakeDBApplication {
         MetricKey.builder()
             .customerUuid(customer.getUuid())
             .name(PlatformMetrics.ALERT_MANAGER_STATUS.getMetricName())
-            .targetUuid(universe.getUniverseUUID())
+            .sourceUuid(universe.getUniverseUUID())
             .build();
     Metric metric = metricService.get(key);
 
@@ -84,7 +84,7 @@ public class MetricServiceTest extends FakeDBApplication {
         MetricKey.builder()
             .customerUuid(customer.getUuid())
             .name(PlatformMetrics.ALERT_MANAGER_STATUS.getMetricName())
-            .targetUuid(universe.getUniverseUUID())
+            .sourceUuid(universe.getUniverseUUID())
             .sourceLabel("node_name", "node1")
             .build();
     Metric metric = metricService.get(key);
@@ -173,13 +173,13 @@ public class MetricServiceTest extends FakeDBApplication {
         MetricKey.builder()
             .customerUuid(customer.getUuid())
             .name(PlatformMetrics.ALERT_MANAGER_STATUS.getMetricName())
-            .targetUuid(universe.getUniverseUUID())
+            .sourceUuid(universe.getUniverseUUID())
             .build();
     MetricKey keyRemaining =
         MetricKey.builder()
             .customerUuid(customer.getUuid())
             .name(PlatformMetrics.HEALTH_CHECK_STATUS.getMetricName())
-            .targetUuid(universe.getUniverseUUID())
+            .sourceUuid(universe.getUniverseUUID())
             .build();
 
     MetricFilter filterToDelete = MetricFilter.builder().key(keyToDelete).build();
@@ -321,11 +321,11 @@ public class MetricServiceTest extends FakeDBApplication {
     assertThat(metric.getName(), equalTo(PlatformMetrics.ALERT_MANAGER_STATUS.getMetricName()));
     assertThat(metric.getValue(), equalTo(value));
     assertThat(metric.getLabelValue(KnownAlertLabels.SOURCE_TYPE), equalTo("universe"));
-    assertThat(metric.getLabelValue(KnownAlertLabels.SOURCE_NAME), equalTo(universe.name));
+    assertThat(metric.getLabelValue(KnownAlertLabels.SOURCE_NAME), equalTo(universe.getName()));
     assertThat(
         metric.getLabelValue(KnownAlertLabels.SOURCE_UUID),
         equalTo(universe.getUniverseUUID().toString()));
-    assertThat(metric.getLabelValue(KnownAlertLabels.UNIVERSE_NAME), equalTo(universe.name));
+    assertThat(metric.getLabelValue(KnownAlertLabels.UNIVERSE_NAME), equalTo(universe.getName()));
     assertThat(
         metric.getLabelValue(KnownAlertLabels.UNIVERSE_UUID),
         equalTo(universe.getUniverseUUID().toString()));

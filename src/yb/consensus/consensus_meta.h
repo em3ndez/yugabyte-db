@@ -29,21 +29,24 @@
 // or implied.  See the License for the specific language governing permissions and limitations
 // under the License.
 //
-#ifndef YB_CONSENSUS_CONSENSUS_META_H_
-#define YB_CONSENSUS_CONSENSUS_META_H_
+#pragma once
 
 #include <stdint.h>
 
 #include <atomic>
+#include <optional>
 #include <string>
 
 #include "yb/common/common_types.pb.h"
 #include "yb/common/entity_ids_types.h"
+#include "yb/common/opid.h"
 
 #include "yb/consensus/metadata.pb.h"
 
 #include "yb/gutil/macros.h"
 
+#include "yb/util/locks.h"
+#include "yb/util/shared_lock.h"
 #include "yb/util/status_fwd.h"
 
 namespace yb {
@@ -51,7 +54,57 @@ namespace yb {
 class FsManager;
 class ServerRegistrationPB;
 
+struct CloneSourceInfo {
+  uint32_t seq_no;
+  TabletId tablet_id;
+};
+
 namespace consensus {
+
+// This class is used to cache the values of consensus state so we don't have to wait for the
+// current consensus state operation to finish before being able to retrieve the values.
+// The fields here are updated atomically but independently so may independently be from before or
+// after the current running consensus config update.
+class ConsensusStateCache {
+ public:
+  RaftConfigPB config() const {
+    SharedLock lock(mutex_);
+    return config_;
+  }
+
+  void set_config(const RaftConfigPB& config) {
+    std::lock_guard lock(mutex_);
+    config_ = config;
+  }
+
+  std::string leader_uuid() const {
+    SharedLock lock(mutex_);
+    return leader_uuid_;
+  }
+
+  void set_leader_uuid(std::string uuid) {
+    std::lock_guard lock(mutex_);
+    leader_uuid_ = uuid;
+  }
+
+  int64_t current_term() const {
+    SharedLock lock(mutex_);
+    return current_term_;
+  }
+
+  void set_current_term(int64_t term) {
+    std::lock_guard lock(mutex_);
+    current_term_ = term;
+  }
+
+ private:
+  mutable rw_spinlock mutex_;
+
+  // These fields are protected by mutex_.
+  RaftConfigPB config_;
+  std::string leader_uuid_;
+  int64_t current_term_;
+};
 
 // Provides methods to read, write, and persist consensus-related metadata.
 // This partly corresponds to Raft Figure 2's "Persistent state on all servers".
@@ -80,24 +133,23 @@ class ConsensusMetadata {
  public:
   // Create a ConsensusMetadata object with provided initial state.
   // Encoded PB is flushed to disk before returning.
-  static CHECKED_STATUS Create(FsManager* fs_manager,
+  static Result<std::unique_ptr<ConsensusMetadata>> Create(FsManager* fs_manager,
                                const std::string& tablet_id,
                                const std::string& peer_uuid,
                                const RaftConfigPB& config,
-                               int64_t current_term,
-                               std::unique_ptr<ConsensusMetadata>* cmeta);
+                               int64_t current_term);
 
   // Load a ConsensusMetadata object from disk.
   // Returns Status::NotFound if the file could not be found. May return other
   // Status codes if unable to read the file.
-  static CHECKED_STATUS Load(FsManager* fs_manager,
+  static Status Load(FsManager* fs_manager,
                              const std::string& tablet_id,
                              const std::string& peer_uuid,
                              std::unique_ptr<ConsensusMetadata>* cmeta);
 
   // Delete the ConsensusMetadata file associated with the given tablet from
   // disk.
-  static CHECKED_STATUS DeleteOnDiskData(FsManager* fs_manager, const std::string& tablet_id);
+  static Status DeleteOnDiskData(FsManager* fs_manager, const std::string& tablet_id);
 
   // Accessors for current term.
   int64_t current_term() const;
@@ -118,6 +170,10 @@ class ConsensusMetadata {
   const TabletId& split_parent_tablet_id() const;
   void set_split_parent_tablet_id(const TabletId& split_parent_tablet_id);
 
+  // CloneSourceInfo contains info about the clone request that created this tablet.
+  const std::optional<CloneSourceInfo> clone_source_info() const;
+  void set_clone_source_info(uint32_t seq_no, const TabletId& tablet_id);
+
   // Returns whether a pending configuration is set.
   bool has_pending_config() const;
 
@@ -126,7 +182,10 @@ class ConsensusMetadata {
 
   // Set & clear the pending configuration.
   void clear_pending_config();
-  void set_pending_config(const RaftConfigPB& config);
+  void set_pending_config(const RaftConfigPB& config, const OpId& config_op_id);
+  Status set_pending_config_op_id(const OpId& config_op_id);
+
+  OpId pending_config_op_id() { return pending_config_op_id_; }
 
   // If a pending configuration is set, return it.
   // Otherwise, return the committed configuration.
@@ -152,6 +211,11 @@ class ConsensusMetadata {
   // leader_uuid field of the returned ConsensusStatePB will be cleared.
   ConsensusStatePB ToConsensusStatePB(ConsensusConfigType type) const;
 
+  // Copies the stored committed consensus info cache into a ConsensusStatePB object.
+  // It is possible for the current leader to not be a member of the committed configuration;
+  // in such case the leader_uuid of the returned ConsensusStatePB is cleared. This is thread safe.
+  ConsensusStatePB GetConsensusStateFromCache() const;
+
   // Merge the committed consensus state from the source node during remote
   // bootstrap.
   //
@@ -168,7 +232,7 @@ class ConsensusMetadata {
   void MergeCommittedConsensusStatePB(const ConsensusStatePB& committed_cstate);
 
   // Persist current state of the protobuf to disk.
-  CHECKED_STATUS Flush();
+  Status Flush();
 
   // The on-disk size of the consensus metadata, as of the last call to Load() or Flush().
   int64_t on_disk_size() const {
@@ -180,6 +244,10 @@ class ConsensusMetadata {
 
   // Used internally for storing the role + term combination atomically.
   using PackedRoleAndTerm = uint64;
+
+  const ConsensusMetadataPB& GetConsensusMetadataPB() const {
+    return pb_;
+  }
 
  private:
   ConsensusMetadata(FsManager* fs_manager, std::string tablet_id,
@@ -207,6 +275,14 @@ class ConsensusMetadata {
   // RaftConfig used by the peers when there is a pending config change operation.
   RaftConfigPB pending_config_;
 
+  // Committed Consensus Info, stored as a struct for fast read-only access. Contains the
+  // currently committed consensus state, it is not atomic and needs to be locked by its internal
+  // lock before being modified. This cache will not take into account of the currently writing
+  // config change, therefore it could be behind by one committed config change.
+  ConsensusStateCache committed_consensus_state_cache_;
+
+  OpId pending_config_op_id_;
+
   // Cached role of the peer_uuid_ within the active configuration.
   PeerRole active_role_;
 
@@ -229,5 +305,3 @@ void CopyRegistration(ServerRegistrationPB source, RaftPeerPB* dest);
 
 } // namespace consensus
 } // namespace yb
-
-#endif // YB_CONSENSUS_CONSENSUS_META_H_

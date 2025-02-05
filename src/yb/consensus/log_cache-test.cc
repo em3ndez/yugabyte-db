@@ -44,6 +44,7 @@
 #include "yb/consensus/consensus-test-util.h"
 #include "yb/consensus/log.h"
 #include "yb/consensus/log_cache.h"
+#include "yb/consensus/log_reader.h"
 
 #include "yb/fs/fs_manager.h"
 
@@ -58,6 +59,7 @@
 #include "yb/util/scope_exit.h"
 #include "yb/util/size_literals.h"
 #include "yb/util/test_util.h"
+#include "yb/util/tsan_util.h"
 
 using std::atomic;
 using std::shared_ptr;
@@ -66,6 +68,8 @@ using std::thread;
 DECLARE_int32(log_cache_size_limit_mb);
 DECLARE_int32(global_log_cache_size_limit_mb);
 DECLARE_int32(global_log_cache_size_limit_percentage);
+DECLARE_bool(TEST_pause_before_wal_sync);
+DECLARE_bool(TEST_set_pause_before_wal_sync);
 
 METRIC_DECLARE_entity(tablet);
 
@@ -112,7 +116,7 @@ class LogCacheTest : public YBTest {
                             nullptr, // tablet_metrics_entity
                             log_thread_pool_.get(),
                             log_thread_pool_.get(),
-                            std::numeric_limits<int64_t>::max(), // cdc_min_replicated_index
+                            log_thread_pool_.get(),
                             &log_));
 
     CloseAndReopenCache(MinimumOpId());
@@ -142,13 +146,18 @@ class LogCacheTest : public YBTest {
     for (int64_t cur_index = first; cur_index < first + count; cur_index++) {
       int64_t term = cur_index / kTermDivisor;
       int64_t index = cur_index;
-      ReplicateMsgs msgs = { CreateDummyReplicate(term, index, clock_->Now(), payload_size) };
-      RETURN_NOT_OK(cache_->AppendOperations(
-          msgs, yb::OpId() /* committed_op_id */, RestartSafeCoarseMonoClock().Now(),
-          Bind(&FatalOnError)));
-      cache_->TrackOperationsMemory({yb::OpId::FromPB(msgs[0]->id())});
+      RETURN_NOT_OK(AppendReplicateMessageToCache(term, index, payload_size));
       std::this_thread::sleep_for(100ms);
     }
+    return Status::OK();
+  }
+
+  Status AppendReplicateMessageToCache(int64_t term, int64_t index, size_t payload_size = 0) {
+    ReplicateMsgs msgs = { CreateDummyReplicate(term, index, clock_->Now(), payload_size) };
+    RETURN_NOT_OK(cache_->AppendOperations(
+        msgs, OpId() /* committed_op_id */, RestartSafeCoarseMonoClock().Now(),
+        Bind(&FatalOnError)));
+    cache_->TrackOperationsMemory({OpId::FromPB(msgs[0]->id())});
     return Status::OK();
   }
 
@@ -178,7 +187,7 @@ TEST_F(LogCacheTest, TestAppendAndGetMessages) {
   read_result = ASSERT_RESULT(cache_->ReadOps(kMessageIndex1, 8_MB));
   EXPECT_EQ(kNumMessages - kMessageIndex1, read_result.messages.size());
   EXPECT_EQ(OpIdStrForIndex(kMessageIndex1), OpIdToString(read_result.preceding_op));
-  EXPECT_EQ(OpIdStrForIndex(kMessageIndex1 + 1), OpIdToString(read_result.messages[0]->id()));
+  EXPECT_EQ(MakeOpIdForIndex(kMessageIndex1 + 1), OpId::FromPB(read_result.messages[0]->id()));
 
   // Get at the end of the cache.
   read_result = ASSERT_RESULT(cache_->ReadOps(kNumMessages, 8_MB));
@@ -189,13 +198,13 @@ TEST_F(LogCacheTest, TestAppendAndGetMessages) {
   read_result = ASSERT_RESULT(cache_->ReadOps(0, kMessageIndex1, 8_MB));
   EXPECT_EQ(kMessageIndex1, read_result.messages.size());
   EXPECT_EQ(OpIdStrForIndex(0), OpIdToString(read_result.preceding_op));
-  EXPECT_EQ(OpIdStrForIndex(1), OpIdToString(read_result.messages[0]->id()));
+  EXPECT_EQ(MakeOpIdForIndex(1), OpId::FromPB(read_result.messages[0]->id()));
 
   // Get messages from some point in the middle of the cache until another point.
   read_result = ASSERT_RESULT(cache_->ReadOps(kMessageIndex1, kMessageIndex2, 8_MB));
   EXPECT_EQ(kMessageIndex2 - kMessageIndex1, read_result.messages.size());
   EXPECT_EQ(OpIdStrForIndex(kMessageIndex1), OpIdToString(read_result.preceding_op));
-  EXPECT_EQ(OpIdStrForIndex(kMessageIndex1 + 1), OpIdToString(read_result.messages[0]->id()));
+  EXPECT_EQ(MakeOpIdForIndex(kMessageIndex1 + 1), OpId::FromPB(read_result.messages[0]->id()));
 
   // Evict some and verify that the eviction took effect.
   cache_->EvictThroughOp(kNumMessages / 2);
@@ -206,9 +215,54 @@ TEST_F(LogCacheTest, TestAppendAndGetMessages) {
   read_result = ASSERT_RESULT(cache_->ReadOps(start, 8_MB));
   EXPECT_EQ(kNumMessages - start, read_result.messages.size());
   EXPECT_EQ(OpIdStrForIndex(start), OpIdToString(read_result.preceding_op));
-  EXPECT_EQ(OpIdStrForIndex(start + 1), OpIdToString(read_result.messages[0]->id()));
+  EXPECT_EQ(MakeOpIdForIndex(start + 1), OpId::FromPB(read_result.messages[0]->id()));
 }
 
+// Test cache entry shouldn't be evicted until it's synced to disk.
+TEST_F(LogCacheTest, ShouldNotEvictUnsyncedOpFromCache) {
+  ASSERT_OK(AppendReplicateMessageToCache(/* term = */ 1, /* index = */ 1));
+  ASSERT_OK(log_->WaitUntilAllFlushed());
+  cache_->EvictThroughOp(1);
+  ASSERT_EQ(cache_->num_cached_ops(), 0);
+
+  ANNOTATE_UNPROTECTED_WRITE(FLAGS_TEST_set_pause_before_wal_sync) = true;
+  ANNOTATE_UNPROTECTED_WRITE(FLAGS_TEST_pause_before_wal_sync) = true;
+
+  // Append (1.2).
+  ASSERT_OK(AppendReplicateMessageToCache(/* term = */ 1, /* index = */ 2));
+  // Append (2.1) and (1.2) should be erased from log cache.
+  ASSERT_OK(AppendReplicateMessageToCache(/* term = */ 2, /* index = */ 1));
+  ASSERT_EQ(cache_->num_cached_ops(), 1);
+
+  // Wait several seconds for actaully pausing at Log::Sync().
+  SleepFor(MonoDelta::FromSeconds(3 * kTimeMultiplier));
+
+  // Resume Log::Sync and set FLAGS_TEST_pause_before_wal_sync to true again.
+  ANNOTATE_UNPROTECTED_WRITE(FLAGS_TEST_pause_before_wal_sync) = false;
+  SleepFor(MonoDelta::FromSeconds(2 * kTimeMultiplier));
+
+  // Shouldn't evict (2.1).
+  cache_->EvictThroughOp(1);
+  ASSERT_EQ(cache_->num_cached_ops(), 1);
+
+  // Can be read from cache.
+  auto read_result = ASSERT_RESULT(cache_->ReadOps(0, 8_MB));
+  EXPECT_EQ(1, read_result.messages.size());
+  EXPECT_EQ(OpIdStrForIndex(0), OpIdToString(read_result.preceding_op));
+
+  ASSERT_OK(AppendReplicateMessageToCache(/* term = */ 3, /* index = */ 1));
+  ASSERT_EQ(cache_->num_cached_ops(), 1);
+  ANNOTATE_UNPROTECTED_WRITE(FLAGS_TEST_pause_before_wal_sync) = false;
+  SleepFor(MonoDelta::FromSeconds(2 * kTimeMultiplier));
+
+  // Shouldn't evict (3.1).
+  cache_->EvictThroughOp(1);
+  ASSERT_EQ(cache_->num_cached_ops(), 1);
+
+  // Let Appender continue doing Log::Sync and normally exit.
+  ANNOTATE_UNPROTECTED_WRITE(FLAGS_TEST_set_pause_before_wal_sync) = false;
+  ANNOTATE_UNPROTECTED_WRITE(FLAGS_TEST_pause_before_wal_sync) = false;
+}
 
 // Ensure that the cache always yields at least one message,
 // even if that message is larger than the batch size. This ensures
@@ -267,7 +321,7 @@ TEST_F(LogCacheTest, TestCacheEdgeCases) {
 
 
 TEST_F(LogCacheTest, TestMemoryLimit) {
-  FLAGS_log_cache_size_limit_mb = 1;
+  ANNOTATE_UNPROTECTED_WRITE(FLAGS_log_cache_size_limit_mb) = 1;
   CloseAndReopenCache(MinimumOpId());
 
   const int kPayloadSize = 400_KB;
@@ -331,8 +385,8 @@ TEST_F(LogCacheTest, TestGlobalMemoryLimitMB) {
 }
 
 TEST_F(LogCacheTest, TestGlobalMemoryLimitPercentage) {
-  FLAGS_global_log_cache_size_limit_mb = INT32_MAX;
-  FLAGS_global_log_cache_size_limit_percentage = 5;
+  ANNOTATE_UNPROTECTED_WRITE(FLAGS_global_log_cache_size_limit_mb) = INT32_MAX;
+  ANNOTATE_UNPROTECTED_WRITE(FLAGS_global_log_cache_size_limit_percentage) = 5;
   const int64_t root_mem_limit = MemTracker::GetRootTracker()->limit();
 
   CloseAndReopenCache(MinimumOpId());

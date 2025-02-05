@@ -13,7 +13,10 @@
 
 #include "yb/yql/pgwrapper/pg_wrapper_test_base.h"
 
+#include "yb/tserver/tserver_service.pb.h"
+
 #include "yb/util/env_util.h"
+#include "yb/util/os-util.h"
 #include "yb/util/path_util.h"
 #include "yb/util/size_literals.h"
 #include "yb/util/string_trim.h"
@@ -22,10 +25,16 @@
 #include "yb/yql/pgwrapper/pg_wrapper.h"
 
 using std::unique_ptr;
+using std::string;
+using std::vector;
 
 using yb::util::TrimStr;
 using yb::util::TrimTrailingWhitespaceFromEveryLine;
 using yb::util::LeftShiftTextBlock;
+
+using namespace std::literals;
+
+DECLARE_int32(replication_factor);
 
 namespace yb {
 namespace pgwrapper {
@@ -51,6 +60,7 @@ void PgWrapperTestBase::SetUp() {
 
   opts.extra_master_flags.emplace_back("--client_read_write_timeout_ms=120000");
   opts.extra_master_flags.emplace_back(Format("--memory_limit_hard_bytes=$0", 2_GB));
+  opts.extra_master_flags.emplace_back(Format("--replication_factor=$0", FLAGS_replication_factor));
 
   UpdateMiniClusterOptions(&opts);
 
@@ -65,38 +75,53 @@ void PgWrapperTestBase::SetUp() {
   DontVerifyClusterBeforeNextTearDown();
 }
 
+Result<TabletId> PgWrapperTestBase::GetSingleTabletId(const TableName& table_name) {
+  TabletId tablet_id_to_split;
+  for (size_t i = 0; i < cluster_->num_tablet_servers(); ++i) {
+    const auto ts = cluster_->tablet_server(i);
+    const auto tablets = VERIFY_RESULT(cluster_->GetTablets(ts));
+    for (const auto& tablet : tablets) {
+      if (tablet.table_name() == table_name) {
+        return tablet.tablet_id();
+      }
+    }
+  }
+  return STATUS(NotFound, Format("No tablet found for table $0.", table_name));
+}
+
+Result<string> PgWrapperTestBase::RunYbAdminCommand(const string& cmd) {
+  const auto yb_admin = "yb-admin"s;
+  auto command = GetToolPath(yb_admin) +
+    " --master_addresses " + cluster_->GetMasterAddresses() +
+    " " + cmd;
+  LOG(INFO) << "Running " << command;
+  return RunShellProcess(command);
+}
+
 namespace {
 
 string TrimSqlOutput(string output) {
   return TrimStr(TrimTrailingWhitespaceFromEveryLine(LeftShiftTextBlock(output)));
 }
 
-string CertsDir() {
-  const auto sub_dir = JoinPathSegments("ent", "test_certs");
-  return JoinPathSegments(env_util::GetRootDir(sub_dir), sub_dir);
-}
-
 } // namespace
 
-void PgCommandTestBase::RunPsqlCommand(const string &statement, const string &expected_output) {
+Result<std::string> PgCommandTestBase::RunPsqlCommand(
+    const std::string& statement, TuplesOnly tuples_only) {
   string tmp_dir;
-  ASSERT_OK(Env::Default()->GetTestDirectory(&tmp_dir));
+  RETURN_NOT_OK(Env::Default()->GetTestDirectory(&tmp_dir));
 
   unique_ptr<WritableFile> tmp_file;
   string tmp_file_name;
-  ASSERT_OK(
-      Env::Default()->NewTempWritableFile(
-          WritableFileOptions(),
-          tmp_dir + "/psql_statementXXXXXX",
-          &tmp_file_name,
-          &tmp_file));
-  ASSERT_OK(tmp_file->Append(statement));
-  ASSERT_OK(tmp_file->Close());
+  RETURN_NOT_OK(Env::Default()->NewTempWritableFile(
+      WritableFileOptions(), tmp_dir + "/psql_statementXXXXXX", &tmp_file_name, &tmp_file));
+  RETURN_NOT_OK(tmp_file->Append(statement));
+  RETURN_NOT_OK(tmp_file->Close());
 
   vector<string> argv{
       GetPostgresInstallRoot() + "/bin/ysqlsh",
       "-h", pg_ts->bind_host(),
-      "-p", std::to_string(pg_ts->pgsql_rpc_port()),
+      "-p", std::to_string(pg_ts->ysql_port()),
       "-U", "yugabyte",
       "-f", tmp_file_name
   };
@@ -109,28 +134,58 @@ void PgCommandTestBase::RunPsqlCommand(const string &statement, const string &ex
   if (encrypt_connection_) {
     argv.push_back(Format(
         "sslmode=require sslcert=$0/ysql.crt sslrootcert=$0/ca.crt sslkey=$0/ysql.key",
-        CertsDir()));
+        GetCertsDir()));
   }
 
-  LOG(INFO) << "Run tool: " << yb::ToString(argv);
-  Subprocess proc(argv.front(), argv);
-  if (use_auth_) {
-    proc.SetEnv("PGPASSWORD", "yugabyte");
+  if (tuples_only) {
+    argv.push_back("-t");
   }
 
-  string psql_stdout;
+  std::string psql_stdout;
   LOG(INFO) << "Executing statement: " << statement;
-  ASSERT_OK(proc.Call(&psql_stdout));
+  // Postgres might not yet be ready, so retry a few times.
+  for (int retry = 0;;) {
+    LOG(INFO) << "Retry: " << retry << ", run tool: " << AsString(argv);
+    Subprocess proc(argv.front(), argv);
+    if (use_auth_) {
+      proc.SetEnv("PGPASSWORD", "yugabyte");
+    }
+
+    psql_stdout.clear();
+    std::string psql_stderr;
+    auto status = proc.Call(&psql_stdout, &psql_stderr);
+    if (status.ok()) {
+      break;
+    }
+    if (++retry < 10 && status.IsRuntimeError() &&
+        (psql_stderr.find("Connection refused") != std::string::npos ||
+         psql_stderr.find("the database system is starting up") != std::string::npos ||
+         psql_stderr.find(
+             "the database system is not yet accepting connections") != std::string::npos)) {
+      std::this_thread::sleep_for(250ms * kTimeMultiplier);
+      continue;
+    }
+    LOG(WARNING) << "Stderr: " << psql_stderr;
+    return status;
+  }
   LOG(INFO) << "Output from statement {{ " << statement << " }}:\n"
             << psql_stdout;
+
+  return TrimSqlOutput(psql_stdout);
+}
+
+void PgCommandTestBase::RunPsqlCommand(
+    const string& statement, const string& expected_output, bool tuples_only) {
+  string psql_stdout = ASSERT_RESULT(
+      RunPsqlCommand(statement, tuples_only ? TuplesOnly::kTrue : TuplesOnly::kFalse));
   ASSERT_EQ(TrimSqlOutput(expected_output), TrimSqlOutput(psql_stdout));
 }
 
 void PgCommandTestBase::UpdateMiniClusterOptions(ExternalMiniClusterOptions* options) {
   PgWrapperTestBase::UpdateMiniClusterOptions(options);
   if (encrypt_connection_) {
-    const vector<string> common_flags{"--use_node_to_node_encryption=true",
-                                      "--certs_dir=" + CertsDir()};
+    const vector<string> common_flags{
+        "--use_node_to_node_encryption=true", "--certs_dir=" + GetCertsDir()};
     for (auto flags : {&options->extra_master_flags, &options->extra_tserver_flags}) {
       flags->insert(flags->begin(), common_flags.begin(), common_flags.end());
     }

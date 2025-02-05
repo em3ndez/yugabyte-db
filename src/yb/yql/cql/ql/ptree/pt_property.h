@@ -11,8 +11,7 @@
 // under the License.
 //
 
-#ifndef YB_YQL_CQL_QL_PTREE_PT_PROPERTY_H_
-#define YB_YQL_CQL_QL_PTREE_PT_PROPERTY_H_
+#pragma once
 
 #include "yb/gutil/strings/substitute.h"
 #include "yb/yql/cql/ql/ptree/list_node.h"
@@ -61,7 +60,7 @@ class PTProperty : public TreeNode {
   }
 
   // Node semantics analysis.
-  virtual CHECKED_STATUS Analyze(SemContext *sem_context) override = 0;
+  virtual Status Analyze(SemContext *sem_context) override = 0;
 
   MCSharedPtr<MCString> lhs() const {
     return lhs_;
@@ -71,22 +70,22 @@ class PTProperty : public TreeNode {
     return rhs_;
   }
 
-  static CHECKED_STATUS GetIntValueFromExpr(PTExprPtr expr,
-                                            const string& property_name,
+  static Status GetIntValueFromExpr(PTExprPtr expr,
+                                            const std::string& property_name,
                                             int64_t *val);
 
-  static CHECKED_STATUS GetDoubleValueFromExpr(PTExprPtr expr,
-                                               const string& property_name,
+  static Status GetDoubleValueFromExpr(PTExprPtr expr,
+                                               const std::string& property_name,
                                                long double *val);
 
-  static CHECKED_STATUS GetBoolValueFromExpr(PTExprPtr expr,
-                                             const string& property_name,
+  static Status GetBoolValueFromExpr(PTExprPtr expr,
+                                             const std::string& property_name,
                                              bool *val);
 
-  static CHECKED_STATUS GetStringValueFromExpr(PTExprPtr expr,
+  static Status GetStringValueFromExpr(PTExprPtr expr,
                                                bool to_lower_case,
-                                               const string& property_name,
-                                               string *val);
+                                               const std::string& property_name,
+                                               std::string *val);
 
  protected:
   // Parts of an expression 'lhs_ = rhs_' where lhs stands for left-hand side, and rhs for
@@ -127,10 +126,8 @@ class PTPropertyListNode : public TreeListNode<PTProperty> {
     return MCMakeShared<PTPropertyListNode>(memctx, std::forward<TypeArgs>(args)...);
   }
 
-  virtual CHECKED_STATUS Analyze(SemContext *sem_context) override;
+  virtual Status Analyze(SemContext *sem_context) override;
 };
 
 } // namespace ql
 } // namespace yb
-
-#endif // YB_YQL_CQL_QL_PTREE_PT_PROPERTY_H_

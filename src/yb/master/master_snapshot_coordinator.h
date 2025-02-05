@@ -11,23 +11,27 @@
 // under the License.
 //
 
-#ifndef YB_MASTER_MASTER_SNAPSHOT_COORDINATOR_H
-#define YB_MASTER_MASTER_SNAPSHOT_COORDINATOR_H
+#pragma once
 
 #include "yb/common/entity_ids.h"
 #include "yb/common/hybrid_time.h"
+#include "yb/common/opid.h"
 #include "yb/common/snapshot.h"
 
+#include "yb/docdb/docdb.pb.h"
 #include "yb/gutil/ref_counted.h"
 
+#include "yb/master/catalog_entity_info.pb.h"
+#include "yb/master/master_backup.pb.h"
 #include "yb/master/master_fwd.h"
 #include "yb/master/master_heartbeat.fwd.h"
+#include "yb/master/master_types.h"
 #include "yb/master/master_types.pb.h"
 
 #include "yb/tablet/snapshot_coordinator.h"
+#include "yb/tablet/tablet_retention_policy.h"
 
 #include "yb/util/status_fwd.h"
-#include "yb/util/opid.h"
 
 namespace yb {
 namespace master {
@@ -39,47 +43,91 @@ struct SnapshotScheduleRestoration {
   OpId op_id;
   HybridTime write_time;
   int64_t term;
+  // DB OID of the database that is being restored.
+  std::optional<int64_t> db_oid;
   std::vector<std::pair<SnapshotScheduleId, SnapshotScheduleFilterPB>> schedules;
   std::vector<std::pair<TabletId, SysTabletsEntryPB>> non_system_obsolete_tablets;
   std::vector<std::pair<TableId, SysTablesEntryPB>> non_system_obsolete_tables;
   std::unordered_map<std::string, SysRowEntryType> non_system_objects_to_restore;
-  // pg_catalog_tables to restore for YSQL tables.
-  std::unordered_map<TableId, TableName> system_tables_to_restore;
+  // YSQL pg_catalog tables as of the current time.
+  std::unordered_map<TableId, TableName> existing_system_tables;
+  // YSQL pg_catalog tables as of time in the past to which we are restoring.
+  std::unordered_set<TableId> restoring_system_tables;
+  // Captures split relationships between tablets.
+  struct SplitTabletInfo {
+    std::pair<TabletId, SysTabletsEntryPB*> parent;
+    std::unordered_map<TabletId, SysTabletsEntryPB*> children;
+  };
+  std::unordered_map<TableId, std::vector<TableId>> parent_to_child_tables;
+  // Tablets as of the restoring time with their parent-child relationships.
+  // Map from parent tablet id -> information about parent and children.
+  // For colocated tablets or tablets that have not been split as of restoring time,
+  // only the 'parent' field of SplitTabletInfo above will be populated and 'children'
+  // map of SplitTabletInfo will be empty.
+  std::unordered_map<TabletId, SplitTabletInfo> non_system_tablets_to_restore;
+
+  static std::shared_ptr<SnapshotScheduleRestoration> Create(
+      TxnSnapshotRestorationId restoration_id, TxnSnapshotId snapshot_id, HybridTime restore_at,
+      OpId op_id, HybridTime write_time, int64_t leader_term) {
+    return std::make_shared<SnapshotScheduleRestoration>(SnapshotScheduleRestoration{
+        .snapshot_id = std::move(snapshot_id),
+        .restore_at = std::move(restore_at),
+        .restoration_id = std::move(restoration_id),
+        .op_id = std::move(op_id),
+        .write_time = std::move(write_time),
+        .term = leader_term,
+        .db_oid = std::nullopt,
+        .schedules = {},
+        .non_system_obsolete_tablets = {},
+        .non_system_obsolete_tables = {},
+        .non_system_objects_to_restore = {},
+        .existing_system_tables = {},
+        .restoring_system_tables = {},
+        .parent_to_child_tables = {},
+        .non_system_tablets_to_restore = {},
+    });
+  }
 };
 
 // Class that coordinates transaction aware snapshots at master.
 class MasterSnapshotCoordinator : public tablet::SnapshotCoordinator {
  public:
-  explicit MasterSnapshotCoordinator(SnapshotCoordinatorContext* context);
+  MasterSnapshotCoordinator(
+      SnapshotCoordinatorContext* context, CatalogManager* cm,
+      TabletSplitManager& tablet_split_manager);
   ~MasterSnapshotCoordinator();
 
   Result<TxnSnapshotId> Create(
-      const SysRowEntries& entries, bool imported, int64_t leader_term, CoarseTimePoint deadline);
+      const SysRowEntries& entries, bool imported, int64_t leader_term, CoarseTimePoint deadline,
+      int32_t retention_duration_hours);
 
   Result<TxnSnapshotId> CreateForSchedule(
       const SnapshotScheduleId& schedule_id, int64_t leader_term, CoarseTimePoint deadline);
 
-  CHECKED_STATUS Delete(
+  Status Delete(
       const TxnSnapshotId& snapshot_id, int64_t leader_term, CoarseTimePoint deadline);
 
+  Status AbortRestore(
+      const TxnSnapshotRestorationId& restoration_id, int64_t leader_term,
+      CoarseTimePoint deadline);
+
   // As usual negative leader_term means that this operation was replicated at the follower.
-  CHECKED_STATUS CreateReplicated(
-      int64_t leader_term, const tablet::SnapshotOperation& operation) override;
+  Status CreateReplicated(int64_t leader_term, const tablet::SnapshotOperation& operation) override;
 
-  CHECKED_STATUS DeleteReplicated(
-      int64_t leader_term, const tablet::SnapshotOperation& operation) override;
+  Status DeleteReplicated(int64_t leader_term, const tablet::SnapshotOperation& operation) override;
 
-  CHECKED_STATUS RestoreSysCatalogReplicated(
+  Status RestoreSysCatalogReplicated(
       int64_t leader_term, const tablet::SnapshotOperation& operation,
       Status* complete_status) override;
 
-  CHECKED_STATUS ListSnapshots(
-      const TxnSnapshotId& snapshot_id, bool list_deleted, ListSnapshotsResponsePB* resp);
+  Status ListSnapshots(
+      const TxnSnapshotId& snapshot_id, bool list_deleted,
+      ListSnapshotsDetailOptionsPB options, ListSnapshotsResponsePB* resp);
 
   Result<TxnSnapshotRestorationId> Restore(
       const TxnSnapshotId& snapshot_id, HybridTime restore_at, int64_t leader_term);
 
-  CHECKED_STATUS ListRestorations(
+  Status ListRestorations(
       const TxnSnapshotRestorationId& restoration_id, const TxnSnapshotId& snapshot_id,
       ListSnapshotRestorationsResponsePB* resp);
 
@@ -87,34 +135,83 @@ class MasterSnapshotCoordinator : public tablet::SnapshotCoordinator {
       const CreateSnapshotScheduleRequestPB& request, int64_t leader_term,
       CoarseTimePoint deadline);
 
-  CHECKED_STATUS ListSnapshotSchedules(
+  Status ListSnapshotSchedules(
       const SnapshotScheduleId& snapshot_schedule_id, ListSnapshotSchedulesResponsePB* resp);
 
-  CHECKED_STATUS DeleteSnapshotSchedule(
+  Status DeleteSnapshotSchedule(
       const SnapshotScheduleId& snapshot_schedule_id, int64_t leader_term,
       CoarseTimePoint deadline);
 
+  Result<SnapshotScheduleInfoPB> EditSnapshotSchedule(
+      const SnapshotScheduleId& id, const EditSnapshotScheduleRequestPB& req, int64_t leader_term,
+      CoarseTimePoint deadline);
+
+  Status RestoreSnapshotSchedule(
+      const SnapshotScheduleId& schedule_id, HybridTime restore_at,
+      RestoreSnapshotScheduleResponsePB* resp, int64_t leader_term, CoarseTimePoint deadline);
+
   // Load snapshots data from system catalog.
-  CHECKED_STATUS Load(tablet::Tablet* tablet) override;
+  Status Load(tablet::Tablet* tablet) override;
 
   // Check whether we have write request for snapshot while replaying write request during
   // bootstrap. And upsert snapshot from it in this case.
   // key and value are entry from the write batch.
-  CHECKED_STATUS ApplyWritePair(const Slice& key, const Slice& value) override;
+  Status ApplyWritePair(const Slice& key, const Slice& value) override;
 
-  CHECKED_STATUS FillHeartbeatResponse(TSHeartbeatResponsePB* resp);
+  Status FillHeartbeatResponse(TSHeartbeatResponsePB* resp);
 
-  void SysCatalogLoaded(int64_t term);
+  docdb::HistoryCutoff AllowedHistoryCutoffProvider(
+      tablet::RaftGroupMetadata* metadata);
+
+  void SysCatalogLoaded(int64_t leader_term);
+
+  Result<docdb::KeyValuePairPB> UpdateRestorationAndGetWritePair(
+      SnapshotScheduleRestoration* restoration);
 
   // For each returns map from schedule id to sorted vectors of tablets id in this schedule.
   Result<SnapshotSchedulesToObjectIdsMap> MakeSnapshotSchedulesToObjectIdsMap(
       SysRowEntryType type);
 
-  Result<bool> IsTableCoveredBySomeSnapshotSchedule(const TableInfo& table_info);
+  Result<std::vector<SnapshotScheduleId>> GetSnapshotSchedules(
+      SysRowEntryType type, const std::string& object_id);
+
+  // Returns the id of a completed snapshot suitable for restoring to the given restore time.
+  Result<TxnSnapshotId> GetSuitableSnapshotForRestore(
+      const SnapshotScheduleId& schedule_id, HybridTime restore_at, int64_t leader_term,
+      CoarseTimePoint deadline);
+  Result<bool> IsTableCoveredBySomeSnapshotSchedule(const TableInfo& table_info) const;
+
+  // Returns true if there are one or more non-deleted
+  // snapshot schedules present.
+  bool IsPitrActive();
+
+  Result<bool> IsTableUndergoingPitrRestore(const TableInfo& table_info);
 
   void Start();
 
   void Shutdown();
+
+  // If snapshot_id is nil then returns true if any snapshot covers the particular tablet
+  // whereas if snapshot_id is not nil then returns true if that particular snapshot
+  // covers the tablet.
+  bool TEST_IsTabletCoveredBySnapshot(
+      const TabletId& tablet_id,
+      const TxnSnapshotId& snapshot_id = TxnSnapshotId(Uuid::Nil())) const;
+
+  Status PopulateDeleteRetainerInfoForTableDrop(
+      const TableInfo& table_info, const TabletInfos& tablets_to_check,
+      const SnapshotSchedulesToObjectIdsMap& schedules_to_tables_map,
+      TabletDeleteRetainerInfo& delete_retainer) const;
+  Status PopulateDeleteRetainerInfoForTabletDrop(
+      const TabletInfo& tablet_info, TabletDeleteRetainerInfo& delete_retainer) const;
+
+  bool ShouldRetainHiddenTablet(
+      const TabletInfo& tablet_info,
+      const ScheduleMinRestoreTime& schedule_to_min_restore_time) const;
+
+  bool ShouldRetainHiddenColocatedTable(
+      const TableInfo& table_info, const TabletInfo& tablet_info,
+      const ScheduleMinRestoreTime& schedule_to_min_restore_time) const;
 
  private:
   class Impl;
@@ -123,5 +220,3 @@ class MasterSnapshotCoordinator : public tablet::SnapshotCoordinator {
 
 } // namespace master
 } // namespace yb
-
-#endif // YB_MASTER_MASTER_SNAPSHOT_COORDINATOR_H

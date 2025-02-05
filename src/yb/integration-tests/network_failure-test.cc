@@ -25,10 +25,10 @@
 #include "yb/master/mini_master.h"
 
 #include "yb/util/async_util.h"
+#include "yb/util/backoff_waiter.h"
 #include "yb/util/metrics.h"
 #include "yb/util/random_util.h"
 #include "yb/util/test_thread_holder.h"
-#include "yb/util/test_util.h"
 #include "yb/util/tsan_util.h"
 
 using namespace std::literals;
@@ -64,8 +64,8 @@ class NetworkFailureTest : public MiniClusterTestWithClient<MiniCluster> {
     ASSERT_OK(client_->CreateNamespace(kKeyspaceName));
 
     client::YBSchemaBuilder builder;
-    builder.AddColumn("key")->Type(INT32)->NotNull()->HashPrimaryKey();
-    builder.AddColumn("value")->Type(INT32)->NotNull();
+    builder.AddColumn("key")->Type(DataType::INT32)->NotNull()->HashPrimaryKey();
+    builder.AddColumn("value")->Type(DataType::INT32)->NotNull();
 
     ASSERT_OK(table_.Create(kTableName, kNumTablets, client_.get(), &builder));
 
@@ -81,7 +81,7 @@ int64_t CountLookups(MiniCluster* cluster) {
   int64_t result = 0;
   for (size_t i = 0; i != cluster->num_masters(); ++i) {
     auto new_leader_master = cluster->mini_master(i);
-    auto histogram = new_leader_master->master()->metric_entity()->FindOrCreateHistogram(
+    auto histogram = new_leader_master->master()->metric_entity()->FindOrCreateMetric<Histogram>(
         &METRIC_handler_latency_yb_master_MasterClient_GetTabletLocations);
     result += histogram->TotalCount();
   }
@@ -89,16 +89,21 @@ int64_t CountLookups(MiniCluster* cluster) {
 }
 
 TEST_F(NetworkFailureTest, DisconnectMasterLeader) {
-  FLAGS_meta_cache_lookup_throttling_max_delay_ms = 10000;
-  FLAGS_meta_cache_lookup_throttling_step_ms = 50;
+  ANNOTATE_UNPROTECTED_WRITE(FLAGS_meta_cache_lookup_throttling_max_delay_ms) = 10000;
+  ANNOTATE_UNPROTECTED_WRITE(FLAGS_meta_cache_lookup_throttling_step_ms) = 50;
+
+  constexpr int kWriteRows = RegularBuildVsSanitizers(5000, 500);
+  constexpr int kReportRows = kWriteRows / 5;
+  constexpr int kMaxRunningRequests = RegularBuildVsSanitizers(100, 10);
 
   TestThreadHolder thread_holder;
 
   std::atomic<int> written(0);
   std::atomic<CoarseTimePoint> prev_report{CoarseTimePoint()};
-  thread_holder.AddThreadFunctor([
-      this, &written, &stop_flag = thread_holder.stop_flag(), &prev_report]() {
-    auto session = client_->NewSession();
+  thread_holder.AddThreadFunctor([this, &written, &stop_flag = thread_holder.stop_flag(),
+                                  &prev_report]() {
+    auto session = client_->NewSession(30s);
+
     std::deque<std::future<client::FlushStatus>> futures;
     std::deque<client::YBOperationPtr> ops;
 
@@ -110,11 +115,15 @@ TEST_F(NetworkFailureTest, DisconnectMasterLeader) {
         ops.pop_front();
 
         auto new_written = ++written;
-        if (new_written % 4000 == 0) {
+        if (new_written % kReportRows == 0) {
           auto now = CoarseMonoClock::now();
           auto old_value = prev_report.exchange(now);
           LOG(INFO) << "Written: " << new_written << ", time taken: " << MonoDelta(now - old_value);
         }
+      }
+
+      if (futures.size() >= kMaxRunningRequests) {
+        continue;
       }
 
       int key = RandomUniformInt<int>(0, std::numeric_limits<int>::max() - 1);
@@ -129,8 +138,13 @@ TEST_F(NetworkFailureTest, DisconnectMasterLeader) {
     }
   });
 
-  while (written.load() <= RegularBuildVsSanitizers(5000, 500)) {
-    std::this_thread::sleep_for(100ms);
+  auto status = WaitFor([&written, &thread_holder] {
+    return thread_holder.stop_flag().load() || written.load() > kWriteRows;
+  }, 10s * kTimeMultiplier, "Write enough rows");
+
+  if (!status.ok()) {
+    thread_holder.Stop();
+    ASSERT_OK(status);
   }
 
   auto old_lookups = CountLookups(cluster_.get());

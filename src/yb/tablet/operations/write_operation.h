@@ -30,23 +30,16 @@
 // under the License.
 //
 
-#ifndef YB_TABLET_OPERATIONS_WRITE_OPERATION_H
-#define YB_TABLET_OPERATIONS_WRITE_OPERATION_H
+#pragma once
 
 #include <mutex>
 #include <string>
 #include <vector>
 
 #include "yb/tablet/operations/operation.h"
-#include "yb/tablet/operations.pb.h"
+#include "yb/tablet/operations.messages.h"
 
 namespace yb {
-
-namespace tserver {
-class WriteRequestPB;
-class WriteResponsePB;
-}
-
 namespace tablet {
 
 // An operation for a batch of inserts/mutates. This class holds and
@@ -64,7 +57,7 @@ namespace tablet {
 // on the WAL.
 //
 // NOTE: this class isn't thread safe.
-class WriteOperation : public OperationBase<OperationType::kWrite, WritePB>  {
+class WriteOperation : public OperationBase<OperationType::kWrite, LWWritePB>  {
  public:
   template <class... Args>
   explicit WriteOperation(Args&&... args)
@@ -79,7 +72,7 @@ class WriteOperation : public OperationBase<OperationType::kWrite, WritePB>  {
   //
   // Decodes the operations in the request PB and acquires row locks for each of the
   // affected rows.
-  CHECKED_STATUS Prepare() override;
+  Status Prepare(IsLeaderSide is_leader_side) override;
 
   // Executes an Apply for a write transaction.
   //
@@ -100,15 +93,13 @@ class WriteOperation : public OperationBase<OperationType::kWrite, WritePB>  {
   // original requests) which is already a requirement of the consensus
   // algorithm.
   // Commits the mvcc transaction and updates the metrics.
-  CHECKED_STATUS DoReplicated(int64_t leader_term, Status* complete_status) override;
+  Status DoReplicated(int64_t leader_term, Status* complete_status) override;
 
   // Aborts the mvcc transaction.
-  CHECKED_STATUS DoAborted(const Status& status) override;
+  Status DoAborted(const Status& status) override;
 
   HybridTime WriteHybridTime() const override;
 };
 
 }  // namespace tablet
 }  // namespace yb
-
-#endif  // YB_TABLET_OPERATIONS_WRITE_OPERATION_H

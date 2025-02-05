@@ -24,7 +24,7 @@ import org.slf4j.LoggerFactory;
 import org.yb.YBTestRunner;
 import org.yb.minicluster.MiniYBClusterBuilder;
 import org.yb.util.MiscUtil;
-import org.yb.util.MiscUtil.ThrowingRunnable;
+import org.yb.util.ThrowingRunnable;
 import org.yb.util.BuildTypeUtil;
 
 import java.util.ArrayList;
@@ -41,7 +41,7 @@ public class TestTransactionStatusTable extends BaseCQLTest {
     builder.addCommonTServerFlag("TEST_txn_status_table_tablet_creation_delay_ms", "5000");
     // Adjust following flags, so delay of txn status tablets opening doesn't block the whole
     // tablets opening thread pool.
-    builder.addCommonTServerFlag("transaction_table_num_tablets", "4");
+    builder.addMasterFlag("transaction_table_num_tablets", "4");
     builder.addCommonTServerFlag("num_tablets_to_open_simultaneously", "8");
     // Reduce the number of tablets per table.
     builder.addMasterFlag("yb_num_shards_per_tserver", "1");
@@ -49,7 +49,7 @@ public class TestTransactionStatusTable extends BaseCQLTest {
 
   @Test
   public void testCreation() throws Throwable {
-    final int kTablesCount = BuildTypeUtil.nonTsanVsTsan(4, 2);
+    final int kTablesCount = BuildTypeUtil.nonSanitizerVsSanitizer(4, 2);
     final CountDownLatch startSignal = new CountDownLatch(kTablesCount);
     List<ThrowingRunnable> cmds = new ArrayList<>();
     List<Session> sessions = new ArrayList<>();
@@ -69,12 +69,12 @@ public class TestTransactionStatusTable extends BaseCQLTest {
           session.execute(
               new SimpleStatement(String.format(
                   "create table %s (k int primary key, v int) " +
-                  "with transactions = {'enabled' : true};", tableName))
+                  "with transactions = {'enabled' : true}", tableName))
               .setReadTimeoutMillis((int) BuildTypeUtil.adjustTimeout(36000)));
           LOG.info("Created table " + tableName);
-          session.execute(String.format("create index on %s (v);", tableName));
+          session.execute(String.format("create index on %s (v)", tableName));
           LOG.info("Created index on " + tableName);
-          session.execute(String.format("insert into %s (k, v) values (1, 1000);", tableName));
+          session.execute(String.format("insert into %s (k, v) values (1, 1000)", tableName));
           LOG.info("Inserted data into " + tableName);
           ResultSet rs = session.execute(String.format("select k, v from %s", tableName));
           LOG.info("Selected data from " + tableName);

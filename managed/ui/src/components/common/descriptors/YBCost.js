@@ -1,13 +1,14 @@
 // Copyright (c) YugaByte, Inc.
 
-import React, { Component } from 'react';
+import { Component } from 'react';
 import PropTypes from 'prop-types';
 import moment from 'moment';
 import { YBFormattedNumber } from '../descriptors';
 
 import './stylesheets/YBCost.css';
 
-const hoursPerDay = 24;
+const HOURS_IN_DAY = 24;
+const UNKNOWN_COST = '$ -';
 
 const timeFactor = (base, target) => {
   const timeInHours = {};
@@ -16,9 +17,9 @@ const timeFactor = (base, target) => {
 
   for (const key of Object.keys(timeInHours)) {
     if (key === 'day') {
-      timeInHours[key] = hoursPerDay;
+      timeInHours[key] = HOURS_IN_DAY;
     } else if (key === 'month') {
-      timeInHours[key] = hoursPerDay * moment().daysInMonth();
+      timeInHours[key] = HOURS_IN_DAY * moment().daysInMonth();
     }
   }
 
@@ -32,10 +33,14 @@ export default class YBCost extends Component {
   };
 
   render() {
-    const { value, multiplier, base = 'hour' } = this.props;
+    const { value, multiplier, base = 'hour', isPricingKnown, runtimeConfigs } = this.props;
+    const showUICost = runtimeConfigs?.data?.configEntries?.find(
+      (c) => c.key === 'yb.ui.show_cost'
+    );
     const finalCost = value ? value * timeFactor(base, multiplier) : 0;
+    const shouldShowPrice = isPricingKnown && showUICost?.value === 'true';
 
-    return (
+    return shouldShowPrice ? (
       <YBFormattedNumber
         value={finalCost}
         maximumFractionDigits={2}
@@ -43,6 +48,8 @@ export default class YBCost extends Component {
         currency="USD"
         multiplier={multiplier}
       />
+    ) : (
+      <span>{UNKNOWN_COST}</span>
     );
   }
 }

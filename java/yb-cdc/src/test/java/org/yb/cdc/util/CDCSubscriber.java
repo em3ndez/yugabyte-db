@@ -13,7 +13,8 @@
 
 package org.yb.cdc.util;
 
-import org.apache.log4j.Logger;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.yb.cdc.CdcService;
 import org.yb.client.*;
 import org.yb.master.MasterDdlOuterClass;
@@ -27,7 +28,7 @@ import java.util.Objects;
 import static org.yb.AssertionWrappers.fail;
 
 public class CDCSubscriber {
-  private final static Logger LOG = Logger.getLogger(CDCSubscriber.class);
+  private final static Logger LOG = LoggerFactory.getLogger(CDCSubscriber.class);
 
   private String namespaceName = "yugabyte";
   private String tableName;
@@ -86,6 +87,10 @@ public class CDCSubscriber {
     this.dbStreamId = dbStreamId;
   }
 
+  public String getDbStreamId() {
+    return this.dbStreamId;
+  }
+
   public void setTableName(String tableName) {
     this.tableName = tableName;
   }
@@ -100,6 +105,10 @@ public class CDCSubscriber {
 
   public void setNumberOfTablets(int numberOfTablets) {
     this.numberOfTablets = numberOfTablets;
+  }
+
+  public String getTabletId() {
+    return this.tabletId;
   }
 
   /**
@@ -202,7 +211,7 @@ public class CDCSubscriber {
    * then the exact table corresponding to that tableId.
    *
    */
-  private void createStreamUtil(String cpType) throws Exception {
+  private void createStreamUtil(String cpType, String recordType) throws Exception {
     syncClient = createSyncClientForTest();
     tableId = getTableId();
     table = getTable();
@@ -218,18 +227,20 @@ public class CDCSubscriber {
     LOG.debug("Checkpointing type is: " + checkpointingType);
     if (dbStreamId == null || dbStreamId.isEmpty()) {
       LOG.debug("Creating a new CDC DB stream");
-      dbStreamId = syncClient.createCDCStream(table, "yugabyte", FORMAT,
-                                              checkpointingType).getStreamId();
+      dbStreamId = syncClient.createCDCStream(table, namespaceName, FORMAT,
+                                              checkpointingType, recordType).getStreamId();
 
       LOG.debug(String.format("Created a new DB stream id: %s", dbStreamId));
     } else {
       LOG.debug("Using an old cached DB stream id");
     }
 
+    setCheckpoint(0, 0, true);
     LOG.info("DB Stream id: " + dbStreamId);
+  }
 
-    // Calling the GetChangesResponse to make sure it's setting the checkpoint to the beginning.
-    getResponseFromCDC(new ArrayList<>());
+  private void createStreamUtil(String cpType) throws Exception {
+    createStreamUtil(cpType, "");
   }
 
   /**
@@ -275,15 +286,18 @@ public class CDCSubscriber {
    * @param recordFormat Format of the record to be streamed (json/proto)
    * @throws Exception when unable to create a stream
    */
-  public void createStream(String recordFormat) throws Exception {
+  public void createStream(String recordFormat, String recordType) throws Exception {
     recordFormat = recordFormat.toLowerCase(Locale.ROOT);
     if (!Objects.equals(recordFormat, "proto") && !Objects.equals(recordFormat, "json")) {
       LOG.error("Invalid format specified, please specify one from JSON or PROTO");
       throw new RuntimeException("Invalid format specified, specify one from JSON or PROTO");
     }
-
     setFormat(recordFormat);
-    createStreamUtil("");
+    createStreamUtil("", recordType);
+  }
+
+  public void createStream(String recordFormat) throws Exception {
+    createStream(recordFormat, "");
   }
 
   /**
@@ -291,9 +305,11 @@ public class CDCSubscriber {
    * and checkpoint type.
    * @param recordFormat Format of the record to be streamed (json/proto)
    * @param checkpointingType Type of checkpointing for the stream to be created (IMPLICIT/EXPLICIT)
+   * @param recordType Type of the record, (CHANGE/ALL)
    * @throws Exception when unable to create a stream
    */
-  public void createStream(String recordFormat, String checkpointingType) throws Exception {
+  public void createStream(String recordFormat, String checkpointingType,
+                           String recordType) throws Exception {
     recordFormat = recordFormat.toLowerCase(Locale.ROOT);
     checkpointingType = checkpointingType.toUpperCase(Locale.ROOT);
 
@@ -355,9 +371,15 @@ public class CDCSubscriber {
       return null;
     }
 
-    LOG.debug("Tablet ID for getting checkpoint: " + tabletId);
-
-    return syncClient.getCheckpoint(table, streamId, tabletId);
+    if (tabletId == null) {
+      List<LocatedTablet> locatedTablets = table.getTabletsLocations(30000);
+      for (LocatedTablet tablet : locatedTablets) {
+        LOG.debug("Tablet ID for getting checkpoint: " + new String(tablet.getTabletId()));
+        this.tabletId = new String(tablet.getTabletId());
+        return syncClient.getCheckpoint(table, streamId, this.tabletId);
+      }
+    }
+    return syncClient.getCheckpoint(table, streamId, this.tabletId);
   }
 
   /**
@@ -372,11 +394,10 @@ public class CDCSubscriber {
    * @see GetDBStreamInfoResponse
    * @see CdcService.TableInfo
    */
-  public SetCheckpointResponse setCheckpoint(long term, long index,
-                                             boolean initialCheckpoint) throws Exception {
+  public void setCheckpoint(long term, long index, boolean initialCheckpoint) throws Exception {
     if (syncClient == null) {
       LOG.info("Cannot set checkpoint, YBClient not initialized");
-      return null;
+      return;
     }
 
     GetDBStreamInfoResponse resp = syncClient.getDBStreamInfo(dbStreamId);
@@ -387,12 +408,24 @@ public class CDCSubscriber {
       LOG.debug("Table StreamID: " + streamId);
     }
     if (streamId.isEmpty()) {
-      return null;
+      return;
     }
 
-    return syncClient.commitCheckpoint(table, streamId, tabletId, term, index, initialCheckpoint);
-  }
+    if (this.tabletId == null) {
+      List<LocatedTablet> locatedTablets = table.getTabletsLocations(30000);
 
+      for (LocatedTablet tablet : locatedTablets) {
+        this.tabletId = new String(tablet.getTabletId());
+        syncClient.commitCheckpoint(table, streamId, this.tabletId, term, index,
+            initialCheckpoint);
+        LOG.info("Set the checkpoint term : " + term + ", index: " + index);
+      }
+    } else {
+        syncClient.commitCheckpoint(table, streamId, this.tabletId, term, index,
+            initialCheckpoint);
+        LOG.info("Set the checkpoint term : " + term + ", index: " + index);
+    }
+  }
   /**
    * This is used to create a stream to verify the snapshot feature of CDC.<br><br>
    *
@@ -471,6 +504,8 @@ public class CDCSubscriber {
     }
 
     for (String tabletId : tabletIds) {
+      syncClient.commitCheckpoint(table, dbStreamId, tabletId, 0, 0, true);
+
       GetChangesResponse changesResponse =
         syncClient.getChangesCDCSDK(
           table, dbStreamId, tabletId,

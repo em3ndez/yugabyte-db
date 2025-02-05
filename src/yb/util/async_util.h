@@ -30,8 +30,7 @@
 // under the License.
 //
 // Utility functions which are handy when doing async/callback-based programming.
-#ifndef YB_UTIL_ASYNC_UTIL_H
-#define YB_UTIL_ASYNC_UTIL_H
+#pragma once
 
 #include <pthread.h>
 
@@ -79,15 +78,15 @@ class Synchronizer {
     return std::bind(&Synchronizer::StatusCB, this, std::placeholders::_1);
   }
 
-  CHECKED_STATUS Wait() {
+  Status Wait() {
     return WaitUntil(std::chrono::steady_clock::time_point::max());
   }
 
-  CHECKED_STATUS WaitFor(const MonoDelta& delta) {
+  Status WaitFor(const MonoDelta& delta) {
     return WaitUntil(std::chrono::steady_clock::now() + delta.ToSteadyDuration());
   }
 
-  CHECKED_STATUS WaitUntil(const std::chrono::steady_clock::time_point& time);
+  Status WaitUntil(const std::chrono::steady_clock::time_point& time);
 
   void Reset();
 
@@ -132,4 +131,3 @@ bool IsReady(const std::future<T>& f) {
 }
 
 } // namespace yb
-#endif /* YB_UTIL_ASYNC_UTIL_H */

@@ -14,6 +14,7 @@ package org.yb.cql;
 
 import java.util.*;
 import java.util.stream.Collectors;
+import java.math.BigDecimal;
 import java.text.SimpleDateFormat;
 
 import com.datastax.driver.core.LocalDate;
@@ -35,16 +36,13 @@ import com.datastax.driver.core.ResultSet;
 import com.datastax.driver.core.Row;
 import com.datastax.driver.core.exceptions.InvalidQueryException;
 
-import static org.yb.AssertionWrappers.assertTrue;
-import static org.yb.AssertionWrappers.assertEquals;
-import static org.yb.AssertionWrappers.assertFalse;
-import static org.yb.AssertionWrappers.assertNull;
-
 import org.yb.YBTestRunner;
 
 import org.junit.runner.RunWith;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import static org.yb.AssertionWrappers.*;
 
 @RunWith(value=YBTestRunner.class)
 public class TestSelect extends BaseCQLTest {
@@ -55,6 +53,15 @@ public class TestSelect extends BaseCQLTest {
     super.customizeMiniClusterBuilder(builder);
     // Generate system.partitions table on query.
     builder.yqlSystemPartitionsVtableRefreshSecs(0);
+  }
+
+  @Override
+  protected Map<String, String> getTServerFlags() {
+    Map<String, String> flagMap = super.getTServerFlags();
+
+    flagMap.put("ycql_allow_in_op_with_order_by", "true");
+    flagMap.put("ycql_enable_packed_row", "false");
+    return flagMap;
   }
 
   @Test
@@ -421,6 +428,448 @@ public class TestSelect extends BaseCQLTest {
     runInvalidStmt("SELECT * FROM test_select WHERE h1 = 1 AND h2 = 'h1' AND r1 <= 1 AND r1 <= 3;");
 
     LOG.info("TEST CQL RANGE QUERY - End");
+  }
+
+  @Test
+  public void testCqlContainsKey() throws Exception {
+    LOG.info("TEST CQL CONTAINS KEY QUERY - Start");
+
+    // Test CONTAINS KEY on map with INT, BOOLEAN, TEXT, FROZEN collections as keys.
+    session.execute("CREATE TABLE t1_int_int (a int, b map<int, int>, primary key (a));");
+    session.execute("INSERT INTO t1_int_int (a, b) VALUES (1, {1:1, 2:2, 4:4});");
+    session.execute("INSERT INTO t1_int_int (a, b) VALUES (2, {10:1, 92:2, 14:4});");
+    session.execute("INSERT INTO t1_int_int (a, b) VALUES (20, {120:1, 92:2, 142:4});");
+    session.execute("INSERT INTO t1_int_int (a, b) VALUES (12, {101:1, 912:2, 124:4});");
+    assertQuery("SELECT * FROM t1_int_int WHERE b CONTAINS KEY 92;",
+        "Row[2, {10=1, 14=4, 92=2}]Row[20, {92=2, 120=1, 142=4}]");
+
+    session.execute("CREATE TABLE t1_bool_int (a int, b map<boolean, int>, primary key (a));");
+    session.execute("INSERT INTO t1_bool_int (a, b) VALUES (1, {true:1});");
+    session.execute("INSERT INTO t1_bool_int (a, b) VALUES (2, {false:0});");
+    session.execute("INSERT INTO t1_bool_int (a, b) VALUES (20, {true:1, false:0});");
+    session.execute("INSERT INTO t1_bool_int (a, b) VALUES (12, {true:0});");
+    assertQuery("SELECT * FROM t1_bool_int WHERE b CONTAINS KEY false;",
+        "Row[2, {false=0}]Row[20, {false=0, true=1}]");
+    assertQuery("SELECT * FROM t1_bool_int WHERE b CONTAINS KEY false AND b[true] = 1;",
+        "Row[20, {false=0, true=1}]");
+
+    session.execute("CREATE TABLE t1_text_int (a int, b map<text, int>, primary key (a));");
+    session.execute("INSERT INTO t1_text_int (a, b) VALUES (1,  {'1':1, '2':2, '4':4});");
+    session.execute("INSERT INTO t1_text_int (a, b) VALUES (2,  {'10':1, '92':2, '14':4});");
+    session.execute("INSERT INTO t1_text_int (a, b) VALUES (20, {'120':1, '92':2, '142':4});");
+    session.execute("INSERT INTO t1_text_int (a, b) VALUES (12, {'101':1, '912':2, '124':4});");
+    assertQuery("SELECT * FROM t1_text_int WHERE b CONTAINS KEY '92';",
+        "Row[2, {10=1, 14=4, 92=2}]Row[20, {120=1, 142=4, 92=2}]");
+    assertQuery("SELECT * FROM t1_text_int WHERE b CONTAINS KEY '92' AND b CONTAINS KEY '142';",
+        "Row[20, {120=1, 142=4, 92=2}]");
+
+    session.execute("CREATE TABLE t1_set_int (a int, b map<frozen<set<int>>, int>, "
+        + "primary key (a));");
+    session.execute("INSERT INTO t1_set_int (a, b) VALUES (1,  {{1}:1, {1,2}:2, {1,2,3}:4});");
+    session.execute("INSERT INTO t1_set_int (a, b) VALUES (2,  {{1,2}:1, {1,2,3}:2, "
+        + "{1,2,3,4}:4});");
+    session.execute("INSERT INTO t1_set_int (a, b) VALUES (20, {{1,2,3}:1, {1,2,3,4}:2, "
+        + "{1,2,3,4,5}:4});");
+    session.execute("INSERT INTO t1_set_int (a, b) VALUES (12, {{1,2,3}:1, {1,3}:2, {1,2}:4});");
+    assertQuery("SELECT * FROM t1_set_int WHERE b CONTAINS KEY {1,2,3,4};",
+        "Row[2, {[1, 2]=1, [1, 2, 3]=2, [1, 2, 3, 4]=4}]"
+            + "Row[20, {[1, 2, 3]=1, [1, 2, 3, 4]=2, [1, 2, 3, 4, 5]=4}]");
+
+    session.execute("CREATE TABLE t1_list_int (a int, b map<frozen<list<int>>, int>, "
+        + "primary key (a));");
+    session.execute("INSERT INTO t1_list_int (a, b) VALUES (1,  {[1]:1, [1,2]:2, [1,2,3]:4});");
+    session.execute("INSERT INTO t1_list_int (a, b) VALUES (2,  {[1,2]:1, "
+        + "[1,2,3]:2, [1,2,3,4]:4});");
+    session.execute("INSERT INTO t1_list_int (a, b) VALUES (20, {[1,2,3]:1, "
+        + "[1,2,3,4]:2, [1,2,3,4,5]:4});");
+    session.execute("INSERT INTO t1_list_int (a, b) VALUES (12, {[1,2,3]:1, [1,3]:2, [1,2]:4});");
+    assertQuery("SELECT * FROM t1_list_int WHERE b CONTAINS KEY [1,2,3,4];",
+        "Row[2, {[1, 2]=1, [1, 2, 3]=2, [1, 2, 3, 4]=4}]"
+            + "Row[20, {[1, 2, 3]=1, [1, 2, 3, 4]=2, [1, 2, 3, 4, 5]=4}]");
+
+    session.execute("CREATE TABLE t1_map_int (a int, b map<frozen<map<int,int>>, int>, "
+        + "primary key (a));");
+    session.execute("INSERT INTO t1_map_int (a, b) VALUES (1,  {{1:1}:1, {1:1,2:2}:2, "
+        + "{1:1,2:2,3:3}:4});");
+    session.execute("INSERT INTO t1_map_int (a, b) VALUES (2,  {{1:1,2:2}:1, "
+        + "{1:1,2:2,3:3}:2, {1:1,2:2,3:3,4:4}:4});");
+    session.execute("INSERT INTO t1_map_int (a, b) VALUES (20, {{1:1,2:2,3:3}:1, "
+        + "{1:1,2:2,3:3,4:4}:2, {1:1,2:2,3:3,4:4,5:5}:4});");
+    session.execute("INSERT INTO t1_map_int (a, b) VALUES (12, {{1:1,2:2,3:3}:1, "
+        + "{1:1,3:3}:2, {1:1,2:2}:4});");
+    assertQuery("SELECT * FROM t1_map_int WHERE b CONTAINS KEY {1:1,2:2,3:3,4:4};",
+        "Row[2, {{1=1, 2=2}=1, {1=1, 2=2, 3=3}=2, {1=1, 2=2, 3=3, 4=4}=4}]"
+            + "Row[20, {{1=1, 2=2, 3=3}=1, {1=1, 2=2, 3=3, 4=4}=2, {1=1, 2=2, 3=3, 4=4, 5=5}=4}]");
+
+    // TODO: Add tests to test CONTAINS KEY on a set / map / list of frozen tuples
+    // Currently TServer crashes when trying to create a table with a collection containing frozen
+    // tuple.
+    // GHI - https://github.com/yugabyte/yugabyte-db/issues/3588,
+    //       https://github.com/yugabyte/yugabyte-db/issues/936
+    // Example Test: CREATE TABLE table (id int, deps map<frozen<tuple<int, int>>, int>,
+    //                                   primary key (id))
+    // INSERT INTO table (id, deps) VALUES (1, {(1,1):1, (2,2):2});
+    // INSERT INTO table (id, deps) VALUES (2, {(2,2):3, (3,3):4});
+    // SELECT * FROM table WHERE deps CONTAINS KEY (1,1)
+    // Expected Result: Row[1, [(1,1)=1, (2,2)=2]]
+    runInvalidStmt("CREATE TABLE tuple_not_implemented (id int primary key, deps tuple<int,int>)",
+        "Feature Not Supported");
+
+    // Test failure for invalid types.
+    final String unsupportedTypeForContainsKey = "Datatype Mismatch. CONTAINS KEY is only "
+        + "supported for Maps that are not frozen.";
+
+    session.execute("CREATE TABLE t2_frozen_map (a int, b frozen<map<int,int>>,"
+        + " primary key(a))");
+    runInvalidStmt(
+        "SELECT * FROM t2_frozen_map WHERE b CONTAINS KEY 5;", unsupportedTypeForContainsKey);
+
+    session.execute("CREATE TABLE t2_map_frozen_map (a int, b map<int, frozen<map<int,int>>>, "
+        + "primary key (a));");
+    runInvalidStmt(
+        "SELECT * FROM t2_map_frozen_map WHERE b[0] CONTAINS KEY 5", unsupportedTypeForContainsKey);
+
+    session.execute("CREATE TABLE t2_set (a int, b set<int>,"
+        + " primary key(a))");
+    runInvalidStmt("SELECT * FROM t2_set WHERE b CONTAINS KEY 5;", unsupportedTypeForContainsKey);
+
+    session.execute("CREATE TABLE t2_list (a int, b list<int>,"
+        + " primary key(a))");
+    runInvalidStmt("SELECT * FROM t2_list WHERE b CONTAINS KEY 5;", unsupportedTypeForContainsKey);
+
+    // Test failure on NULL as RHS.
+    final String nullNotSupported = "CONTAINS KEY does not support NULL";
+
+    session.execute("CREATE TABLE t3 (a int, b map<int, int>, primary key(a))");
+    runInvalidStmt("SELECT * FROM t3 WHERE b CONTAINS KEY NULL", nullNotSupported);
+
+    // Test failure with incomparable types
+    final String incomparableTypeString = "Datatype Mismatch";
+    runInvalidStmt("SELECT * FROM t3 WHERE b CONTAINS KEY 'text'", incomparableTypeString);
+    runInvalidStmt("SELECT * FROM t3 WHERE b CONTAINS KEY 1.2", incomparableTypeString);
+
+    // Tests with bind variables.
+    session.execute("CREATE TABLE t4 (a int, b map<int,int>, primary key(a))");
+    PreparedStatement query = session.prepare("SELECT * FROM t4 WHERE b CONTAINS KEY ?");
+
+    try {
+      session.execute(query.bind().setToNull(0));
+      fail("Query '" + query + "' did not fail with null");
+    } catch (com.datastax.driver.core.exceptions.InvalidQueryException e) {
+      String errorMessage = "Invalid Arguments. CONTAINS KEY does not support NULL";
+      LOG.info("Expected exception", e);
+      assertTrue("Error message '" + e.getMessage() + "' should contain '" + errorMessage + "'",
+          e.getMessage().contains(errorMessage));
+    }
+
+    try {
+      session.execute(query.bind().setString(0, "text"));
+      fail("Query '" + query + "' did not fail with text");
+    } catch (com.datastax.driver.core.exceptions.CodecNotFoundException e) {
+      String errorMessage = "Codec not found for requested operation: [int <-> java.lang.String]";
+      LOG.info("Expected exception", e);
+      assertTrue("Error message '" + e.getMessage() + "' should contain '" + errorMessage + "'",
+          e.getMessage().contains(errorMessage));
+    }
+
+    try {
+      session.execute(query.bind().setDecimal(0, new BigDecimal(1.2324)));
+      fail("Query '" + query + "' did not fail with 1.2324");
+    } catch (com.datastax.driver.core.exceptions.CodecNotFoundException e) {
+      String errorMessage =
+          "Codec not found for requested operation: [int <-> java.math.BigDecimal]";
+      LOG.info("Expected exception", e);
+      assertTrue("Error message '" + e.getMessage() + "' should contain '" + errorMessage + "'",
+          e.getMessage().contains(errorMessage));
+    }
+  }
+
+  @Test
+  public void testCqlContains() throws Exception {
+    LOG.info("TEST CQL CONTAINS QUERY - Start");
+
+    // Test CONTAINS on sets of text, varint, boolean, decimal.
+    session.execute("CREATE TABLE t1_text (id int, deps set<text>, primary key(id))");
+    session.execute("INSERT INTO t1_text(id, deps) VALUES (1, {'1', '2', '3'})");
+    session.execute("INSERT INTO t1_text(id, deps) VALUES (2, {'1', '2', '3'})");
+    session.execute("INSERT INTO t1_text(id, deps) VALUES (3, {'2', '3'})");
+    session.execute("INSERT INTO t1_text(id, deps) VALUES (4, {'3'})");
+    assertQuery(
+        "SELECT * FROM t1_text WHERE deps CONTAINS '1'", "Row[1, [1, 2, 3]]Row[2, [1, 2, 3]]");
+    assertQuery("SELECT * FROM t1_text WHERE deps CONTAINS '1' AND id = 2", "Row[2, [1, 2, 3]]");
+
+    session.execute("CREATE TABLE t1_varint (id int, deps set<varint>, primary key(id))");
+    session.execute("INSERT INTO t1_varint(id, deps) VALUES (1, {1, 2, 3, 5})");
+    session.execute("INSERT INTO t1_varint(id, deps) VALUES (2, {1, 2, 3})");
+    session.execute("INSERT INTO t1_varint(id, deps) VALUES (3, {1})");
+    session.execute("INSERT INTO t1_varint(id, deps) VALUES (4, {})");
+    assertQuery("SELECT * FROM t1_varint WHERE deps CONTAINS 1",
+        "Row[1, [1, 2, 3, 5]]Row[2, [1, 2, 3]]Row[3, [1]]");
+
+    session.execute("CREATE TABLE t1_bool (id int, deps set<boolean>, primary key(id))");
+    session.execute("INSERT INTO t1_bool(id, deps) VALUES (1, {true})");
+    session.execute("INSERT INTO t1_bool(id, deps) VALUES (2, {false})");
+    session.execute("INSERT INTO t1_bool(id, deps) VALUES (3, {true, false})");
+    session.execute("INSERT INTO t1_bool(id, deps) VALUES (4, {})");
+    assertQuery(
+        "SELECT * FROM t1_bool WHERE deps CONTAINS true", "Row[1, [true]]Row[3, [false, true]]");
+    assertQuery("SELECT * FROM t1_bool WHERE deps CONTAINS true AND deps CONTAINS false",
+        "Row[3, [false, true]]");
+
+    session.execute("CREATE TABLE t1_decimal (id int, deps set<decimal>, primary key(id))");
+    session.execute("INSERT INTO t1_decimal(id, deps) VALUES (1, {1.0, 3.45, 1.34, 3.14})");
+    session.execute("INSERT INTO t1_decimal(id, deps) VALUES (2, {2, 4, 3})");
+    session.execute("INSERT INTO t1_decimal(id, deps) VALUES (3, {3.14, 5.0, 2.8})");
+    session.execute("INSERT INTO t1_decimal(id, deps) VALUES (4, {1.0})");
+    assertQuery("SELECT * FROM t1_decimal WHERE deps CONTAINS 1.0",
+        "Row[1, [1, 1.34, 3.14, 3.45]]Row[4, [1]]");
+
+    // Test CONTAINS on a set of frozen sets.
+    session.execute("CREATE TABLE t1_frozen_set (id int, "
+        + "deps set<frozen<set<varint>>>, primary key(id))");
+    session.execute("INSERT INTO t1_frozen_set (id, deps) VALUES (1, {{1, 2}, {3, 4}})");
+    session.execute("INSERT INTO t1_frozen_set (id, deps) VALUES (2, {{1, 3}, {1, 2}})");
+    session.execute("INSERT INTO t1_frozen_set (id, deps) VALUES (3, {{5, 6}, {7, 8}})");
+    session.execute("INSERT INTO t1_frozen_set (id, deps) VALUES (4, {{1, 2}, {9, 10}})");
+    assertQuery("SELECT * FROM t1_frozen_set  WHERE deps CONTAINS {1,2}",
+        "Row[1, [[1, 2], [3, 4]]]Row[4, [[1, 2], [9, 10]]]Row[2, [[1, 2], [1, 3]]]");
+
+    // Test CONTAINS on a set of frozen lists.
+    session.execute("CREATE TABLE t1_frozen_list(id int, "
+        + "deps set<frozen<list<varint>>>, primary key(id))");
+    session.execute("INSERT INTO t1_frozen_list (id, deps) VALUES (1, {[1, 2], [3, 4]})");
+    session.execute("INSERT INTO t1_frozen_list (id, deps) VALUES (2, {[1, 3], [1, 2]})");
+    session.execute("INSERT INTO t1_frozen_list (id, deps) VALUES (3, {[5, 6], [7, 8]})");
+    session.execute("INSERT INTO t1_frozen_list (id, deps) VALUES (4, {[1, 2], [9, 1]})");
+    assertQuery("SELECT * FROM t1_frozen_list WHERE deps CONTAINS [1,2]",
+        "Row[1, [[1, 2], [3, 4]]]Row[4, [[1, 2], [9, 1]]]Row[2, [[1, 2], [1, 3]]]");
+
+    // Test CONTAINS on a set of frozen maps.
+    session.execute("CREATE TABLE t1_frozen_map (id int, "
+        + "deps set<frozen<map<varint,varint>>>, primary key(id))");
+    session.execute("INSERT INTO t1_frozen_map (id, deps) VALUES (1, {{1:2}, {3:4}})");
+    session.execute("INSERT INTO t1_frozen_map (id, deps) VALUES (2, {{1:3}, {1:2}})");
+    session.execute("INSERT INTO t1_frozen_map (id, deps) VALUES (3, {{5:6}, {7:8}})");
+    session.execute("INSERT INTO t1_frozen_map (id, deps) VALUES (4, {{1:2}, {9:1}})");
+    assertQuery("SELECT * FROM t1_frozen_map WHERE deps CONTAINS {1:2}",
+        "Row[1, [{1=2}, {3=4}]]Row[4, [{1=2}, {9=1}]]Row[2, [{1=2}, {1=3}]]");
+
+    // TODO: Add tests to test CONTAINS on a set/list/map of frozen tuples.
+    // Currently TServer crashes when trying to create a table with a collection containing frozen
+    // tuple.
+    // GHI - https://github.com/yugabyte/yugabyte-db/issues/3588,
+    //       https://github.com/yugabyte/yugabyte-db/issues/936
+    // Example Test: CREATE TABLE table (id int, deps set<frozen<tuple<int, int>>, primary key (id))
+    // INSERT INTO table (id, deps) VALUES (1, {(1,1), (2,2)});
+    // INSERT INTO table (id, deps) VALUES (2, {(2,2), (3,3)});
+    // SELECT * FROM table WHERE deps CONTAINS (1,1)
+    // Expected Result: Row[1, [(1,1), (2,2)]]
+    runInvalidStmt("CREATE TABLE tuple_not_implemented (id int primary key, deps tuple<int,int>)",
+        "Feature Not Supported");
+
+    // Test CONTAINS on LIST of TEXT, VARINT, BOOLEAN, DECIMAL.
+    session.execute("CREATE TABLE t2_text (id int, deps list<text>, primary key(id))");
+    session.execute("INSERT INTO t2_text(id, deps) VALUES (1, ['1', '2', '3'])");
+    session.execute("INSERT INTO t2_text(id, deps) VALUES (2, ['1', '2', '3'])");
+    session.execute("INSERT INTO t2_text(id, deps) VALUES (3, ['2', '3'])");
+    session.execute("INSERT INTO t2_text(id, deps) VALUES (4, ['3'])");
+    assertQuery(
+        "SELECT * FROM t2_text WHERE deps CONTAINS '1'", "Row[1, [1, 2, 3]]Row[2, [1, 2, 3]]");
+
+    session.execute("CREATE TABLE t2_varint (id int, deps list<varint>, primary key(id))");
+    session.execute("INSERT INTO t2_varint(id, deps) VALUES (1, [1, 2, 3])");
+    session.execute("INSERT INTO t2_varint(id, deps) VALUES (2, [1, 2, 3])");
+    session.execute("INSERT INTO t2_varint(id, deps) VALUES (3, [1])");
+    session.execute("INSERT INTO t2_varint(id, deps) VALUES (4, [])");
+    assertQuery("SELECT * FROM t2_varint WHERE deps CONTAINS 1 AND deps[2] = 3",
+        "Row[1, [1, 2, 3]]Row[2, [1, 2, 3]]");
+
+    session.execute("CREATE TABLE t2_bool (id int, deps list<boolean>, primary key(id))");
+    session.execute("INSERT INTO t2_bool(id, deps) VALUES (1, [true])");
+    session.execute("INSERT INTO t2_bool(id, deps) VALUES (2, [false])");
+    session.execute("INSERT INTO t2_bool(id, deps) VALUES (3, [true, false])");
+    session.execute("INSERT INTO t2_bool(id, deps) VALUES (4, [])");
+    assertQuery(
+        "SELECT * FROM t2_bool WHERE deps CONTAINS true", "Row[1, [true]]Row[3, [true, false]]");
+
+    session.execute("CREATE TABLE t2_decimal (id int, deps list<decimal>, primary key(id))");
+    session.execute("INSERT INTO t2_decimal(id, deps) VALUES (1, [1.0, 3.45, 1.34, 3.14])");
+    session.execute("INSERT INTO t2_decimal(id, deps) VALUES (2, [2, 4, 3])");
+    session.execute("INSERT INTO t2_decimal(id, deps) VALUES (3, [3.14, 5.0, 2.8])");
+    session.execute("INSERT INTO t2_decimal(id, deps) VALUES (4, [1.0])");
+    assertQuery("SELECT * FROM t2_decimal WHERE deps CONTAINS 1.0",
+        "Row[1, [1, 3.45, 1.34, 3.14]]Row[4, [1]]");
+
+    // Test CONTAINS on a list of frozen sets.
+    session.execute("CREATE TABLE t2_frozen_set (id int, "
+        + "deps list<frozen<set<varint>>>, primary key(id))");
+    session.execute("INSERT INTO t2_frozen_set (id, deps) VALUES (1, [{1, 2}, {3, 4}])");
+    session.execute("INSERT INTO t2_frozen_set (id, deps) VALUES (2, [{1, 3}, {1, 2}])");
+    session.execute("INSERT INTO t2_frozen_set (id, deps) VALUES (3, [{5, 6}, {7, 8}])");
+    session.execute("INSERT INTO t2_frozen_set (id, deps) VALUES (4, [{1, 2}, {9, 10}])");
+    assertQuery("SELECT * FROM t2_frozen_set  WHERE deps CONTAINS {1,2}",
+        "Row[1, [[1, 2], [3, 4]]]Row[4, [[1, 2], [9, 10]]]Row[2, [[1, 3], [1, 2]]]");
+
+    // Test CONTAINS on a list of frozen lists.
+    session.execute("CREATE TABLE t2_frozen_list (id int, "
+        + "deps list<frozen<list<varint>>>, primary key(id))");
+    session.execute("INSERT INTO t2_frozen_list (id, deps) VALUES (1, [[1, 2], [3, 4]])");
+    session.execute("INSERT INTO t2_frozen_list (id, deps) VALUES (2, [[1, 3], [1, 2]])");
+    session.execute("INSERT INTO t2_frozen_list (id, deps) VALUES (3, [[5, 6], [7, 8]])");
+    session.execute("INSERT INTO t2_frozen_list (id, deps) VALUES (4, [[1, 2], [9, 10]])");
+    assertQuery("SELECT * FROM t2_frozen_list  WHERE deps CONTAINS [1,2]",
+        "Row[1, [[1, 2], [3, 4]]]Row[4, [[1, 2], [9, 10]]]Row[2, [[1, 3], [1, 2]]]");
+
+    // Test CONTAINS on a list of frozen map.
+    session.execute("CREATE TABLE t2_frozen_map (id int, "
+        + "deps list<frozen<map<varint,varint>>>, primary key(id))");
+    session.execute("INSERT INTO t2_frozen_map (id, deps) VALUES (1, [{1:2}, {3:4}])");
+    session.execute("INSERT INTO t2_frozen_map (id, deps) VALUES (2, [{1:3}, {1:2}])");
+    session.execute("INSERT INTO t2_frozen_map (id, deps) VALUES (3, [{5:6}, {7:8}])");
+    session.execute("INSERT INTO t2_frozen_map (id, deps) VALUES (4, [{1:2}, {9:1}])");
+    assertQuery("SELECT * FROM t2_frozen_map WHERE deps CONTAINS {1:2}",
+        "Row[1, [{1=2}, {3=4}]]Row[4, [{1=2}, {9=1}]]Row[2, [{1=3}, {1=2}]]");
+
+    // Test CONTAINS on MAP (INT, INT) (INT, TEXT) (TEXT, BOOLEAN).
+    session.execute("CREATE TABLE t3_int_int (id int, deps map<int, int>, primary key(id))");
+    session.execute("INSERT INTO t3_int_int(id, deps) VALUES (1, {1:1, 2:2, 3:3, 4:4})");
+    session.execute("INSERT INTO t3_int_int(id, deps) VALUES (2, {4:1, 2:5, 3:3, 6:4})");
+    session.execute("INSERT INTO t3_int_int(id, deps) VALUES (3, {8:4, 4:2, 3:5, 2:4})");
+    session.execute("INSERT INTO t3_int_int(id, deps) VALUES (4, {0:2, 2:43, 3:7, 5:4})");
+    assertQuery("SELECT * FROM t3_int_int WHERE deps CONTAINS 1",
+        "Row[1, {1=1, 2=2, 3=3, 4=4}]Row[2, {2=5, 3=3, 4=1, 6=4}]");
+
+    session.execute("CREATE TABLE t3_int_text (id int, deps map<int, text>, primary key(id))");
+    session.execute("INSERT INTO t3_int_text(id, deps) VALUES (1, {1:'1', 2:'2', 3:'3', 4:'4'})");
+    session.execute("INSERT INTO t3_int_text(id, deps) VALUES (2, {4:'1', 2:'5', 3:'3', 6:'4'})");
+    session.execute("INSERT INTO t3_int_text(id, deps) VALUES (3, {8:'4', 4:'2', 3:'5', 2:'4'})");
+    session.execute("INSERT INTO t3_int_text(id, deps) VALUES (4, {0:'2', 2:'4', 3:'7', 5:'4'})");
+    assertQuery("SELECT * FROM t3_int_text WHERE deps CONTAINS '1'",
+        "Row[1, {1=1, 2=2, 3=3, 4=4}]Row[2, {2=5, 3=3, 4=1, 6=4}]");
+
+    session.execute("CREATE TABLE t3_text_boolean (id int, deps map<text, boolean>, "
+        + "primary key(id))");
+    session.execute("INSERT INTO t3_text_boolean(id, deps) VALUES (1, "
+        + "{'1':false, '2':false, '3':false, '4':false})");
+    session.execute("INSERT INTO t3_text_boolean(id, deps) VALUES (2, "
+        + "{'1':true, '5':true, '3':false, '4':true})");
+    session.execute("INSERT INTO t3_text_boolean(id, deps) VALUES (3, "
+        + "{'4':true, '2':false, '5':false, '40':true})");
+    session.execute("INSERT INTO t3_text_boolean(id, deps) VALUES (4, "
+        + "{'2':false, '4':false, '7':false, '4':false})");
+    assertQuery("SELECT * FROM t3_text_boolean WHERE deps CONTAINS true",
+        "Row[2, {1=true, 3=false, 4=true, 5=true}]Row[3, {"
+            + "2=false, 4=true, 40=true, 5=false}]");
+
+    // Test CONTAINS on a map of frozen list.
+    session.execute("CREATE TABLE t4_map_frozen_list (id int, deps map<text, "
+        + "frozen<list<boolean>>>, primary key(id))");
+    session.execute("INSERT INTO t4_map_frozen_list(id, deps) VALUES (1, "
+        + "{'1':[true, true, true], '2':[false, false, false], '3':[false, false, false], "
+        + "'4':[false, false, false]})");
+    session.execute("INSERT INTO t4_map_frozen_list(id, deps) VALUES (2, "
+        + "{'1':[true, true, false], '5':[true, true, false], '3':[false, false, false],"
+        + " '4':[true, true, false]})");
+    session.execute("INSERT INTO t4_map_frozen_list(id, deps) VALUES (3, "
+        + "{'4':[false, false, false], '2':[false, false, false], '5':[true, true, false], "
+        + "'40':[false, false, false]})");
+    session.execute("INSERT INTO t4_map_frozen_list(id, deps) VALUES (4, "
+        + "{'2':[true, true, false], '4':[true, true, false], '7':[false, false, false], "
+        + "'40':[true, true, false]})");
+    assertQuery("SELECT * FROM t4_map_frozen_list WHERE deps CONTAINS [true, true, true]",
+        "Row[1, {1=[true, true, true], 2=[false, false, false], "
+            + "3=[false, false, false], 4=[false, false, false]}]");
+
+    // Test CONTAINS on a map of frozen set.
+    session.execute("CREATE TABLE t4_map_frozen_set (id int, deps map<text, "
+        + "frozen<set<boolean>>>, primary key(id))");
+    session.execute("INSERT INTO t4_map_frozen_set(id, deps) VALUES (1, "
+        + "{'1':{true}, '2':{false}, '3':{true}, "
+        + "'4':{false}})");
+    session.execute("INSERT INTO t4_map_frozen_set(id, deps) VALUES (2, "
+        + "{'1':{true}, '5':{false, true}})");
+    assertQuery("SELECT * FROM t4_map_frozen_set WHERE deps CONTAINS {true, false}",
+        "Row[2, {1=[true], 5=[false, true]}]");
+
+    // Test CONTAINS on a map of frozen map.
+    session.execute("CREATE TABLE t4_map_frozen_map (id int, deps map<text, "
+        + "frozen<map<boolean, boolean>>>, primary key(id))");
+    session.execute("INSERT INTO t4_map_frozen_map(id, deps) VALUES (1, "
+        + "{'1':{true:true}, '2':{false:false}, '3':{true:true}, "
+        + "'4':{false:false}})");
+    session.execute("INSERT INTO t4_map_frozen_map(id, deps) VALUES (2, "
+        + "{'1':{true:true}, '5':{false:false, true:true}})");
+    assertQuery("SELECT * FROM t4_map_frozen_map WHERE deps CONTAINS {false:false, true:true}",
+        "Row[2, {1={true=true}, 5={false=false, true=true}}]");
+
+    // Test failure for frozen collections.
+    final String unsupportedTypeForContains = "Datatype Mismatch. CONTAINS is only supported for "
+        + "Collections that are not frozen.";
+
+    session.execute("CREATE TABLE t5_frozen_list (id int, deps frozen<list<int>>,"
+        + " primary key(id))");
+    runInvalidStmt(
+        "SELECT * FROM t5_frozen_list WHERE deps CONTAINS 5", unsupportedTypeForContains);
+
+    session.execute("CREATE TABLE t5_frozen_set (id int, deps frozen<set<int>>,"
+        + " primary key(id))");
+    runInvalidStmt("SELECT * FROM t5_frozen_set WHERE deps CONTAINS 5", unsupportedTypeForContains);
+
+    session.execute("CREATE TABLE t5_frozen_map (id int, deps frozen<map<int, int>>,"
+        + " primary key(id))");
+    runInvalidStmt("SELECT * FROM t5_frozen_map WHERE deps CONTAINS 5", unsupportedTypeForContains);
+
+    session.execute("CREATE TABLE t5_list_of_frozen_map (id int, "
+        + "deps list<frozen<map<int, int>>>,"
+        + " primary key(id))");
+    runInvalidStmt(
+        "SELECT * FROM t5_list_of_frozen_map WHERE deps[0] CONTAINS 5", unsupportedTypeForContains);
+
+    // Test failure with NULL as RHS.
+    final String nullNotSupported = "CONTAINS does not support NULL";
+
+    session.execute("CREATE TABLE t6 (id int, deps set<int>, primary key(id))");
+    runInvalidStmt("SELECT * FROM t6 WHERE deps CONTAINS NULL", nullNotSupported);
+
+    // Test failure incomparable types
+    final String incomparableTypes = "Datatype Mismatch";
+    runInvalidStmt("SELECT * FROM t6 WHERE deps CONTAINS 'text'", incomparableTypes);
+    runInvalidStmt("SELECT * FROM t6 WHERE deps CONTAINS 1.2", incomparableTypes);
+
+    // Test with bind variables.
+    session.execute("CREATE TABLE t7 (id int, deps map<int, int>, primary key(id))");
+    PreparedStatement query = session.prepare("SELECT * FROM t7 WHERE deps CONTAINS ?");
+
+    try {
+      session.execute(query.bind().setToNull(0));
+      fail("CONTAINS query with NULL did not fail with Bind Variables");
+    } catch (com.datastax.driver.core.exceptions.InvalidQueryException e) {
+      String errorMessage = "Invalid Arguments. CONTAINS does not support NULL";
+      LOG.info("Expected exception", e);
+      assertTrue("Error message '" + e.getMessage() + "' should contain '" + errorMessage + "'",
+          e.getMessage().contains(errorMessage));
+    }
+
+    try {
+      session.execute(query.bind().setString(0, "text"));
+      fail("CONTAINS query with mismatched datatype did not fail.");
+    } catch (com.datastax.driver.core.exceptions.CodecNotFoundException e) {
+      String errorMessage = "Codec not found for requested operation: [int <-> java.lang.String]";
+      LOG.info("Expected exception", e);
+      assertTrue("Error message '" + e.getMessage() + "' should contain '" + errorMessage + "'",
+          e.getMessage().contains(errorMessage));
+    }
+
+    try {
+      session.execute(query.bind().setDecimal(0, new BigDecimal(1.23445)));
+      fail("CONTAINS query with mismatched datatype did not fail.");
+    } catch (com.datastax.driver.core.exceptions.CodecNotFoundException e) {
+      String errorMessage =
+          "Codec not found for requested operation: [int <-> java.math.BigDecimal]";
+      LOG.info("Expected exception", e);
+      assertTrue("Error message '" + e.getMessage() + "' should contain '" + errorMessage + "'",
+          e.getMessage().contains(errorMessage));
+    }
   }
 
   @Test
@@ -895,37 +1344,65 @@ public class TestSelect extends BaseCQLTest {
     assertEquals(0, rows.size());
   }
 
-  private void runPartitionHashTest(String func_name) throws Exception {
-    LOG.info(String.format("TEST %s - Start", func_name));
-    setupTable(String.format("%s_test", func_name), 10);
+  protected static enum UseIndex { ON, OFF }
+
+  private void runPartitionHashTest(String func_name, UseIndex use_index) throws Exception {
+    LOG.info(String.format("TEST %s - Start with using-index=%s", func_name, use_index));
+    final String tbl_name = func_name + "_test_tbl";
+
+    if (use_index == UseIndex.ON) {
+      session.execute(
+          "CREATE TABLE " + tbl_name + " (h1 int, h2 text, r1 int, r2 text," +
+          "    v1 int, v2 text, PRIMARY KEY ((h1, h2), r1, r2))" +
+          "    WITH CLUSTERING ORDER BY (r1 ASC, r2 DESC)" +
+          "    AND transactions = {'enabled':'true'}");
+      session.execute("CREATE INDEX idx ON " + tbl_name + " ((h1, r2), h2, r1)" +
+                      "    WITH CLUSTERING ORDER BY (h2 DESC, r1 ASC)");
+      waitForReadPermsOnAllIndexes(tbl_name);
+
+      session.execute("INSERT INTO " + tbl_name + " (h1, h2, r1, r2, v1, v2)" +
+                      "    VALUES (2, 'h2', 102, 'r102', 1002, 'v1002')");
+    } else {
+      setupTable(tbl_name, 10);
+    }
 
     // Testing only basic token call as sanity check here.
     // Main token tests are in YbSqlQuery (C++) and TestBindVariable (Java) tests.
-    Iterator<Row> rows = session.execute(String.format("SELECT * FROM %s_test WHERE " +
-        "%s(h1, h2) = %s(2, 'h2')", func_name, func_name, func_name)).iterator();
+    assertQuery("SELECT * FROM " + tbl_name + " WHERE " +
+                func_name + "(h1,h2) = " + func_name + "(2, 'h2')",
+                "Row[2, h2, 102, r102, 1002, v1002]");
+    // Use index-based scan-path.
+    assertQuery("SELECT count(*) FROM " + tbl_name + " WHERE " +
+                func_name + "(h1, h2) >= 0 AND " + func_name + "(h1, h2) <= 65535 " +
+                "AND h1 = 0 AND r2 = 'text'", "Row[0]");
 
-    assertTrue(rows.hasNext());
-    // Checking result.
-    Row row = rows.next();
-    assertEquals(2, row.getInt(0));
-    assertEquals("h2", row.getString(1));
-    assertEquals(102, row.getInt(2));
-    assertEquals("r102", row.getString(3));
-    assertEquals(1002, row.getInt(4));
-    assertEquals("v1002", row.getString(5));
-    assertFalse(rows.hasNext());
+    // Try to run the function with the Primary Key from the index: (h1, r2).
+    assertQueryError("SELECT count(*) FROM " + tbl_name + " WHERE " +
+                     func_name + "(h1, r2)>=0 AND " + func_name + "(h1, r2)<=65535 " +
+                     "AND h1=0 AND r2='text'",
+                     "Invalid " + func_name + " call, found reference to unexpected column");
 
-    LOG.info(String.format("TEST %s - End", func_name));
+    LOG.info(String.format("TEST %s - End with using-index=%s", func_name, use_index));
   }
 
   @Test
   public void testToken() throws Exception {
-    runPartitionHashTest("token");
+    runPartitionHashTest("token", UseIndex.OFF);
   }
 
   @Test
   public void testPartitionHash() throws Exception {
-    runPartitionHashTest("partition_hash");
+    runPartitionHashTest("partition_hash", UseIndex.OFF);
+  }
+
+  @Test
+  public void testTokenWithIndex() throws Exception {
+    runPartitionHashTest("token", UseIndex.ON);
+  }
+
+  @Test
+  public void testPartitionHashWithIndex() throws Exception {
+    runPartitionHashTest("partition_hash", UseIndex.ON);
   }
 
   @Test
@@ -1065,6 +1542,61 @@ public class TestSelect extends BaseCQLTest {
     runInvalidStmt("SELECT * FROM in_test WHERE h2 NOT IN ('a', 1)");
 
     LOG.info("TEST IN KEYWORD - End");
+  }
+
+  @Test
+  public void testFilteringUsingIN() throws Exception {
+    session.execute("CREATE TABLE test(h int, r int, v int, PRIMARY KEY (h, r))");
+    session.execute("INSERT INTO test (h,r,v) values (1,1,1)");
+    session.execute("INSERT INTO test (h,r,v) values (1,2,2)");
+    session.execute("INSERT INTO test (h,r,v) values (1,3,3)");
+    session.execute("INSERT INTO test (h,r,v) values (2,1,2)");
+    session.execute("INSERT INTO test (h,r,v) values (2,2,3)");
+    session.execute("INSERT INTO test (h,r,v) values (2,3,1)");
+    session.execute("INSERT INTO test (h,r,v) values (3,1,3)");
+    session.execute("INSERT INTO test (h,r,v) values (3,2,1)");
+    session.execute("INSERT INTO test (h,r,v) values (3,3,2)");
+
+    // Filter by hash & range columns.
+    assertQuery("SELECT * FROM test WHERE h IN (1,2) AND r IN (1,2)",
+        "Row[1, 1, 1]" +
+        "Row[1, 2, 2]" +
+        "Row[2, 1, 2]" +
+        "Row[2, 2, 3]");
+    // Filter by hash & non-key columns.
+    assertQuery("SELECT * FROM test WHERE h IN (1,2) AND v IN (1,2)",
+        "Row[1, 1, 1]" +
+        "Row[1, 2, 2]" +
+        "Row[2, 1, 2]" +
+        "Row[2, 3, 1]");
+    assertQuery("SELECT * FROM test WHERE h IN (1,2) AND v = 2",
+        "Row[1, 2, 2]" +
+        "Row[2, 1, 2]");
+    // Filter by range & non-key columns.
+    assertQuery("SELECT * FROM test WHERE r IN (1,2) AND v IN (1,2)",
+        "Row[1, 1, 1]" +
+        "Row[1, 2, 2]" +
+        "Row[2, 1, 2]" +
+        "Row[3, 2, 1]");
+    assertQuery("SELECT * FROM test WHERE r IN (1,2) AND v = 2",
+        "Row[1, 2, 2]" +
+        "Row[2, 1, 2]");
+    // Filter by hash & range & non-key columns.
+    assertQuery("SELECT * FROM test WHERE h IN (1,2) AND r IN (1,2) AND v IN (1,2)",
+        "Row[1, 1, 1]" +
+        "Row[1, 2, 2]" +
+        "Row[2, 1, 2]");
+    assertQuery("SELECT * FROM test WHERE h IN (1,2) AND r IN (1,2) AND v = 2",
+        "Row[1, 2, 2]" +
+        "Row[2, 1, 2]");
+    // Filter by hash & range columns + IF by non-key columns.
+    assertQuery("SELECT * FROM test WHERE h IN (1,2) AND r IN (1,2) IF v IN (1,2)",
+        "Row[1, 1, 1]" +
+        "Row[1, 2, 2]" +
+        "Row[2, 1, 2]");
+    assertQuery("SELECT * FROM test WHERE h IN (1,2) AND r IN (1,2) IF v = 2",
+        "Row[1, 2, 2]" +
+        "Row[2, 1, 2]");
   }
 
   private void assertSelectWithFlushes(String stmt,
@@ -1266,8 +1798,9 @@ public class TestSelect extends BaseCQLTest {
               "Row[1, 20, 40, 124]"};
 
       RocksDBMetrics metrics = assertPartialRangeSpec("in_range_test", query, rows);
-      // 9 options, but the first seek should jump over 3 options (with r1 = -10).
-      assertEquals(7, metrics.seekCount);
+      // 9 options, but some seeks should jump over options due to SeekPossiblyUsingNext
+      // optimisation.
+      assertEquals(5, metrics.seekCount);
     }
 
     // Test combining IN and equality conditions.
@@ -1375,7 +1908,9 @@ public class TestSelect extends BaseCQLTest {
       //   10      [60, "31"]    [60, "40"]      Y (Result row 4)
       //   11      [60, "42"]    [60, "50"]      N
       //   12      [59, "18"]    [50, "0"]       N (Bigger than largest target key so we are done)
-      assertEquals(12, metrics.seekCount);
+      // Actual number of seeks could be lower because there is Next instead of Seek optimisation in
+      // DocDB (see SeekPossiblyUsingNext).
+      assertLessThanOrEqualTo(metrics.seekCount, 12);
     }
   }
 
@@ -1412,23 +1947,25 @@ public class TestSelect extends BaseCQLTest {
               "Row[1, 60, 40, 164]"};
 
       RocksDBMetrics metrics = assertPartialRangeSpec("in_range_test", query, rows);
-      // There are n = 5 values of r1 to look at (90, 80, 70, 60, 50).
-      // For each r1 we have m = 4 values to look for in the range (20, 30, 40, 50). But, we only
-      // seek to the very first one. Then do Next(s) until we get out of range for r2.
+      // There are n = 3 values of r1 to look at (80, 70, 60).
+      // For each r1 we have m = 2 values to look for in the range (30, 40). But, we only
+      // seek to the very first one.
+      // Then do Next(s) until we get out of range for r2.
       // If there are more r1's to look at, we'd seek to r2=Max.
       // We will be performing (n - 1) seeks to the Max value for finding the next r1
-      // Thus, this scan will have to Seek to n * 1 + (n - 1) = 5 * 1 + (5 - 1) = 9 locations.
+      // We also do one seek per r1 to get the initial r2 value in range.
+      // We also do an initial seek to find the first valid value for r1
+      // Thus, this scan will have to Seek to n + n + 1 = 3 + 3 + 1 = 7
+      // locations.
       // For example,
-      //   Seeking to DocKey(0x0a73, [1], [90, "20"])
       //   Seeking to DocKey(0x0a73, [1], [90, +Inf])
-      //   Seeking to DocKey(0x0a73, [1], [80, "20"])
+      //   Seeking to DocKey(0x0a73, [1], [80, "20", +Inf])
       //   Seeking to DocKey(0x0a73, [1], [80, +Inf])
-      //   Seeking to DocKey(0x0a73, [1], [70, "20"])
+      //   Seeking to DocKey(0x0a73, [1], [70, "20", +inf])
       //   Seeking to DocKey(0x0a73, [1], [70, +Inf])
-      //   Seeking to DocKey(0x0a73, [1], [60, "20"])
+      //   Seeking to DocKey(0x0a73, [1], [60, "20", +inf])
       //   Seeking to DocKey(0x0a73, [1], [60, +Inf])
-      //   Seeking to DocKey(0x0a73, [1], [50, "20"])
-      assertEquals(9, metrics.seekCount);
+      assertEquals(7, metrics.seekCount);
     }
 
     // Test basic seek optimisation with fwd scans.
@@ -1452,6 +1989,20 @@ public class TestSelect extends BaseCQLTest {
       // We will be performing (n - 1) seeks to the Max value for finding the next r1
       // Thus, this scan will have to Seek to n * 1 + (n - 1) = 3 * 1 + (3 - 1) = 5 locations.
       assertEquals(5, metrics.seekCount);
+    }
+
+    {
+      String query = "SELECT * FROM in_range_test WHERE h = 1 AND r1 > 60 AND r1 < 80 AND " +
+                     "r2  > '30' AND r2 < '40'";
+
+      String[] rows = {};
+
+      RocksDBMetrics metrics = assertPartialRangeSpec("in_range_test", query, rows);
+      // We first will seek to (60, Inf) to find a plausible value for r1
+      // Then we seek to (70, 30, Inf) to get a plausible r2 value
+      // Then we seek to (70, Inf) in hopes of getting another plausible r1
+      // value
+      assertEquals(3, metrics.seekCount);
     }
 
     // Test basic seek optimisation with fwd scans. No hash componenet specified.
@@ -1551,22 +2102,81 @@ public class TestSelect extends BaseCQLTest {
 
       // use unordered because the hash keys could go in random order.
       RocksDBMetrics metrics = assertUnorderedPartialRangeSpec("in_range_test", query, rows);
-      // For each Hash key in 0 .. 9 we'll have 11 of these seeks.
-      // Seeking to DocKey(0x0a73, [h], [90, "20"])
+      // For each Hash key in 0 .. 9 we'll have 8 of these seeks.
       // Seeking to DocKey(0x0a73, [h], [90, +Inf])
-      // Seeking to DocKey(0x0a73, [h], [80, "20"])
+      // Seeking to DocKey(0x0a73, [h], [80, "20", +Inf])
       // Seeking to DocKey(0x0a73, [h], [80, +Inf])
-      // Seeking to DocKey(0x0a73, [h], [70, "20"])
+      // Seeking to DocKey(0x0a73, [h], [70, "20", +Inf])
       // Seeking to DocKey(0x0a73, [h], [70, +Inf])
-      // Seeking to DocKey(0x0a73, [h], [60, "20"])
+      // Seeking to DocKey(0x0a73, [h], [60, "20", +Inf])
       // Seeking to DocKey(0x0a73, [h], [60, +Inf])
-      // Seeking to DocKey(0x0a73, [h], [50, "20"])
-      // Seeking to DocKey(0x0a73, [h], [50, +Inf])
       // Seeking to DocKey(0x0a73, [h], [+Inf])
       // Additionally, one
       //   Seeking to DocKey([], []) per tablet.
-      // Overall, 11 * 10 + 9
-      assertEquals(109, metrics.seekCount);
+      // Overall, 8 * 10 + 9
+      assertEquals(89, metrics.seekCount);
+    }
+
+    {
+      String query = "SELECT * FROM in_range_test WHERE h = 1 AND " +
+                     "r1 >= 20 AND r1 < 40 AND r2  > '20' AND r2 < '50'";
+
+      String[] rows = {"Row[1, 30, 30, 133]",
+                       "Row[1, 30, 40, 134]",
+                       "Row[1, 20, 30, 123]",
+                       "Row[1, 20, 40, 124]"};
+
+      RocksDBMetrics metrics = assertPartialRangeSpec("in_range_test", query, rows);
+      // Similar to above.
+      // There are n = 2 values of r1 to look at. For each r1 we have m = 2
+      // values to look for in the range. During the scan, for each r1
+      // we look at m + 1 = 3 values before deciding to seek out of r1 by
+      // going to r2=Max. We will be performing n seeks to the Max value for
+      // finding the next r1.
+      // Thus, this scan will have to Seek to
+      // n * (m + 1) + (n - 1) = 2 * 3 + 2 = 8 locations.
+      // But reverse scans do 2 seeks for each option
+      // since PrevDocKey calls Seek twice internally.
+      // So, the expected number of seeks = 8 * 2 = 16
+      //  Seek(SubDocKey(DocKey(0x1210, [kInt32 : 1], [kInt32Descending : 20,
+      //                        kString : "50"]), []))
+      //  Seek(SubDocKey(DocKey(0x1210, [kInt32 : 1], [kInt32Descending : 20,
+      //                        kString : "40"]), []))
+      //  Seek(SubDocKey(DocKey(0x1210, [kInt32 : 1], [kInt32Descending : 20,
+      //                        kString : "30"]), []))
+      //  Seek(SubDocKey(DocKey(0x1210, [kInt32 : 1], [kInt32Descending : 20,
+      //                        kString : "20"]), []))
+      //  Seek(SubDocKey(DocKey(0x1210, [kInt32 : 1], [kInt32Descending : 20,
+      //                        kString : "10"]), []))
+      // Trying to seek out of r1 = 20. [1, 20, _]
+      //  Seek(SubDocKey(DocKey(0x1210, [kInt32 : 1], [kInt32Descending : 30,
+      //                        kString : "90"]), []))
+      // Try to get into the range for r2.
+      //  Seek(SubDocKey(DocKey(0x1210, [kInt32 : 1], [kInt32Descending : 30,
+      //                        kString : "50"]), []))
+      //  Seek(SubDocKey(DocKey(0x1210, [kInt32 : 1], [kInt32Descending : 30,
+      //                        kString : "40"]), []))
+      //  Seek(SubDocKey(DocKey(0x1210, [kInt32 : 1], [kInt32Descending : 30,
+      //                        kString : "30"]), []))
+      //  Seek(SubDocKey(DocKey(0x1210, [kInt32 : 1], [kInt32Descending : 30,
+      //                        kString : "20"]), []))
+      //  Seek(SubDocKey(DocKey(0x1210, [kInt32 : 1], [kInt32Descending : 30,
+      //                        kString : "10"]), []))
+      // Trying to seek out of r1 = 30. [1, 30, _]
+      //  Seek(SubDocKey(DocKey(0x1210, [kInt32 : 1], [kInt32Descending : 40,
+      //                        kString : "90"]), []))
+      // Try to get into the range for r2.
+      //  Seek(SubDocKey(DocKey(0x1210, [kInt32 : 1], [kInt32Descending : 40,
+      //                        kString : "50"]), []))
+      //  Seek(SubDocKey(DocKey(0x1210, [kInt32 : 1], [kInt32Descending : 40,
+      //                        kString : "40"]), []))
+      //  Seek(SubDocKey(DocKey(0x1210, [kInt32 : 1], [kInt32Descending : 40,
+      //                        kString : "30"]), []))
+      //  Seek(SubDocKey(DocKey(0x1210, [kInt32 : 1], [kInt32Descending : 40,
+      //                        kString : "20"]), []))
+      //  Seek(SubDocKey(DocKey(0x1210, [kInt32 : 1], [kInt32Descending : 40,
+      //                        kString : "10"]), []))
+      assertEquals(4, metrics.seekCount);
     }
 
     // Test ORDER BY clause (reverse scan).
@@ -1602,7 +2212,33 @@ public class TestSelect extends BaseCQLTest {
 
     {
       String query = "SELECT * FROM in_range_test WHERE h = 1 AND " +
-              "r1 >= 20 AND r1 < 40 AND r2  > '20' AND r2 < '50' ORDER BY r1 ASC, r2 DESC";
+                     "r1 >= 20 AND r1 < 30 AND r2  > '30' AND r2 <= '40' ORDER BY r1 ASC, r2 DESC";
+
+      String[] rows = {"Row[1, 20, 40, 124]"};
+
+      RocksDBMetrics metrics = assertPartialRangeSpec("in_range_test", query, rows);
+      // There are n = 1 values of r1 to look at. For each r1 we have m = 1 values to look for
+      // in the range. During the scan, for each r1 we look at m + 1 = 3 values before deciding
+      // to seek out of r1 by going to r2=Max. We will be performing n seeks to the Max
+      // value for finding the next r1.
+      // Thus, this scan will have to Seek to n * (m + 1) + n = 3 locations.
+      // But reverse scans do 2 seeks for each option since PrevDocKey
+      // calls Seek twice internally.
+      // So the total number of seeks will be 3 * 2 = 6
+      // Seek(SubDocKey(DocKey(0x1210, [kInt32 : 1], [kInt32Descending : 20,
+      //                       kString : "40"]), []))
+      // Seek(SubDocKey(DocKey(0x1210, [kInt32 : 1], [kInt32Descending : 20,
+      //                       kLowest"]), []))
+      // Trying to seek out of r1 = 20. [1, 20, _]
+      // Seek(SubDocKey(DocKey(0x1210, [kInt32 : 1], [kInt32Descending : 30,
+      //                       kString : "90"]), []))
+
+      assertEquals(6, metrics.seekCount);
+    }
+
+    {
+      String query = "SELECT * FROM in_range_test WHERE h = 1 AND " +
+                     "r1 >= 20 AND r1 < 40 AND r2  > '20' AND r2 < '50' ORDER BY r1 ASC, r2 DESC";
 
       String[] rows = {
               "Row[1, 20, 40, 124]",
@@ -1611,37 +2247,33 @@ public class TestSelect extends BaseCQLTest {
               "Row[1, 30, 30, 133]"};
 
       RocksDBMetrics metrics = assertPartialRangeSpec("in_range_test", query, rows);
-      // Similar to above. But would stop at 2 extra values of r2 for each r1. (due to </> instead
-      // of <=/>=) so n = 3, m = 4
-      // There are n = 3 values of r1 to look at. For each r1 we have m = 4 values to look for in
-      // the range. During the scan, for each r1 we look at m + 1 = 5 values before deciding to
+      // Similar to above.
+      // There are n = 2 values of r1 to look at. For each r1 we have m = 2 values to look for in
+      // the range. During the scan, for each r1 we look at m + 1 = 3 values before deciding to
       // seek out of r1 by going to r2=Max
-      // We will be performing (n - 1) seeks to the Max value for finding the next r1
-      // Thus, this scan will have to Seek to n * (m + 1) + (n - 1) = 3 * 5 + 2 = 17 locations.
+      // We will be performing n seeks to the Max value for finding the next r1
+      // Thus, this scan will have to Seek to n * (m + 1) + n = 2 * 3 + 2 = 8 locations.
       // But reverse scans do 2 seeks for each option since PrevDocKey calls Seek twice internally.
-      // So, the expected number of seeks = 17 * 2 = 34
-      //  Seek(SubDocKey(DocKey(0x1210, [kInt32 : 1], [kInt32Descending : 20, kString : "50"]), []))
-      //  Seek(SubDocKey(DocKey(0x1210, [kInt32 : 1], [kInt32Descending : 20, kString : "40"]), []))
-      //  Seek(SubDocKey(DocKey(0x1210, [kInt32 : 1], [kInt32Descending : 20, kString : "30"]), []))
-      //  Seek(SubDocKey(DocKey(0x1210, [kInt32 : 1], [kInt32Descending : 20, kString : "20"]), []))
-      //  Seek(SubDocKey(DocKey(0x1210, [kInt32 : 1], [kInt32Descending : 20, kString : "10"]), []))
+      // So, the expected number of seeks = 8 * 2 = 16
+      //  Seek(SubDocKey(DocKey(0x1210, [kInt32 : 1], [kInt32Descending : 20,
+      //                        kString : "50"], kLowest), []))
+      //  Seek(SubDocKey(DocKey(0x1210, [kInt32 : 1], [kInt32Descending : 20,
+      //                        kString : "40"]), []))
+      //  Seek(SubDocKey(DocKey(0x1210, [kInt32 : 1], [kInt32Descending : 20,
+      //                        kString : "30"]), []))
+      //  Seek(SubDocKey(DocKey(0x1210, [kInt32 : 1], [kInt32Descending : 20,
+      //                        kLowest]), []))
       // Trying to seek out of r1 = 20. [1, 20, _]
-      // Seek(SubDocKey(DocKey(0x1210, [kInt32 : 1], [kInt32Descending : 30, kString : "90"]), []))
       // Try to get into the range for r2.
-      //  Seek(SubDocKey(DocKey(0x1210, [kInt32 : 1], [kInt32Descending : 30, kString : "50"]), []))
-      //  Seek(SubDocKey(DocKey(0x1210, [kInt32 : 1], [kInt32Descending : 30, kString : "40"]), []))
-      //  Seek(SubDocKey(DocKey(0x1210, [kInt32 : 1], [kInt32Descending : 30, kString : "30"]), []))
-      //  Seek(SubDocKey(DocKey(0x1210, [kInt32 : 1], [kInt32Descending : 30, kString : "20"]), []))
-      //  Seek(SubDocKey(DocKey(0x1210, [kInt32 : 1], [kInt32Descending : 30, kString : "10"]), []))
-      // Trying to seek out of r1 = 30. [1, 30, _]
-      //Seek(SubDocKey(DocKey(0x1210, [kInt32 : 1], [kInt32Descending : 40, kString : "90"]), []))
-      // Try to get into the range for r2.
-      //  Seek(SubDocKey(DocKey(0x1210, [kInt32 : 1], [kInt32Descending : 40, kString : "50"]), []))
-      //  Seek(SubDocKey(DocKey(0x1210, [kInt32 : 1], [kInt32Descending : 40, kString : "40"]), []))
-      //  Seek(SubDocKey(DocKey(0x1210, [kInt32 : 1], [kInt32Descending : 40, kString : "30"]), []))
-      //  Seek(SubDocKey(DocKey(0x1210, [kInt32 : 1], [kInt32Descending : 40, kString : "20"]), []))
-      //  Seek(SubDocKey(DocKey(0x1210, [kInt32 : 1], [kInt32Descending : 40, kString : "10"]), []))
-      assertEquals(28, metrics.seekCount);
+      //  Seek(SubDocKey(DocKey(0x1210, [kInt32 : 1], [kInt32Descending : 30,
+      //                        kString : "50"], kLowest), []))
+      //  Seek(SubDocKey(DocKey(0x1210, [kInt32 : 1], [kInt32Descending : 30,
+      //                        kString : "40"]), []))
+      //  Seek(SubDocKey(DocKey(0x1210, [kInt32 : 1], [kInt32Descending : 30,
+      //                        kString : "30"]), []))
+      //  Seek(SubDocKey(DocKey(0x1210, [kInt32 : 1], [kInt32Descending : 30,
+      //                        kLowest), []))
+      assertEquals(16, metrics.seekCount);
     }
   }
 
@@ -2120,6 +2752,64 @@ public class TestSelect extends BaseCQLTest {
   }
 
   @Test
+  public void testDistinctPushdown() throws Exception {
+    session.execute("create table t(h int, c int, primary key(h, c))");
+    session.execute("insert into t(h, c) values (0, 0)");
+    session.execute("insert into t(h, c) values (0, 1)");
+    session.execute("insert into t(h, c) values (0, 2)");
+    session.execute("insert into t(h, c) values (1, 0)");
+    session.execute("insert into t(h, c) values (1, 1)");
+    session.execute("insert into t(h, c) values (1, 2)");
+
+    // For both queries, the scan should jump directly to the relevant primary key,
+    // so the number of seeks is equal to the items to be retrived.
+    {
+      String query = "select distinct h from t where h = 0";
+      String[] rows = {"Row[0]"};
+
+      RocksDBMetrics metrics = assertPartialRangeSpec("t", query, rows);
+      assertEquals(1, metrics.seekCount);
+    }
+
+    {
+      String query = "select distinct h from t where h in (0, 1)";
+      String[] rows = {"Row[0]", "Row[1]"};
+
+      RocksDBMetrics metrics = assertPartialRangeSpec("t", query, rows);
+      assertEquals(2, metrics.seekCount);
+    }
+  }
+
+  @Test
+  public void testDistinctPushdownSecondColumn() throws Exception {
+    session.execute("create table t(r1 int, r2 int, r3 int, primary key(r2, r3))");
+    session.execute("insert into t(r1, r2, r3) values (0, 0, 0)");
+    session.execute("insert into t(r1, r2, r3) values (0, 0, 1)");
+    session.execute("insert into t(r1, r2, r3) values (0, 0, 2)");
+    session.execute("insert into t(r1, r2, r3) values (1, 1, 0)");
+    session.execute("insert into t(r1, r2, r3) values (1, 1, 1)");
+    session.execute("insert into t(r1, r2, r3) values (1, 1, 2)");
+
+    // For both queries, the scan should jump directly to the relevant primary key,
+    // so the number of seeks is equal to the items to be retrived.
+    {
+      String query = "select distinct r2 from t where r2 = 0";
+      String[] rows = {"Row[0]"};
+
+      RocksDBMetrics metrics = assertPartialRangeSpec("t", query, rows);
+      assertEquals(1, metrics.seekCount);
+    }
+
+    {
+      String query = "select distinct r2 from t where r2 in (0, 1)";
+      String[] rows = {"Row[0]", "Row[1]"};
+
+      RocksDBMetrics metrics = assertPartialRangeSpec("t", query, rows);
+      assertEquals(2, metrics.seekCount);
+    }
+  }
+
+  @Test
   public void testToJson() throws Exception {
     // Create test table.
     session.execute("CREATE TABLE test_tojson (c1 int PRIMARY KEY, c2 float, c3 double, c4 " +
@@ -2257,15 +2947,40 @@ public class TestSelect extends BaseCQLTest {
     selectAndVerify("SELECT tojson(u) FROM test_udt7",
         "{\"\\\"V  4\\\"\":44,\"\\\"V2\\\"\":22,\"v  3\":33,\"v1\":11}");
 
-    // Test UDT2<int, UDT>.
-    // Feature Not Supported: UDT field types cannot refer to other user-defined types.
-    // https://github.com/YugaByte/yugabyte-db/issues/1630
-    runInvalidQuery("CREATE TYPE udt8(i1 int, u1 udt)");
-    // Uncomment the following block if we support UDT2<UDT1,..> types.
-    //    session.execute("CREATE TABLE test_udt8 (h int PRIMARY KEY, u udt8)");
-    //    session.execute("INSERT INTO test_udt8 (h, u) values (1, {i1:33,u1:{v1:44,v2:55}})");
-    //    selectAndVerify("SELECT tojson(u) FROM test_udt8",
-    //        "{\"i1\":33,\"u1\":{\"v1\":44,\"v2\":55}}");
+    // Test UDT field which refers to another user-defined type.
+    session.execute("CREATE TYPE udt8(i1 int, u1 frozen<udt>)");
+    session.execute("CREATE TABLE test_udt_in_udt (h int PRIMARY KEY, u udt8)");
+    session.execute("INSERT INTO test_udt_in_udt (h, u) values (1, {i1:33,u1:{v1:44,v2:55}})");
+    // Apply ToJson() to the UDT< FROZEN<UDT> > column.
+    selectAndVerify("SELECT tojson(u) FROM test_udt_in_udt",
+        "{\"i1\":33,\"u1\":{\"v1\":44,\"v2\":55}}");
+
+    session.execute("DROP TABLE test_udt_in_udt");
+    session.execute("DROP TYPE udt8"); // Unblock type 'udt' dropping.
+
+    // Test UDT field which refers to a FROZEN<LIST>.
+    session.execute("CREATE TYPE udt9(i1 int, l1 frozen<list<int>>)");
+    session.execute("CREATE TABLE test_list_in_udt (h int PRIMARY KEY, u udt9)");
+    session.execute("INSERT INTO test_list_in_udt (h, u) values (1, {i1:77,l1:[4,5,6]})");
+    // Apply ToJson() to the UDT< FROZEN<LIST> > column.
+    selectAndVerify("SELECT tojson(u) FROM test_list_in_udt",
+        "{\"i1\":77,\"l1\":[4,5,6]}");
+
+    // Test UDT field which refers to a FROZEN<SET>.
+    session.execute("CREATE TYPE udt10(i1 int, s1 frozen<set<int>>)");
+    session.execute("CREATE TABLE test_set_in_udt (h int PRIMARY KEY, u udt10)");
+    session.execute("INSERT INTO test_set_in_udt (h, u) values (1, {i1:66,s1:{3,2,1}})");
+    // Apply ToJson() to the UDT< FROZEN<SET> > column.
+    selectAndVerify("SELECT tojson(u) FROM test_set_in_udt",
+        "{\"i1\":66,\"s1\":[1,2,3]}");
+
+    // Test UDT field which refers to a FROZEN<MAP>.
+    session.execute("CREATE TYPE udt11(i1 int, m1 frozen<map<int, text>>)");
+    session.execute("CREATE TABLE test_map_in_udt (h int PRIMARY KEY, u udt11)");
+    session.execute("INSERT INTO test_map_in_udt (h, u) values (1, {i1:88,m1:{99:'t1',11:'t2'}})");
+    // Apply ToJson() to the UDT< FROZEN<MAP> > column.
+    selectAndVerify("SELECT tojson(u) FROM test_map_in_udt",
+        "{\"i1\":88,\"m1\":{\"11\":\"t2\",\"99\":\"t1\"}}");
 
     // Test TUPLE.
     // Feature Not Supported
@@ -2337,5 +3052,231 @@ public class TestSelect extends BaseCQLTest {
     assertQueryRowsUnordered("select * from test where token(h1) >= -7921831744544702464 " +
       "and token(h1) <= 4666855113862676480 and h1 in (1, 2);",
       "Row[1, 2]", "Row[2, 3]");
+  }
+
+  @Test
+  public void testMultiColumnInSeeks() throws Exception {
+    String createTable = "CREATE TABLE in_range_test(h int, r1 int, r2 text, v int," +
+        " PRIMARY KEY((h), r1, r2)) WITH CLUSTERING ORDER BY (r1 DESC, r2 ASC)";
+    session.execute(createTable);
+
+    String insertTemplate = "INSERT INTO in_range_test(h, r1, r2, v) VALUES (%d, %d, '%d', %d)";
+
+    for (int h = 0; h < 10; h++) {
+      for (int r1 = 0; r1 < 10; r1++) {
+        for (int r2 = 0; r2 < 10; r2++) {
+          int v = h * 100 + r1 * 10 + r2;
+          // Multiplying range keys by 10 so we can test sparser data with dense keys later.
+          // (i.e. several key options given by IN condition, in between two actual rows).
+          session.execute(String.format(insertTemplate, h, r1 * 10, r2 * 10, v));
+        }
+      }
+    }
+
+    // Test basic IN results and ordering.
+    {
+      String query = "SELECT * FROM in_range_test WHERE h = 1 AND (r1, r2) IN ((60, '70'), "
+          + "(80, '70'), (10, '70'), (60, '30'), (80, '30'), (10, '30'))";
+
+      String[] rows = { "Row[1, 80, 30, 183]",
+          "Row[1, 80, 70, 187]",
+          "Row[1, 60, 30, 163]",
+          "Row[1, 60, 70, 167]",
+          "Row[1, 10, 30, 113]",
+          "Row[1, 10, 70, 117]" };
+
+      RocksDBMetrics metrics = assertPartialRangeSpec("in_range_test", query, rows);
+      assertEquals(6, metrics.seekCount);
+    }
+
+    // Test IN results and ordering with non-existing keys.
+    {
+      String query = "SELECT * FROM in_range_test WHERE h = 1 AND (r1, r2) IN " +
+          "((70,'40'), (-10,'40'), (20,'40'), (70,'10'), (-10,'10'), (20,'10'), (70,'-10'), " +
+          "(-10,'-10'), (20,'-10'))";
+
+      String[] rows = { "Row[1, 70, 10, 171]",
+          "Row[1, 70, 40, 174]",
+          "Row[1, 20, 10, 121]",
+          "Row[1, 20, 40, 124]" };
+
+      RocksDBMetrics metrics = assertPartialRangeSpec("in_range_test", query, rows);
+      // 9 options, but the first seek should jump over 3 options (with r1 = -10).
+      assertEquals(5, metrics.seekCount);
+    }
+
+    // Test ORDER BY clause with IN (reverse scan).
+    {
+      String query = "SELECT * FROM in_range_test WHERE h = 1 AND " +
+          "(r1, r2) IN ((70,'40'), (70,'10'), (20,'40'),(20,'10')) ORDER BY r1 ASC, r2 DESC";
+
+      String[] rows = { "Row[1, 20, 40, 124]",
+          "Row[1, 20, 10, 121]",
+          "Row[1, 70, 40, 174]",
+          "Row[1, 70, 10, 171]" };
+
+      RocksDBMetrics metrics = assertPartialRangeSpec("in_range_test", query, rows);
+      // 4 options, but reverse scans do 2 seeks for each option since PrevDocKey
+      // calls Seek twice
+      // internally.
+      assertEquals(8, metrics.seekCount);
+    }
+
+    // Test single IN option (equivalent to just using equality constraint).
+    {
+      String query = "SELECT * FROM in_range_test WHERE h = 1 AND (r1, r2) IN ((90,'40'))";
+
+      String[] rows = { "Row[1, 90, 40, 194]" };
+
+      RocksDBMetrics metrics = assertPartialRangeSpec("in_range_test", query, rows);
+      assertEquals(1, metrics.seekCount);
+    }
+
+    // Test dense IN target keys (with sparse table rows).
+    {
+      int r1Values[] = { 75, 80, 60, 83, 73, 65, 67, 63, 57, 59, 82, 61 };
+      int r2Values[] = { 36, 19, 43, 23, 40, 31, 18, 27, 42, 20 };
+
+      String values = "";
+      for (int r1 : r1Values) {
+        for (int r2 : r2Values) {
+          values += String.format("(%d, '%d'), ", r1, r2);
+        }
+      }
+
+      String query = "SELECT * FROM in_range_test WHERE h = 1 AND " +
+          "(r1, r2) IN (" + values.substring(0, values.length() - 2) + ")";
+
+      String[] rows = { "Row[1, 80, 20, 182]",
+          "Row[1, 80, 40, 184]",
+          "Row[1, 60, 20, 162]",
+          "Row[1, 60, 40, 164]" };
+
+      RocksDBMetrics metrics = assertPartialRangeSpec("in_range_test", query, rows);
+      // There are 12 * 10 = 120 total target keys, but we should skip most of them as
+      // one seek in
+      // the DB will invalidate (jump over) several target keys:
+      // 1. Initialize start seek target as smallest target key.
+      // 2. Seek for current target key (will find the first DB key equal or bigger
+      // than target).
+      // 3. If that matches the current (or a bigger) target key we add to the result.
+      // 4. We continue seeking from the next target key.
+      // Note that r1 is sorted DESC, and r2 is sorted ASC, so e.g. [83, "18"] is the
+      // smallest key
+      // Seek No. Seek For Find Matches
+      // 1 [83, "18"] [80, "0"] N
+      // 2 [80, "18"] [80, "20"] Y (Result row 1)
+      // 3 [80, "23"] [80, "30"] N
+      // 4 [80, "31"] [80, "40"] Y (Result row 2)
+      // 5 [80, "42"] [80, "50"] N
+      // 6 [75, "18"] [70, "0"] N
+      // 7 [67, "18"] [60, "0"] N
+      // 8 [60, "18"] [60, "20"] Y (Result row 3)
+      // 9 [60, "23"] [60, "30"] N
+      // 10 [60, "31"] [60, "40"] Y (Result row 4)
+      // 11 [60, "42"] [60, "50"] N
+      // 12 [59, "18"] [50, "0"] N (Bigger than largest target key so we are done)
+      // Actual number of seeks could be lower because there is Next instead of Seek optimisation in
+      // DocDB (see SeekPossiblyUsingNext).
+      assertLessThanOrEqualTo(metrics.seekCount, 12);
+    }
+  }
+
+
+  @Test
+  public void testMultiColumnInSeeks2() throws Exception {
+    String createTable = "CREATE TABLE in_range_test(h int, r1 int, r2 text, r3 int," +
+        " PRIMARY KEY((h), r1, r2, r3)) WITH CLUSTERING ORDER BY (r1 DESC, r2 ASC, r3 ASC)";
+    session.execute(createTable);
+
+    String insertTemplate = "INSERT INTO in_range_test(h, r1, r2, r3) VALUES (%d, %d, '%d', %d)";
+
+    for (int h = 0; h < 10; h++) {
+      for (int r1 = 0; r1 < 10; r1++) {
+        for (int r2 = 0; r2 < 10; r2++) {
+          for (int r3 = 0; r3 < 10; r3++) {
+            session.execute(String.format(insertTemplate, h, r1 * 10, r2 * 10, r3 * 10));
+          }
+        }
+      }
+    }
+
+    // Test combining IN and equality conditions.
+    {
+      String query = "SELECT * FROM in_range_test WHERE h = 1 AND " +
+          "(r1, r2) IN ((80, '50'), (-10, '50'), (0, '50'), (30, '50')) AND r3 = 20";
+
+      String[] rows = { "Row[1, 80, 50, 20]",
+          "Row[1, 30, 50, 20]",
+          "Row[1, 0, 50, 20]" };
+
+      RocksDBMetrics metrics = assertPartialRangeSpec("in_range_test", query, rows);
+      // 1 * 4 = 4 options.
+      assertEquals(4, metrics.seekCount);
+    }
+
+    // Test using a partial specification of range key
+    {
+      String query = "SELECT * FROM in_range_test WHERE h = 1 AND (r1, r2) IN ((80, '10'), " +
+          "(30, '40'))";
+
+      String[] rows = { "Row[1, 80, 10, 0]",
+          "Row[1, 80, 10, 10]",
+          "Row[1, 80, 10, 20]",
+          "Row[1, 80, 10, 30]",
+          "Row[1, 80, 10, 40]",
+          "Row[1, 80, 10, 50]",
+          "Row[1, 80, 10, 60]",
+          "Row[1, 80, 10, 70]",
+          "Row[1, 80, 10, 80]",
+          "Row[1, 80, 10, 90]",
+          "Row[1, 30, 40, 0]",
+          "Row[1, 30, 40, 10]",
+          "Row[1, 30, 40, 20]",
+          "Row[1, 30, 40, 30]",
+          "Row[1, 30, 40, 40]",
+          "Row[1, 30, 40, 50]",
+          "Row[1, 30, 40, 60]",
+          "Row[1, 30, 40, 70]",
+          "Row[1, 30, 40, 80]",
+          "Row[1, 30, 40, 90]" };
+        RocksDBMetrics metrics = assertPartialRangeSpec("in_range_test", query,
+            rows);
+        // seeking to 2 places
+        // Seeking to DocKey(0x0a73, [1], [80, 10, kLowest])
+        // Seeking to DocKey(0x0a73, [1], [30, 40, kLowest])
+        assertEquals(2, metrics.seekCount);
+    }
+  }
+
+  @Test
+  public void testGroupBy() throws Exception
+  {
+    Map<String, String> flags = new HashMap<>();
+    flags.put("ycql_ignore_group_by_error", "false");
+    restartClusterWithTSFlags(flags);
+
+    // Expect error in SELECT with GROUP BY.
+    session.execute("CREATE TABLE test_tbl (id int primary key, v int);");
+    runInvalidStmt("SELECT * FROM test_tbl GROUP BY v;");
+
+    // Restart with GROUP BY queries with error suppressed (default behaviour).
+    flags = new HashMap<>();
+    flags.put("ycql_ignore_group_by_error", "true");
+    restartClusterWithTSFlags(flags);
+
+    session.execute("CREATE TABLE test_tbl (id int primary key, v int);");
+    session.execute("SELECT * FROM test_tbl GROUP BY v;");
+  }
+
+  @Test
+  public void testInvalidTimestampBadLexicalCast() throws Exception {
+    // Create test table.
+    session.execute("CREATE TABLE test_tbl (c1 int PRIMARY KEY, c2 timestamp)");
+    // Test invalid TimeZone. (See CE-389 for details.)
+    runInvalidStmt(
+        "SELECT * FROM test_tbl WHERE c2 >= '2021-10-10 10:00:00 UTC_b'",
+        "Invalid timestamp: " +
+        "bad lexical cast: source type value could not be interpreted as target");
   }
 }

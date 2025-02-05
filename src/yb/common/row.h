@@ -29,8 +29,7 @@
 // or implied.  See the License for the specific language governing permissions and limitations
 // under the License.
 //
-#ifndef YB_COMMON_ROW_H
-#define YB_COMMON_ROW_H
+#pragma once
 
 #include <string>
 #include <utility>
@@ -127,7 +126,7 @@ Status CopyCell(const SrcCellType &src, DstCellType* dst, ArenaType *dst_arena) 
 // If 'dst_arena' is set, then will relocate any indirect data to that arena
 // during the copy.
 template<class RowType1, class RowType2, class ArenaType>
-inline CHECKED_STATUS CopyRow(const RowType1 &src_row, RowType2 *dst_row, ArenaType *dst_arena) {
+inline Status CopyRow(const RowType1 &src_row, RowType2 *dst_row, ArenaType *dst_arena) {
   DCHECK_SCHEMA_EQ(*src_row.schema(), *dst_row->schema());
 
   for (int i = 0; i < src_row.schema()->num_columns(); i++) {
@@ -158,16 +157,16 @@ class RowProjector {
   RowProjector(const Schema* base_schema, const Schema* projection);
 
   // Initialize the projection mapping with the specified base_schema and projection
-  CHECKED_STATUS Init();
+  Status Init();
 
-  CHECKED_STATUS Reset(const Schema* base_schema, const Schema* projection);
+  Status Reset(const Schema* base_schema, const Schema* projection);
 
   // Project a row from one schema into another, using the projection mapping.
   // Indirected data is copied into the provided dst arena.
   //
   // Use this method only on the read-path.
   template<class RowType1, class RowType2, class ArenaType>
-  CHECKED_STATUS ProjectRowForRead(
+  Status ProjectRowForRead(
       const RowType1& src_row, RowType2 *dst_row, ArenaType *dst_arena) const {
     return ProjectRow<RowType1, RowType2, ArenaType, true>(src_row, dst_row, dst_arena);
   }
@@ -177,7 +176,7 @@ class RowProjector {
   //
   // Use this method only on the write-path.
   template<class RowType1, class RowType2, class ArenaType>
-  CHECKED_STATUS ProjectRowForWrite(const RowType1& src_row, RowType2 *dst_row,
+  Status ProjectRowForWrite(const RowType1& src_row, RowType2 *dst_row,
                             ArenaType *dst_arena) const {
     return ProjectRow<RowType1, RowType2, ArenaType, false>(src_row, dst_row, dst_arena);
   }
@@ -188,33 +187,33 @@ class RowProjector {
 
   // Returns the mapping between base schema and projection schema columns
   // first: is the projection column index, second: is the base_schema  index
-  const vector<ProjectionIdxMapping>& base_cols_mapping() const { return base_cols_mapping_; }
+  const std::vector<ProjectionIdxMapping>& base_cols_mapping() const { return base_cols_mapping_; }
 
   // Returns the mapping between base schema and projection schema columns
   // that requires a type adapter.
   // first: is the projection column index, second: is the base_schema  index
-  const vector<ProjectionIdxMapping>& adapter_cols_mapping() const { return adapter_cols_mapping_; }
+  const std::vector<ProjectionIdxMapping>& adapter_cols_mapping() const { return adapter_cols_mapping_; }
 
  private:
   friend class Schema;
 
-  CHECKED_STATUS ProjectBaseColumn(size_t proj_col_idx, size_t base_col_idx) {
+  Status ProjectBaseColumn(size_t proj_col_idx, size_t base_col_idx) {
     base_cols_mapping_.push_back(ProjectionIdxMapping(proj_col_idx, base_col_idx));
     return Status::OK();
   }
 
-  CHECKED_STATUS ProjectAdaptedColumn(size_t proj_col_idx, size_t base_col_idx) {
+  Status ProjectAdaptedColumn(size_t proj_col_idx, size_t base_col_idx) {
     adapter_cols_mapping_.push_back(ProjectionIdxMapping(proj_col_idx, base_col_idx));
     return Status::OK();
   }
 
-  CHECKED_STATUS ProjectExtraColumn(size_t proj_col_idx);
+  Status ProjectExtraColumn(size_t proj_col_idx);
 
  private:
   // Project a row from one schema into another, using the projection mapping.
   // Indirected data is copied into the provided dst arena.
   template<class RowType1, class RowType2, class ArenaType, bool FOR_READ>
-  CHECKED_STATUS ProjectRow(
+  Status ProjectRow(
       const RowType1& src_row, RowType2 *dst_row, ArenaType *dst_arena) const {
     DCHECK_SCHEMA_EQ(*base_schema_, *src_row.schema());
     DCHECK_SCHEMA_EQ(*projection_, *dst_row->schema());
@@ -233,8 +232,8 @@ class RowProjector {
   }
 
  private:
-  vector<ProjectionIdxMapping> base_cols_mapping_;
-  vector<ProjectionIdxMapping> adapter_cols_mapping_;
+  std::vector<ProjectionIdxMapping> base_cols_mapping_;
+  std::vector<ProjectionIdxMapping> adapter_cols_mapping_;
 
   const Schema* base_schema_;
   const Schema* projection_;
@@ -249,7 +248,7 @@ class RowProjector {
 // The row itself is mutated so that the indirect data points to the relocated
 // storage.
 template <class RowType, class ArenaType>
-inline CHECKED_STATUS RelocateIndirectDataToArena(RowType *row, ArenaType *dst_arena) {
+inline Status RelocateIndirectDataToArena(RowType *row, ArenaType *dst_arena) {
   const Schema* schema = row->schema();
   // For any Slice columns, copy the sliced data into the arena
   // and update the pointers
@@ -464,5 +463,3 @@ template<>
 void ContiguousRowCell<ConstContiguousRow>::set_null(bool null) const;
 
 } // namespace yb
-
-#endif // YB_COMMON_ROW_H

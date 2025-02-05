@@ -21,23 +21,28 @@
 #include <chrono>
 #include <climits>
 #include <cmath>
+#include <compare>
 #include <cstdarg>
 #include <cstddef>
 #include <cstdint>
+#include <ctime>
 #include <functional>
 #include <iosfwd>
 #include <limits>
 #include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <random>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <type_traits>
 #include <unordered_map>
 #include <utility>
 #include <vector>
 
+#include <boost/algorithm/string/predicate.hpp>
 #include <boost/atomic.hpp>
 #include <boost/container/small_vector.hpp>
 #include <boost/core/demangle.hpp>
@@ -59,6 +64,7 @@
 #include <gtest/gtest.h>
 #include <gtest/gtest_prod.h>
 
+#include "yb/common/opid.h"
 #include "yb/gutil/atomicops.h"
 #include "yb/gutil/callback_forward.h"
 #include "yb/gutil/casts.h"
@@ -79,6 +85,8 @@
 #include "yb/gutil/template_util.h"
 #include "yb/gutil/thread_annotations.h"
 #include "yb/gutil/type_traits.h"
+#include "yb/gutil/walltime.h"
+#include "yb/util/byte_buffer.h"
 #include "yb/util/bytes_formatter.h"
 #include "yb/util/cast.h"
 #include "yb/util/clone_ptr.h"
@@ -89,10 +97,13 @@
 #include "yb/util/faststring.h"
 #include "yb/util/file_system.h"
 #include "yb/util/format.h"
+#include "yb/util/io.h"
+#include "yb/util/kv_util.h"
 #include "yb/util/locks.h"
+#include "yb/util/logging.h"
+#include "yb/util/logging_callback.h"
 #include "yb/util/math_util.h"
 #include "yb/util/monotime.h"
-#include "yb/util/opid.h"
 #include "yb/util/physical_time.h"
 #include "yb/util/port_picker.h"
 #include "yb/util/random.h"
@@ -101,10 +112,12 @@
 #include "yb/util/rw_semaphore.h"
 #include "yb/util/size_literals.h"
 #include "yb/util/slice.h"
+#include "yb/util/slice_parts.h"
 #include "yb/util/status.h"
 #include "yb/util/status_ec.h"
 #include "yb/util/status_format.h"
 #include "yb/util/status_fwd.h"
+#include "yb/util/std_util.h"
 #include "yb/util/string_trim.h"
 #include "yb/util/strongly_typed_bool.h"
 #include "yb/util/test_util.h"

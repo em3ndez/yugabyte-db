@@ -38,9 +38,10 @@
 
 #include <boost/algorithm/string/predicate.hpp>
 #include <boost/preprocessor/cat.hpp>
-#include <glog/logging.h>
 #include <glog/stl_logging.h>
 #include <google/protobuf/message.h>
+
+#include "yb/ash/wait_state.h"
 
 #include "yb/fs/fs.pb.h"
 
@@ -54,29 +55,31 @@
 
 #include "yb/util/debug-util.h"
 #include "yb/util/env_util.h"
-#include "yb/util/flag_tags.h"
+#include "yb/util/flags.h"
 #include "yb/util/format.h"
+#include "yb/util/logging.h"
 #include "yb/util/metric_entity.h"
 #include "yb/util/net/net_util.h"
 #include "yb/util/oid_generator.h"
 #include "yb/util/path_util.h"
 #include "yb/util/pb_util.h"
 #include "yb/util/result.h"
+#include "yb/util/string_util.h"
 
-DEFINE_bool(enable_data_block_fsync, true,
+DEFINE_UNKNOWN_bool(enable_data_block_fsync, true,
             "Whether to enable fsync() of data blocks, metadata, and their parent directories. "
             "Disabling this flag may cause data loss in the event of a system crash.");
 TAG_FLAG(enable_data_block_fsync, unsafe);
 
 DECLARE_string(fs_data_dirs);
 
-DEFINE_string(fs_wal_dirs, "",
+DEFINE_UNKNOWN_string(fs_wal_dirs, "",
               "Comma-separated list of directories for write-ahead logs. This is an optional "
                   "argument. If this is not specified, fs_data_dirs is used for write-ahead logs "
                   "also and that's a reasonable default for most use cases.");
 TAG_FLAG(fs_wal_dirs, stable);
 
-DEFINE_string(instance_uuid_override, "",
+DEFINE_UNKNOWN_string(instance_uuid_override, "",
               "When creating local instance metadata (for master or tserver) in an empty data "
               "directory, use this UUID instead of randomly-generated one. Can be used to replace "
               "a node that had its disk wiped in some scenarios.");
@@ -85,10 +88,24 @@ DEFINE_test_flag(bool, simulate_fs_create_failure, false,
                  "Simulate failure during initial creation of fs during the first time "
                  "process creation.");
 
+DEFINE_test_flag(bool, simulate_fs_create_with_empty_uuid, false,
+                 "Simulate empty uuid during opening filesystem root.");
+
+METRIC_DEFINE_entity(drive);
+
+METRIC_DEFINE_counter(drive, drive_fault,
+                      "Drive Fault. Tablet Server isn't able to read/write on this drive.",
+                      yb::MetricUnit::kUnits,
+                      "Drive Fault. Tablet Server isn't able to read/write on this drive.");
+
 using google::protobuf::Message;
 using yb::env_util::ScopedFileDeleter;
 using std::map;
 using std::unordered_set;
+using std::string;
+using std::set;
+using std::vector;
+using std::ostream;
 using strings::Substitute;
 
 namespace yb {
@@ -103,15 +120,15 @@ const char *FsManager::kDataDirName = "data";
 
 namespace {
 
-static const char kRaftGroupMetadataDirName[] = "tablet-meta";
-static const char kInstanceMetadataFileName[] = "instance";
-static const char kFsLockFileName[] = "fs-lock";
-static const char kConsensusMetadataDirName[] = "consensus-meta";
-static const char kLogsDirName[] = "logs";
-static const char kTmpInfix[] = ".tmp";
-static const char kCheckFileTemplate[] = "check.XXXXXX";
-static const char kMetricDescription[] = "Tablet Server isn't able to read/write on drive.";
-static const char kSecureCertsDirName[] = "certs";
+const char kRaftGroupMetadataDirName[] = "tablet-meta";
+const char kInstanceMetadataFileName[] = "instance";
+const char kAutoFlagsConfigFileName[] = "auto_flags_config";
+const char kFsLockFileName[] = "fs-lock";
+const char kConsensusMetadataDirName[] = "consensus-meta";
+const char kLogsDirName[] = "logs";
+const char kTmpInfix[] = ".tmp";
+const char kCheckFileTemplate[] = "check.XXXXXX";
+const char kPrefixMetricId[] = "drive:";
 
 std::string DataDir(const std::string& root, const std::string& server_type) {
   return JoinPathSegments(GetServerTypeDataPath(root, server_type), FsManager::kDataDirName);
@@ -128,7 +145,7 @@ FsManagerOpts::FsManagerOpts()
   if (FLAGS_fs_wal_dirs.empty() && !FLAGS_fs_data_dirs.empty()) {
     // It is sufficient if user sets the data dirs. By default we use the same
     // directories for WALs as well.
-    FLAGS_fs_wal_dirs = FLAGS_fs_data_dirs;
+    CHECK_OK(SET_FLAG_DEFAULT_AND_CURRENT(fs_wal_dirs, FLAGS_fs_data_dirs));
   }
   wal_paths = strings::Split(FLAGS_fs_wal_dirs, ",", strings::SkipEmpty());
   data_paths = strings::Split(FLAGS_fs_data_dirs, ",", strings::SkipEmpty());
@@ -144,8 +161,7 @@ FsManager::FsManager(Env* env, const string& root_path, const std::string& serve
       wal_fs_roots_({ root_path }),
       data_fs_roots_({ root_path }),
       server_type_(server_type),
-      metric_entity_(nullptr),
-      initted_(false) {
+      metric_registry_(nullptr) {
 }
 
 FsManager::FsManager(Env* env,
@@ -155,9 +171,8 @@ FsManager::FsManager(Env* env,
       wal_fs_roots_(opts.wal_paths),
       data_fs_roots_(opts.data_paths),
       server_type_(opts.server_type),
-      metric_entity_(opts.metric_entity),
-      parent_mem_tracker_(opts.parent_mem_tracker),
-      initted_(false) {
+      metric_registry_(opts.metric_registry),
+      parent_mem_tracker_(opts.parent_mem_tracker) {
 }
 
 FsManager::~FsManager() {
@@ -246,6 +261,101 @@ Status FsManager::Init() {
   return Status::OK();
 }
 
+Status FsManager::ReadAutoFlagsConfig(Message* msg) {
+  RETURN_NOT_OK(Init());
+
+  std::lock_guard lock(auto_flag_mutex_);
+
+  // First call after process startup: Iterate over all data roots to see if a config file was
+  // previously created.
+  if (auto_flags_config_path_.empty()) {
+    for (const string& root : canonicalized_data_fs_roots_) {
+      const string data_root = GetServerTypeDataPath(root, server_type_);
+      const string config_file_path = JoinPathSegments(data_root, kAutoFlagsConfigFileName);
+
+      if (env_->FileExists(config_file_path)) {
+        auto_flags_config_path_ = config_file_path;
+        break;
+      }
+    }
+
+    // First every process start on a new node: Pick the first data root.
+    if (auto_flags_config_path_.empty()) {
+      RSTATUS_DCHECK(
+          !canonicalized_data_fs_roots_.empty(), IOError,
+          "List of data directories (fs_data_dirs) not provided.");
+
+      const auto data_root =
+          GetServerTypeDataPath(*canonicalized_data_fs_roots_.begin(), server_type_);
+      RETURN_NOT_OK(CheckWrite(data_root));
+      auto_flags_config_path_ = JoinPathSegments(data_root, kAutoFlagsConfigFileName);
+
+      return STATUS(
+          NotFound, Format(
+                        "AutoFlagsConfig file wasn't found in $0",
+                        JoinStrings(canonicalized_data_fs_roots_, ",")));
+    }
+  }
+
+  RETURN_NOT_OK_PREPEND(
+      pb_util::ReadPBContainerFromPath(env_, auto_flags_config_path_, msg),
+      Substitute("Could not load AutoFlag config from $0", auto_flags_config_path_));
+
+  return Status::OK();
+}
+
+Status FsManager::WriteAutoFlagsConfig(const Message* msg) {
+  RETURN_NOT_OK(Init());
+
+  std::lock_guard lock(auto_flag_mutex_);
+
+  // auto_flags_config_path_ is set when we attempt to read the file.
+  // We expect at least one read of the file to happen before the write.
+  // This check should only fail in tests.
+  SCHECK(
+      !auto_flags_config_path_.empty(), RuntimeError,
+      "AutoFlags config file path not initialized. Please check the --fs_data_dirs parameter.");
+
+  // OVERWRITE mode will atomically replace the old contents of the file with the new data.
+  RETURN_NOT_OK(pb_util::WritePBContainerToPath(
+      env_, auto_flags_config_path_, *msg, pb_util::OVERWRITE, pb_util::SYNC));
+
+  LOG(INFO) << "AutoFlags config stored in '" << auto_flags_config_path_ << "'.";
+  return Status::OK();
+}
+
+std::string FsManager::GetAutoFlagsConfigPath() const {
+  std::lock_guard lock(auto_flag_mutex_);
+  return auto_flags_config_path_;
+}
+
+Result<std::string> FsManager::GetUniverseUuidFromTserverInstanceMetadata() const {
+  std::lock_guard lock(metadata_mutex_);
+  SCHECK_NOTNULL(metadata_);
+  return metadata_->tserver_instance_metadata().universe_uuid();
+}
+
+Status FsManager::SetUniverseUuidOnTserverInstanceMetadata(
+    const UniverseUuid& universe_uuid) {
+  std::lock_guard lock(metadata_mutex_);
+  SCHECK_NOTNULL(metadata_);
+  LOG(INFO) << "Setting the universe_uuid to " << universe_uuid;
+  metadata_->mutable_tserver_instance_metadata()->set_universe_uuid(universe_uuid.ToString());
+  auto instance_metadata_path = VERIFY_RESULT(GetExistingInstanceMetadataPath());
+  return pb_util::WritePBContainerToPath(
+      env_, instance_metadata_path, *metadata_.get(), pb_util::OVERWRITE, pb_util::SYNC);
+}
+
+Status FsManager::ClearUniverseUuidOnTserverInstanceMetadata() {
+  std::lock_guard lock(metadata_mutex_);
+  SCHECK_NOTNULL(metadata_);
+  LOG(INFO) << "Clearing the universe_uuid from Instance Metadata";
+  metadata_->mutable_tserver_instance_metadata()->clear_universe_uuid();
+  auto instance_metadata_path = VERIFY_RESULT(GetExistingInstanceMetadataPath());
+  return pb_util::WritePBContainerToPath(
+      env_, instance_metadata_path, *metadata_.get(), pb_util::OVERWRITE, pb_util::SYNC);
+}
+
 Status FsManager::CheckAndOpenFileSystemRoots() {
   RETURN_NOT_OK(Init());
 
@@ -254,6 +364,10 @@ Status FsManager::CheckAndOpenFileSystemRoots() {
   }
 
   bool create_roots = false;
+
+  // Currently, this path is only called on Init and does not race with any other threads trying
+  // to access metadata_. To future proof this however, we will still obtain a lock.
+  std::lock_guard lock(metadata_mutex_);
   for (const string& root : canonicalized_all_fs_roots_) {
     auto pb = std::make_unique<InstanceMetadataPB>();
     auto read_result = pb_util::ReadPBContainerFromPath(env_, GetInstanceMetadataPath(root),
@@ -264,6 +378,7 @@ Status FsManager::CheckAndOpenFileSystemRoots() {
                    << " Write Result: " << write_result;
       canonicalized_wal_fs_roots_.erase(root);
       canonicalized_data_fs_roots_.erase(root);
+      has_faulty_drive_ = true;
       CreateAndSetFaultDriveMetric(root);
       continue;
     }
@@ -273,6 +388,10 @@ Status FsManager::CheckAndOpenFileSystemRoots() {
     }
     if (!metadata_) {
       metadata_.reset(pb.release());
+      if (metadata_->uuid().empty() || FLAGS_TEST_simulate_fs_create_with_empty_uuid) {
+        LOG(ERROR) << "FSManager contains empty UUID at the startup";
+        return STATUS(Corruption, "Empty UUID from filesystem root", root);
+      }
     } else if (pb->uuid() != metadata_->uuid()) {
       return STATUS(Corruption, Substitute(
           "Mismatched UUIDs across filesystem roots: $0 vs. $1",
@@ -340,6 +459,12 @@ Status FsManager::DeleteFileSystemLayout(ShouldDeleteLogs also_delete_logs) {
     }
     auto data_dirs = GetDataRootDirs();
     removal_list.insert(removal_list.begin(), data_dirs.begin(), data_dirs.end());
+
+    const auto auto_flags_config_path = GetAutoFlagsConfigPath();
+    if (!auto_flags_config_path.empty()) {
+      removal_list.push_back(auto_flags_config_path);
+    }
+
     removal_set.insert(removal_list.begin(), removal_list.end());
   }
 
@@ -497,6 +622,7 @@ void FsManager::CreateInstanceMetadata(InstanceMetadataPB* metadata) {
     hostname = "<unknown host>";
   }
   metadata->set_format_stamp(Substitute("Formatted at $0 on $1", time_str, hostname));
+  metadata->set_initdb_done_set_after_sys_catalog_restore(true);
 }
 
 Status FsManager::WriteInstanceMetadata(const InstanceMetadataPB& metadata,
@@ -554,12 +680,14 @@ Status FsManager::CheckWrite(const std::string& root) {
 }
 
 void FsManager::CreateAndSetFaultDriveMetric(const std::string& path) {
-  std::unique_ptr<CounterPrototype> counter = std::make_unique<OwningCounterPrototype>(
-      "server", Format("drive_fault_$0", counters_.size()), path, yb::MetricUnit::kThreads,
-      kMetricDescription, yb::MetricLevel::kWarn, yb::EXPOSE_AS_COUNTER);
-  auto pointer = metric_entity_->FindOrCreateCounter(std::move(counter));
-  counters_[path] = pointer;
-  pointer->Increment();
+  MetricEntity::AttributeMap attrs;
+  attrs["drive_path"] = path;
+  auto metric_entity = METRIC_ENTITY_drive.Instantiate(metric_registry_,
+                                                       kPrefixMetricId + path,
+                                                       attrs);
+  auto counter = METRIC_drive_fault.Instantiate(metric_entity);
+  counter->Increment();
+  counters_.emplace_back(std::move(counter));
 }
 
 Status FsManager::CreateDirIfMissing(const string& path, bool* created) {
@@ -575,7 +703,13 @@ Status FsManager::CreateDirIfMissingAndSync(const std::string& path, bool* creat
 }
 
 const string& FsManager::uuid() const {
+  std::lock_guard lock(metadata_mutex_);
   return CHECK_NOTNULL(metadata_.get())->uuid();
+}
+
+bool FsManager::initdb_done_set_after_sys_catalog_restore() const {
+  std::lock_guard lock(metadata_mutex_);
+  return CHECK_NOTNULL(metadata_.get())->initdb_done_set_after_sys_catalog_restore();
 }
 
 set<string> FsManager::GetFsRootDirs() const {
@@ -622,12 +756,13 @@ Result<std::string> FsManager::GetRaftGroupMetadataPath(const string& tablet_id)
 
 void FsManager::SetTabletPathByDataPath(const string& tablet_id, const string& path) {
   string tablet_path = path.empty() ? GetDefaultRootDir() : DirName(path);
-  std::lock_guard<std::mutex> lock(data_mutex_);
+  LOG_WITH_FUNC(INFO) << "Tablet " << tablet_id << " metadata path being set to " << tablet_path;
+  std::lock_guard lock(data_mutex_);
   InsertOrUpdate(&tablet_id_to_path_, tablet_id, tablet_path);
 }
 
 Result<std::string> FsManager::GetTabletPath(const std::string &tablet_id) const {
-  std::lock_guard<std::mutex> lock(data_mutex_);
+  std::lock_guard lock(data_mutex_);
   auto tabet_path_it = tablet_id_to_path_.find(tablet_id);
   if (tabet_path_it == tablet_id_to_path_.end()) {
     return STATUS(NotFound, Format("Metadata dir not found for tablet $0", tablet_id));
@@ -638,7 +773,7 @@ Result<std::string> FsManager::GetTabletPath(const std::string &tablet_id) const
 bool FsManager::LookupTablet(const std::string &tablet_id) {
   for (const auto& dir : GetRaftGroupMetadataDirs()) {
     if (env_->FileExists(JoinPathSegments(dir, tablet_id))) {
-      std::lock_guard<std::mutex> lock(data_mutex_);
+      std::lock_guard lock(data_mutex_);
       tablet_id_to_path_.insert({tablet_id, DirName(dir)});
       return true;
     }
@@ -647,10 +782,21 @@ bool FsManager::LookupTablet(const std::string &tablet_id) {
 }
 
 namespace {
+
 // Return true if 'fname' is a valid tablet ID.
-bool IsValidTabletId(const std::string& fname) {
+bool CheckTabletId(Env* env, const std::string& dir, const std::string& fname) {
   if (fname.find(kTmpInfix) != string::npos) {
-    LOG(WARNING) << "Ignoring tmp file in tablet metadata dir: " << fname;
+    auto msg_suffix = "temporary tablet metadata: " + fname;
+    if (env) {
+      auto status = env->DeleteFile(JoinPathSegments(dir, fname));
+      if (status.ok()) {
+        LOG(INFO) << "Removed " << msg_suffix;
+      } else {
+        LOG(WARNING) << "Failed to remove " << msg_suffix << ": " << status;
+      }
+    } else {
+      LOG(INFO) << "Ignored " << msg_suffix;
+    }
     return false;
   }
 
@@ -664,23 +810,42 @@ bool IsValidTabletId(const std::string& fname) {
 }
 } // anonymous namespace
 
-Result<std::vector<std::string>> FsManager::ListTabletIds() {
-  std::lock_guard<std::mutex> lock(data_mutex_);
-  std::vector<std::string> tablet_ids;
+Result<std::vector<std::string>> FsManager::ListTabletIds(
+    CleanupTemporaryFiles cleanup_temporary_files) {
+  std::lock_guard lock(data_mutex_);
+  std::unordered_set<std::string> tablet_ids;
   for (const auto& dir : GetRaftGroupMetadataDirs()) {
-    vector<string> children;
-    RETURN_NOT_OK_PREPEND(ListDir(dir, &children),
-                          Substitute("Couldn't list tablets in metadata directory $0", dir));
+    std::vector<std::string> children = VERIFY_RESULT_PREPEND(ListDir(dir),
+        Substitute("Couldn't list tablets in metadata directory $0", dir));
 
-    for (const string& child : children) {
-      if (!IsValidTabletId(child)) {
+    for (const auto& child : children) {
+      if (!CheckTabletId(cleanup_temporary_files ? env_ : nullptr, dir, child)) {
         continue;
       }
-      tablet_id_to_path_.emplace(child, DirName(dir));
-      tablet_ids.push_back(child);
+      auto tablet_dirname = DirName(dir);
+      LOG(INFO) << "Found tablet " << child << " metadata at " << tablet_dirname;
+      auto [_, inserted] = tablet_ids.emplace(child);
+      if (!inserted) {
+        return STATUS_FORMAT(IllegalState,
+            "Found two tablet metadata folders $0 and $1 with the same tablet_id $2. Remove the "
+            "duplicate one to avoid the error.", tablet_dirname, tablet_id_to_path_[child], child);
+      }
+      tablet_id_to_path_.emplace(child, tablet_dirname);
     }
   }
-  return tablet_ids;
+  return std::vector<std::string>(tablet_ids.begin(), tablet_ids.end());
+}
+
+Result<std::string> FsManager::GetExistingInstanceMetadataPath() const {
+  for (const string& root : canonicalized_all_fs_roots_) {
+    auto instance_metadata_path = GetInstanceMetadataPath(root);
+    if (env_->FileExists(GetInstanceMetadataPath(root))) {
+      return instance_metadata_path;
+    }
+  }
+  return STATUS(IllegalState,
+      Format("No instance metadata found in root dirs $0",
+      RangeToString(canonicalized_all_fs_roots_.begin(), canonicalized_all_fs_roots_.end())));
 }
 
 std::string FsManager::GetInstanceMetadataPath(const string& root) const {
@@ -694,10 +859,6 @@ std::string FsManager::GetFsLockFilePath(const string& root) const {
 std::string FsManager::GetDefaultRootDir() const {
   DCHECK(initted_);
   return GetServerTypeDataPath(canonicalized_default_fs_root_, server_type_);
-}
-
-std::string FsManager::GetCertsDir(const std::string& root_dir) {
-  return JoinPathSegments(root_dir, kSecureCertsDirName);
 }
 
 std::vector<std::string> FsManager::GetConsensusMetadataDirs() const {
@@ -785,13 +946,15 @@ void FsManager::DumpFileSystemTree(ostream& out, const string& prefix,
 }
 
 Result<std::vector<std::string>> FsManager::ListDir(const std::string& path) const {
-  std::vector<std::string> result;
-  RETURN_NOT_OK(env_->GetChildren(path, ExcludeDots::kTrue, &result));
-  return result;
+  return env_->GetChildren(path, ExcludeDots::kTrue);
 }
 
 Status FsManager::ListDir(const std::string& path, std::vector<std::string> *objects) const {
   return env_->GetChildren(path, objects);
+}
+
+Result<uint64> FsManager::GetFreeSpaceBytes(const std::string& path) const {
+  return env_->GetFreeSpaceBytes(path);
 }
 
 } // namespace yb

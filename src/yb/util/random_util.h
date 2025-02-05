@@ -30,13 +30,12 @@
 // under the License.
 //
 
-#ifndef YB_UTIL_RANDOM_UTIL_H
-#define YB_UTIL_RANDOM_UTIL_H
+#pragma once
 
 #include <algorithm>
 #include <random>
 
-#include <glog/logging.h> // For CHECK
+#include "yb/util/logging.h"  // For CHECK
 
 namespace yb {
 
@@ -55,6 +54,8 @@ std::vector<uint8_t> RandomBytes(size_t len, std::mt19937_64* rng = nullptr);
 std::string RandomString(size_t len, std::mt19937_64* rng = nullptr);
 
 std::string RandomHumanReadableString(size_t len, Random* rnd);
+
+bool IsRandomInitializingInThisThread();
 
 class RandomDeviceSequence {
  public:
@@ -130,17 +131,34 @@ inline bool RandomActWithProbability(double probability, std::mt19937_64* rng = 
 }
 
 template <class Collection>
-typename Collection::const_reference RandomElement(const Collection& collection,
-                                                   std::mt19937_64* rng = nullptr) {
+typename Collection::const_iterator RandomIterator(const Collection& collection,
+                                                    std::mt19937_64* rng = nullptr) {
   CHECK(!collection.empty());
   size_t index = RandomUniformInt<size_t>(0, collection.size() - 1, rng);
   auto it = collection.begin();
   std::advance(it, index);
-  return *it;
+  return it;
+}
+
+template <class Collection>
+typename Collection::const_reference RandomElement(const Collection& collection,
+                                                   std::mt19937_64* rng = nullptr) {
+  return *RandomIterator(collection, rng);
 }
 
 std::string RandomHumanReadableString(size_t len, std::mt19937_64* rng = nullptr);
 
-} // namespace yb
+template<typename Distribution>
+std::vector<float> RandomFloatVector(
+    size_t dimensions, Distribution& dis, std::mt19937_64* rng = nullptr) {
+  if (!rng) {
+    rng = &ThreadLocalRandom();
+  }
+  std::vector<float> vec(dimensions);
+  for (auto& v : vec) {
+    v = dis(*rng);
+  }
+  return vec;
+}
 
-#endif // YB_UTIL_RANDOM_UTIL_H
+} // namespace yb

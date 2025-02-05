@@ -29,8 +29,7 @@
 // or implied.  See the License for the specific language governing permissions and limitations
 // under the License.
 //
-#ifndef YB_TSERVER_REMOTE_BOOTSTRAP_SESSION_H_
-#define YB_TSERVER_REMOTE_BOOTSTRAP_SESSION_H_
+#pragma once
 
 #include <array>
 #include <memory>
@@ -44,9 +43,13 @@
 #include "yb/gutil/macros.h"
 #include "yb/gutil/ref_counted.h"
 
+#include "yb/tablet/tablet_fwd.h"
+#include "yb/tserver/remote_bootstrap_anchor_client.h"
 #include "yb/tserver/remote_bootstrap.pb.h"
+#include "yb/tserver/remote_bootstrap.proxy.h"
 
 #include "yb/util/status_fwd.h"
+#include "yb/util/stopwatch.h"
 #include "yb/util/locks.h"
 #include "yb/util/net/rate_limiter.h"
 
@@ -81,9 +84,9 @@ struct GetDataPieceInfo {
 
 class RemoteBootstrapSource {
  public:
-  virtual CHECKED_STATUS Init() = 0;
-  virtual CHECKED_STATUS ValidateDataId(const DataIdPB& data_id) = 0;
-  virtual CHECKED_STATUS GetDataPiece(const DataIdPB& data_id, GetDataPieceInfo* info) = 0;
+  virtual Status Init() = 0;
+  virtual Status ValidateDataId(const DataIdPB& data_id) = 0;
+  virtual Status GetDataPiece(const DataIdPB& data_id, GetDataPieceInfo* info) = 0;
 
   virtual ~RemoteBootstrapSource() = default;
 };
@@ -96,11 +99,16 @@ class RemoteBootstrapSession : public RefCountedThreadSafe<RemoteBootstrapSessio
  public:
   RemoteBootstrapSession(const std::shared_ptr<tablet::TabletPeer>& tablet_peer,
                          std::string session_id, std::string requestor_uuid,
-                         const std::atomic<int>* nsessions);
+                         const std::atomic<int>* nsessions,
+                         const scoped_refptr<RemoteBootstrapAnchorClient>&
+                            rbs_anchor_client = nullptr);
 
   // Initialize the session, including anchoring files (TODO) and fetching the
   // tablet superblock and list of WAL segments.
-  CHECKED_STATUS Init();
+  Status InitBootstrapSession();
+
+  // Initialize the session: fetching superblock.
+  Status InitSnapshotTransferSession();
 
   // Return ID of tablet corresponding to this session.
   const std::string& tablet_id() const;
@@ -108,9 +116,16 @@ class RemoteBootstrapSession : public RefCountedThreadSafe<RemoteBootstrapSessio
   // Return UUID of the requestor that initiated this session.
   const std::string& requestor_uuid() const;
 
-  CHECKED_STATUS GetDataPiece(const DataIdPB& data_id, GetDataPieceInfo* info);
+  // Return ID of session created.
+  const std::string& session_id() const { return session_id_; }
 
-  CHECKED_STATUS ValidateDataId(const DataIdPB& data_id);
+  std::string LogPrefix() const {
+    return Format("$0: ", session_id());
+  }
+
+  Status GetDataPiece(const DataIdPB& data_id, GetDataPieceInfo* info);
+
+  Status ValidateDataId(const DataIdPB& data_id);
 
   MonoTime start_time() { return start_time_; }
 
@@ -123,12 +138,14 @@ class RemoteBootstrapSession : public RefCountedThreadSafe<RemoteBootstrapSessio
 
   const log::SegmentSequence& log_segments() const { return log_segments_; }
 
-  void SetSuccess();
+  void SetSuccess() EXCLUDES(mutex_);
 
-  bool Succeeded();
+  bool Succeeded() EXCLUDES(mutex_);
+
+  bool ShouldChangeRole() EXCLUDES(mutex_);
 
   // Change the peer's role to VOTER.
-  CHECKED_STATUS ChangeRole();
+  Status ChangeRole();
 
   void InitRateLimiter();
 
@@ -136,13 +153,24 @@ class RemoteBootstrapSession : public RefCountedThreadSafe<RemoteBootstrapSessio
 
   RateLimiter& rate_limiter() { return rate_limiter_; }
 
+  Stopwatch& crc_compute_timer() { return crc_compute_timer_; }
+  Stopwatch& data_read_timer() { return data_read_timer_; }
+
   static const std::string kCheckpointsDir;
 
   // Get a piece of a RocksDB file.
   // The behavior and params are very similar to GetLogSegmentPiece(), but this one
   // is only for sending rocksdb files.
-  static CHECKED_STATUS GetFilePiece(
+  static Status GetFilePiece(
       const std::string& path, const std::string& file_name, Env* env, GetDataPieceInfo* info);
+
+  // Refresh the Log Anchor Session with the leader when rbs_anchor_client != nullptr and
+  // rbs_anchor_session_created_ is set.
+  Status RefreshRemoteLogAnchorSessionAsync();
+
+  bool has_retryable_requests_file() const {
+    return retryable_requests_filepath_.has_value();
+  }
 
  private:
   friend class RefCountedThreadSafe<RemoteBootstrapSession>;
@@ -159,15 +187,21 @@ class RemoteBootstrapSession : public RefCountedThreadSafe<RemoteBootstrapSessio
     sources_[Source::id_type()] = std::make_unique<Source>(tablet_peer_, &tablet_superblock_);
   }
 
+  Status ReadSuperblockFromDisk(tablet::RaftGroupReplicaSuperBlockPB* out = nullptr);
+
+  Result<tablet::TabletPtr> GetRunningTablet();
+
+  Status InitSources();
+
   // Snapshot the log segment's length and put it into segment map.
-  CHECKED_STATUS OpenLogSegment(uint64_t segment_seqno, RemoteBootstrapErrorPB::Code* error_code)
+  Status OpenLogSegment(uint64_t segment_seqno, RemoteBootstrapErrorPB::Code* error_code)
       REQUIRES(mutex_);
 
   // Unregister log anchor, if it's registered.
-  CHECKED_STATUS UnregisterAnchorIfNeededUnlocked();
+  Status UnregisterAnchorIfNeededUnlocked();
 
   // Helper API to set initial_committed_cstate_.
-  CHECKED_STATUS SetInitialCommittedState();
+  Status SetInitialCommittedState();
 
   // Get a piece of a log segment.
   // If maxlen is 0, we use a system-selected length for the data piece.
@@ -177,14 +211,27 @@ class RemoteBootstrapSession : public RefCountedThreadSafe<RemoteBootstrapSessio
   // On error, Status is set to a non-OK value and error_code is filled in.
   //
   // This method is thread-safe.
-  CHECKED_STATUS GetLogSegmentPiece(uint64_t segment_seqno, GetDataPieceInfo* info);
+  Status GetLogSegmentPiece(uint64_t segment_seqno, GetDataPieceInfo* info);
 
   // Get a piece of a RocksDB checkpoint file.
-  CHECKED_STATUS GetRocksDBFilePiece(const std::string& file_name, GetDataPieceInfo* info);
+  Status GetRocksDBFilePiece(const std::string& file_name, GetDataPieceInfo* info);
+
+  // Get a piece of a retryable requests file.
+  Status GetRetryableRequestsFilePiece(GetDataPieceInfo* info);
 
   Env* env() const;
 
   RemoteBootstrapSource* Source(DataIdPB::IdType id_type) const;
+
+  Result<OpId> CreateSnapshot(int retry);
+
+  // When a follower peer is serving as the rbs source, try registering a log anchor
+  // at remote_log_anchor_index_ on the leader peer.
+  Status RegisterRemoteLogAnchorUnlocked() REQUIRES(mutex_);
+  // When a follower peer is serving as the rbs source, try updating the log anchor
+  // to remote_log_anchor_index_ on the leader peer.
+  Status UpdateRemoteLogAnchorUnlocked() REQUIRES(mutex_);
+  Status UnregisterRemotelogAnchor();
 
   std::shared_ptr<tablet::TabletPeer> tablet_peer_;
   const std::string session_id_;
@@ -207,16 +254,29 @@ class RemoteBootstrapSession : public RefCountedThreadSafe<RemoteBootstrapSessio
 
   log::LogAnchor log_anchor_;
   int64_t log_anchor_index_ GUARDED_BY(mutex_) = 0;
+  // When a follower peer is serving as the rbs source, the field stores the index at which the
+  // leader peer needs to anchor its log at.
+  int64_t remote_log_anchor_index_ GUARDED_BY(mutex_) = 0;
 
   // We need to know whether this ended succesfully before changing the peer's member type from
   // PRE_VOTER to VOTER.
   bool succeeded_ GUARDED_BY(mutex_) = false;
 
+  // Only RemoteBootstraps should try changing the peer's member type. Snapshot transfers should not
+  // and should skip that step.
+  bool should_try_change_role_ GUARDED_BY(mutex_) = true;
+
   // Directory where the checkpoint files are stored for this session (only for rocksdb).
   std::string checkpoint_dir_;
 
+  std::optional<std::string> retryable_requests_filepath_;
+
   // Time when this session was initialized.
   MonoTime start_time_;
+
+  // Stopwatch to capture the latency of different operations
+  Stopwatch crc_compute_timer_;
+  Stopwatch data_read_timer_;
 
   // Used to limit the transmission rate.
   RateLimiter rate_limiter_;
@@ -227,10 +287,13 @@ class RemoteBootstrapSession : public RefCountedThreadSafe<RemoteBootstrapSessio
 
   std::array<std::unique_ptr<RemoteBootstrapSource>, DataIdPB::IdType_ARRAYSIZE> sources_;
 
+  scoped_refptr<RemoteBootstrapAnchorClient> rbs_anchor_client_;
+
+  // Boolean that determines if we need to call KeepLogAnchorAlive on rbs_anchor_client_.
+  bool rbs_anchor_session_created_ = false;
+
   DISALLOW_COPY_AND_ASSIGN(RemoteBootstrapSession);
 };
 
 } // namespace tserver
 } // namespace yb
-
-#endif // YB_TSERVER_REMOTE_BOOTSTRAP_SESSION_H_

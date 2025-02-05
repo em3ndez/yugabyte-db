@@ -11,8 +11,7 @@
 // under the License.
 //
 
-#ifndef YB_YQL_CQL_QL_UTIL_UTIL_FWD_H
-#define YB_YQL_CQL_QL_UTIL_UTIL_FWD_H
+#pragma once
 
 #include <functional>
 
@@ -29,9 +28,7 @@ class StatementParameters;
 enum class ErrorCode : int64_t;
 
 using ExecutedResultPtr = std::shared_ptr<ExecutedResult>;
-using TransactionPoolProvider = std::function<client::TransactionPool*()>;
+using TransactionPoolProvider = std::function<client::TransactionPool&()>;
 
 }  // namespace ql
 }  // namespace yb
-
-#endif  // YB_YQL_CQL_QL_UTIL_UTIL_FWD_H

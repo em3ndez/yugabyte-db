@@ -7,13 +7,15 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.google.common.annotations.VisibleForTesting;
 import com.yugabyte.yw.common.ApiHelper;
 import com.yugabyte.yw.forms.LiveQueriesParams;
 import java.util.UUID;
 import java.util.concurrent.Callable;
 import lombok.extern.slf4j.Slf4j;
-import play.api.Play;
+import org.apache.commons.lang3.StringUtils;
 import play.libs.Json;
+import play.libs.ws.WSClient;
 
 @Slf4j
 public class LiveQueryExecutor implements Callable<JsonNode> {
@@ -25,12 +27,19 @@ public class LiveQueryExecutor implements Callable<JsonNode> {
   private final int port;
   private final QueryHelper.QueryApi apiType;
 
-  public LiveQueryExecutor(String nodeName, String hostName, int port, QueryHelper.QueryApi api) {
+  public LiveQueryExecutor(
+      String nodeName, String hostName, int port, QueryHelper.QueryApi api, WSClient wsClient) {
+    this(nodeName, hostName, port, api, new ApiHelper(wsClient));
+  }
+
+  @VisibleForTesting
+  LiveQueryExecutor(
+      String nodeName, String hostName, int port, QueryHelper.QueryApi api, ApiHelper apiHelper) {
     this.nodeName = nodeName;
     this.hostName = hostName;
     this.port = port;
     this.apiType = api;
-    this.apiHelper = Play.current().injector().instanceOf(ApiHelper.class);
+    this.apiHelper = apiHelper;
   }
 
   @Override
@@ -59,7 +68,8 @@ public class LiveQueryExecutor implements Callable<JsonNode> {
     if (response.has("connections")) {
       for (JsonNode objNode : response.get("connections")) {
         if (objNode.has("backend_type")
-            && objNode.get("backend_type").asText().equalsIgnoreCase("client backend")
+            && (objNode.get("backend_type").asText().equalsIgnoreCase("client backend")
+                || objNode.get("backend_type").asText().startsWith("yb-conn-mgr"))
             && objNode.has("backend_status")
             && !objNode.get("backend_status").asText().equalsIgnoreCase("idle")) {
           try {
@@ -80,6 +90,14 @@ public class LiveQueryExecutor implements Callable<JsonNode> {
             rowData.put("clientHost", params.host);
             rowData.put("clientPort", params.port);
 
+            // query_id and leader pid are only present on pg15 and above.
+            if (params.leader_pid != -1) {
+              rowData.put("leader_pid", params.leader_pid);
+            }
+            if (params.query_id != -1) {
+              rowData.put("query_id", params.query_id);
+            }
+
             ArrayNode ysqlArray;
             if (!responseJson.has("ysql")) {
               ysqlArray = responseJson.putArray("ysql");
@@ -99,7 +117,8 @@ public class LiveQueryExecutor implements Callable<JsonNode> {
   }
 
   // Similar to above helper function except for YCQL connection info
-  private JsonNode processYCQLRowData(JsonNode response) {
+  @VisibleForTesting
+  JsonNode processYCQLRowData(JsonNode response) {
     ObjectNode responseJson = Json.newObject();
     ObjectMapper mapper = new ObjectMapper();
     if (response.has("inbound_connections")) {
@@ -121,9 +140,22 @@ public class LiveQueryExecutor implements Callable<JsonNode> {
                 }
                 queryStringBuilder.append(callDetail.get("sql_string").asText());
               }
-              String keyspace =
-                  params.connection_details.cql_connection_details.get("keyspace").asText();
-              String[] splitIp = params.remote_ip.split(":");
+              String keyspace = StringUtils.EMPTY;
+              if (params.connection_details != null
+                  && params.connection_details.cql_connection_details != null
+                  && params.connection_details.cql_connection_details.has("keyspace")) {
+                keyspace =
+                    params.connection_details.cql_connection_details.get("keyspace").asText();
+              }
+              String clientHost = StringUtils.EMPTY;
+              String clientPort = StringUtils.EMPTY;
+              int hostPortDelimiterIndex = params.remote_ip.lastIndexOf(":");
+              if (hostPortDelimiterIndex < 0) {
+                log.warn("Invalid remove_ip field in response: {}", params.remote_ip);
+              } else {
+                clientHost = params.remote_ip.substring(0, hostPortDelimiterIndex);
+                clientPort = params.remote_ip.substring(hostPortDelimiterIndex + 1);
+              }
               // Random UUID intended for table row key
               rowData.put("id", UUID.randomUUID().toString());
               rowData.put("nodeName", nodeName);
@@ -132,8 +164,8 @@ public class LiveQueryExecutor implements Callable<JsonNode> {
               rowData.put("query", queryStringBuilder.toString());
               rowData.put("type", query.cql_details.type);
               rowData.put("elapsedMillis", query.elapsed_millis);
-              rowData.put("clientHost", splitIp[0]);
-              rowData.put("clientPort", splitIp[1]);
+              rowData.put("clientHost", clientHost);
+              rowData.put("clientPort", clientPort);
 
               ArrayNode ycqlArray;
               if (!responseJson.has("ycql")) {

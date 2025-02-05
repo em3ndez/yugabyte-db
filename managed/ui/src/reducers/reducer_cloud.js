@@ -59,7 +59,8 @@ import {
   GET_AZU_TYPE_LIST,
   GET_AZU_TYPE_LIST_RESPONSE,
   DELETE_REGION,
-  DELETE_REGION_RESPONSE
+  DELETE_REGION_RESPONSE,
+  LIST_ACCESS_KEYS_REQUEST_COMPLETED
 } from '../actions/cloud';
 
 import {
@@ -95,6 +96,7 @@ const INITIAL_STATE = {
   selectedProvider: null,
   error: null,
   accessKeys: getInitialState([]),
+  allAccessKeysReqCompleted: false,
   bootstrap: getInitialState({}),
   dockerBootstrap: getInitialState({}),
   status: 'init',
@@ -308,6 +310,7 @@ export default function (state = INITIAL_STATE, action) {
       return setInitialState(state, 'bootstrap');
 
     case LIST_ACCESS_KEYS:
+      // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing
       return setLoadingState(state, 'accessKeys', state.accessKeys.data || []);
 
     case LIST_ACCESS_KEYS_RESPONSE:
@@ -325,6 +328,8 @@ export default function (state = INITIAL_STATE, action) {
         action.payload.data = state.accessKeys.data;
       }
       return setPromiseResponse(state, 'accessKeys', action);
+    case LIST_ACCESS_KEYS_REQUEST_COMPLETED:
+      return { ...state, allAccessKeysReqCompleted: true };
     case GET_EBS_TYPE_LIST:
       return {
         ...state,
@@ -385,13 +390,14 @@ export default function (state = INITIAL_STATE, action) {
       return setPromiseResponse(state, 'authConfig', action);
     case DELETE_KMS_CONFIGURATION:
       return state;
-    case DELETE_KMS_CONFIGURATION_RESPONSE:
+    case DELETE_KMS_CONFIGURATION_RESPONSE: {
       // Remove target provider from authConfig list
       const authConfig = state.authConfig.data.filter(
         (val) => val.metadata.configUUID !== action.payload
       );
       state.authConfig['data'] = authConfig;
       return state;
+    }
     default:
       return state;
   }

@@ -2,13 +2,12 @@
 title: Presto
 linkTitle: Presto
 description: Presto
-section: INTEGRATIONS
 menu:
-  preview:
+  preview_integrations:
     identifier: presto
+    parent: data-discovery
     weight: 571
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 [Presto](https://prestosql.io/) is a distributed SQL query engine optimized for ad-hoc analysis at interactive speed. It supports standard ANSI SQL, including complex queries, aggregations, joins, and window functions. It has a connector architecture to query data from many data sources.
@@ -17,12 +16,12 @@ This document describes how to set up Presto to query YugabyteDB's YCQL tables.
 
 ## 1. Start local cluster
 
-Follow [Quick start](../../quick-start/) instructions to run a local YugabyteDB cluster. Test YugabyteDB's Cassandra-compatible API, as [documented](../../quick-start/explore/ycql/) so that you can confirm that you have a Cassandra-compatible service running on `localhost:9042`. Ensure that you have created the keyspace and table, and inserted sample data as described there.
+Follow the [Quick start](/preview/tutorials/quick-start/macos/) instructions to run a local YugabyteDB cluster. Test YugabyteDB's Cassandra-compatible API, as [documented](/preview/tutorials/quick-start/explore/ycql/) so that you can confirm that you have a Cassandra-compatible service running on `localhost:9042`. Ensure that you have created the keyspace and table, and inserted sample data as described there.
 
 ## 2. Download and configure Presto
 
 Detailed steps are documented [here](https://prestosql.io/docs/current/installation/deployment.html).
-The following are the minimal setup steps for getting started:
+The following are the minimal steps for getting started:
 
 ```sh
 $ wget https://repo1.maven.org/maven2/io/prestosql/presto-server/309/presto-server-309.tar.gz

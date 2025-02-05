@@ -11,8 +11,7 @@
 // under the License.
 //
 
-#ifndef YB_DOCDB_DOC_READER_H_
-#define YB_DOCDB_DOC_READER_H_
+#pragma once
 
 #include <string>
 #include <vector>
@@ -20,25 +19,33 @@
 #include "yb/docdb/docdb_fwd.h"
 #include "yb/rocksdb/cache.h"
 
+#include "yb/common/common_types.pb.h"
 #include "yb/common/doc_hybrid_time.h"
 #include "yb/common/read_hybrid_time.h"
 #include "yb/common/transaction.h"
 
 #include "yb/docdb/deadline_info.h"
 #include "yb/docdb/docdb_types.h"
-#include "yb/docdb/expiration.h"
-#include "yb/docdb/subdoc_reader.h"
-#include "yb/docdb/subdocument.h"
-#include "yb/docdb/value.h"
+#include "yb/dockv/expiration.h"
+#include "yb/dockv/subdocument.h"
+#include "yb/dockv/value.h"
 
 #include "yb/util/monotime.h"
 #include "yb/util/status_fwd.h"
 #include "yb/util/strongly_typed_bool.h"
 
-namespace yb {
-namespace docdb {
+namespace yb::docdb {
 
 class IntentAwareIterator;
+
+YB_DEFINE_ENUM(DocReaderResult, (kNotFound)(kFoundAndFinished)(kFoundNotFinished));
+
+// Get table tombstone time from doc_db. If the table is not a colocated table as indicated
+// by the provided root_doc_key, this method returns DocHybridTime::kInvalid.
+Result<DocHybridTime> GetTableTombstoneTime(
+    Slice root_doc_key, const DocDB& doc_db,
+    const TransactionOperationContext& txn_op_context,
+    const ReadOperationData& read_operation_data);
 
 // Returns the whole SubDocument below some node identified by subdocument_key.
 // subdocument_key should not have a timestamp.
@@ -55,14 +62,43 @@ class IntentAwareIterator;
 
 // This version of GetSubDocument creates a new iterator every time. This is not recommended for
 // multiple calls to subdocs that are sequential or near each other, in e.g. doc_rowwise_iterator.
-Result<boost::optional<SubDocument>> TEST_GetSubDocument(
-    const Slice& sub_doc_key,
+Result<std::optional<dockv::SubDocument>> TEST_GetSubDocument(
+    Slice sub_doc_key,
     const DocDB& doc_db,
     const rocksdb::QueryId query_id,
     const TransactionOperationContext& txn_op_context,
-    CoarseTimePoint deadline,
-    const ReadHybridTime& read_time = ReadHybridTime::Max(),
-    const std::vector<KeyEntryValue>* projection = nullptr);
+    const ReadOperationData& read_operation_data,
+    const dockv::ReaderProjection* projection = nullptr);
+
+class PackedRowData;
+
+struct DocDBTableReaderData final {
+  // Owned by caller.
+  IntentAwareIterator* iter;
+  DeadlineInfo& deadline_info;
+  const dockv::ReaderProjection* projection;
+  const TableType table_type;
+  const dockv::SchemaPackingStorage& schema_packing_storage;
+  std::unique_ptr<PackedRowData> packed_row;
+  const Schema& schema;
+
+  std::vector<dockv::KeyBytes> encoded_projection;
+  EncodedDocHybridTime table_tombstone_time{EncodedDocHybridTime::kMin};
+  dockv::Expiration table_expiration;
+
+ private:
+  const bool use_fast_backward_scan;
+
+  DocDBTableReaderData(
+      IntentAwareIterator* iter_, DeadlineInfo& deadline,
+      const dockv::ReaderProjection* projection_,
+      TableType table_type_,
+      std::reference_wrapper<const dockv::SchemaPackingStorage> schema_packing_storage_,
+      std::reference_wrapper<const Schema> schema, bool use_fast_backward_scan_ = false);
+  ~DocDBTableReaderData();
+
+  friend class DocDBTableReader;
+};
 
 // This class reads SubDocument instances for a given table. The caller should initialize with
 // UpdateTableTombstoneTime and SetTableTtl, if applicable, before calling Get(). Instances
@@ -70,50 +106,49 @@ Result<boost::optional<SubDocument>> TEST_GetSubDocument(
 // IntentAwareIterator is either pointed to a requested row, or before it, or that row does not
 // exist. Care should be taken to ensure this assumption is not broken for callers independently
 // modifying the provided IntentAwareIterator.
+// projection - contains list of subkeys that should be read. Unlisted columns are skipped during
+// scan.
 class DocDBTableReader {
  public:
-  DocDBTableReader(
-      IntentAwareIterator* iter, CoarseTimePoint deadline,
-      std::reference_wrapper<const SchemaPackingStorage> schema_packing_storage);
+  template<class... Args>
+  explicit DocDBTableReader(Args&&... args) : data_(std::forward<Args>(args)...) {
+    Init();
+  }
 
-  // Updates expiration/overwrite data based on table tombstone time. If the table is not a
-  // colocated table as indicated by the provided root_doc_key, this method is a no-op.
-  CHECKED_STATUS UpdateTableTombstoneTime(const Slice& root_doc_key);
+  ~DocDBTableReader();
+
+  // Updates expiration/overwrite data based on table tombstone time.
+  // If the given doc_ht is DocHybridTime::kInvalid, this method is a no-op.
+  Status UpdateTableTombstoneTime(DocHybridTime doc_ht);
 
   // Determine based on the provided schema if there is a table-level TTL and use the computed value
   // in any subsequently read SubDocuments. This call also turns on row-level TTL tracking for
   // subsequently read SubDocuments.
   void SetTableTtl(const Schema& table_schema);
 
-  // For each value in projection, read into the provided SubDocument* a child Subdocument
-  // corresponding to the data at the key formed by appending the projection value to the end of the
-  // provided root_doc_key. If found, the result will be a SubDocument rooted at root_doc_key with
-  // children at each p in projection where a child was found. If no children in the projection are
-  // found, this method will seek back to the SubDocument root and attempt to grab the whole range
-  // of data for root_doc_key, build this into result, and return doc_found accordingly.
-  Result<bool> Get(
-      const Slice& root_doc_key, const std::vector<KeyEntryValue>* projection,
-      SubDocument* result);
+  // Read value (i.e. row), identified by root_doc_key to result.
+  // Returns true if value was found, false otherwise.
+  // FetchedEntry will contain last entry fetched by the iterator.
+  Result<DocReaderResult> Get(
+      KeyBuffer* root_doc_key, const FetchedEntry& fetched_entry, dockv::SubDocument* result);
+
+  // Same as get, but for rows that have doc keys with only one subkey.
+  // This is always true for YSQL.
+  // result shouldn't be nullptr and will be filled with the same number of primitives as number of
+  // columns passed to ctor in projection and in the same order.
+  Result<DocReaderResult> GetFlat(
+      KeyBuffer* root_doc_key, const FetchedEntry& fetched_entry, qlexpr::QLTableRow* result);
+  Result<DocReaderResult> GetFlat(
+      KeyBuffer* root_doc_key, const FetchedEntry& fetched_entry, dockv::PgTableRow* result);
 
  private:
+  void Init();
+
   // Initializes the reader to read a row at sub_doc_key by seeking to and reading obsolescence info
   // at that row.
-  CHECKED_STATUS InitForKey(const Slice& sub_doc_key);
+  Status InitForKey(Slice sub_doc_key);
 
-  // Helper which seeks to the provided subdoc_key, respecting the semantics of this instances
-  // seek_fwd_suffices_ flag.
-  void SeekTo(const Slice& subdoc_key);
-
-  // Owned by caller.
-  IntentAwareIterator* iter_;
-  DeadlineInfo deadline_info_;
-  DocHybridTime table_tombstone_time_ = DocHybridTime::kInvalid;
-  Expiration table_expiration_;
-  ObsolescenceTracker table_obsolescence_tracker_;
-  SubDocumentReaderBuilder subdoc_reader_builder_;
+  DocDBTableReaderData data_;
 };
 
-}  // namespace docdb
-}  // namespace yb
-
-#endif  // YB_DOCDB_DOC_READER_H_
+}  // namespace yb::docdb

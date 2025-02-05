@@ -12,6 +12,7 @@
 //
 package org.yb.pgsql;
 
+import static org.junit.Assume.assumeFalse;
 import static org.yb.AssertionWrappers.assertEquals;
 import static org.yb.AssertionWrappers.assertTrue;
 
@@ -24,17 +25,17 @@ import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.yb.util.YBTestRunnerNonTsanOnly;
+import org.yb.YBTestRunner;
 
-@RunWith(value = YBTestRunnerNonTsanOnly.class)
+@RunWith(value = YBTestRunner.class)
 public class TestDropTableWithConcurrentTxn extends BasePgSQLTest {
   private static final Logger LOG = LoggerFactory.getLogger(TestDropTableWithConcurrentTxn.class);
 
   // When a transaction is performed on a table that is deleted,
   // "need_global_cache_refresh" is set to true and raise
   // transaction conflict error in YBPrepareCacheRefreshIfNeeded().
-  private static final String TRANSACTION_CONFLICT_ERROR =
-      "expired or aborted by a conflict";
+  private static final String[] TRANSACTION_ABORT_ERRORS =
+      { "expired or aborted by a conflict", "Transaction aborted: kAborted" };
   private static final String RESOURCE_NONEXISTING_ERROR =
       "does not exist";
   private static final String SCHEMA_VERSION_MISMATCH_ERROR =
@@ -133,7 +134,7 @@ public class TestDropTableWithConcurrentTxn extends BasePgSQLTest {
                                                   Resource resourceToDrop,
                                                   boolean withCachedMetadata,
                                                   boolean executeDmlBeforeDrop,
-                                                  String expectedErrorMessage)
+                                                  String... expectedErrorMessages)
       throws Exception {
     String tableName = dmlToExecute + "OnCurrentResource" +
         (executeDmlBeforeDrop ? "Before" : "After") + "DropOn" +
@@ -162,19 +163,19 @@ public class TestDropTableWithConcurrentTxn extends BasePgSQLTest {
         // execute DROP in connection 2
         statement2.execute(dropQuery);
         // execute COMMIT in connection 1
-        if (expectedErrorMessage.isEmpty()) {
+        if (expectedErrorMessages.length == 1 && expectedErrorMessages[0].isEmpty()) {
           statement1.execute("COMMIT");
         } else {
-          runInvalidQuery(statement1, "COMMIT", expectedErrorMessage);
+          runInvalidQuery(statement1, "COMMIT", expectedErrorMessages);
         }
       } else {
         // execute DROP in connection 2
         statement2.execute(dropQuery);
         // execute DML in connection 1
-        if (expectedErrorMessage.isEmpty()) {
+        if (expectedErrorMessages.length == 1 && expectedErrorMessages[0].isEmpty()) {
           statement1.execute(dmlQuery);
         } else {
-          runInvalidQuery(statement1, dmlQuery, expectedErrorMessage);
+          runInvalidQuery(statement1, dmlQuery, expectedErrorMessages);
         }
         // execute COMMIT in connection 1
         statement1.execute("COMMIT");
@@ -248,9 +249,9 @@ public class TestDropTableWithConcurrentTxn extends BasePgSQLTest {
 
       statement2.execute("DROP TABLE " + tableName);
 
-      runInvalidQuery(statement1, "COMMIT", TRANSACTION_CONFLICT_ERROR);
-      runInvalidQuery(statement3, "COMMIT", TRANSACTION_CONFLICT_ERROR);
-      runInvalidQuery(statement4, "COMMIT", TRANSACTION_CONFLICT_ERROR);
+      runInvalidQuery(statement1, "COMMIT", TRANSACTION_ABORT_ERRORS);
+      runInvalidQuery(statement3, "COMMIT", TRANSACTION_ABORT_ERRORS);
+      runInvalidQuery(statement4, "COMMIT", TRANSACTION_ABORT_ERRORS);
     }
   }
 
@@ -267,7 +268,7 @@ public class TestDropTableWithConcurrentTxn extends BasePgSQLTest {
 
       statement.execute("DROP TABLE " + tableName);
 
-      runInvalidQuery(statement, "COMMIT", TRANSACTION_CONFLICT_ERROR);
+      runInvalidQuery(statement, "COMMIT", TRANSACTION_ABORT_ERRORS);
     }
   }
 
@@ -293,9 +294,9 @@ public class TestDropTableWithConcurrentTxn extends BasePgSQLTest {
     Resource tableDrop = Resource.TABLE;
     LOG.info("Run INSERT transactions BEFORE drop");
     runDmlTxnWithDropOnCurrentResource(Dml.INSERT, tableDrop, !withCachedMetadata,
-        executeDmlBeforeDrop, TRANSACTION_CONFLICT_ERROR);
+        executeDmlBeforeDrop, TRANSACTION_ABORT_ERRORS);
     runDmlTxnWithDropOnCurrentResource(Dml.INSERT, tableDrop, withCachedMetadata,
-        executeDmlBeforeDrop, TRANSACTION_CONFLICT_ERROR);
+        executeDmlBeforeDrop, TRANSACTION_ABORT_ERRORS);
     LOG.info("Run INSERT transactions AFTER drop");
     runDmlTxnWithDropOnCurrentResource(Dml.INSERT, tableDrop, !withCachedMetadata,
         executeDmlAfterDrop, RESOURCE_NONEXISTING_ERROR);
@@ -330,11 +331,15 @@ public class TestDropTableWithConcurrentTxn extends BasePgSQLTest {
     Resource indexDrop = Resource.INDEX;
     LOG.info("Run INSERT transactions BEFORE drop");
     runDmlTxnWithDropOnCurrentResource(Dml.INSERT, indexDrop, !withCachedMetadata,
-        executeDmlBeforeDrop, TRANSACTION_CONFLICT_ERROR);
+        executeDmlBeforeDrop, TRANSACTION_ABORT_ERRORS);
     runDmlTxnWithDropOnCurrentResource(Dml.INSERT, indexDrop, withCachedMetadata,
-        executeDmlBeforeDrop, TRANSACTION_CONFLICT_ERROR);
+        executeDmlBeforeDrop, TRANSACTION_ABORT_ERRORS);
     LOG.info("Run INSERT transaction AFTER drop");
     runDmlTxnWithDropOnCurrentResource(Dml.INSERT, indexDrop, withCachedMetadata,
+        executeDmlAfterDrop, RESOURCE_NONEXISTING_ERROR);
+    // Postgres load relation's index info on cache refresh, as a result even without explicit index
+    // usage the error will be the same as with index usage.
+    runDmlTxnWithDropOnCurrentResource(Dml.INSERT, indexDrop, !withCachedMetadata,
         executeDmlAfterDrop, RESOURCE_NONEXISTING_ERROR);
     LOG.info("Run SELECT transaction AFTER drop");
     runDmlTxnWithDropOnCurrentResource(Dml.SELECT, indexDrop, withCachedMetadata,
@@ -347,12 +352,6 @@ public class TestDropTableWithConcurrentTxn extends BasePgSQLTest {
         executeDmlBeforeDrop, NO_ERROR);
     runDmlTxnWithDropOnCurrentResource(Dml.SELECT, indexDrop, withCachedMetadata,
         executeDmlBeforeDrop, NO_ERROR);
-    // For any DML before DDL on non-cached table transaction should not
-    // conflict because DML operation is performed after index is dropped
-    // and the index relation is not cached prior to being dropped.
-    LOG.info("Run INSERT transaction AFTER drop");
-    runDmlTxnWithDropOnCurrentResource(Dml.INSERT, indexDrop, !withCachedMetadata,
-        executeDmlAfterDrop, NO_ERROR);
     LOG.info("Run SELECT transaction AFTER drop");
     runDmlTxnWithDropOnCurrentResource(Dml.SELECT, indexDrop, !withCachedMetadata,
         executeDmlAfterDrop, NO_ERROR);
@@ -397,11 +396,15 @@ public class TestDropTableWithConcurrentTxn extends BasePgSQLTest {
 
   @Test
   public void testDmlTxnDrop() throws Exception {
+    assumeFalse(BasePgSQLTest.CANNOT_GURANTEE_EXPECTED_PHYSICAL_CONN_FOR_CACHE,
+                isTestRunningWithConnectionManager());
     testDmlTxnDropInternal();
   }
 
   @Test
   public void testDmlTxnDropWithReadCommitted() throws Exception {
+    assumeFalse(BasePgSQLTest.CANNOT_GURANTEE_EXPECTED_PHYSICAL_CONN_FOR_CACHE,
+                isTestRunningWithConnectionManager());
     restartClusterWithFlags(Collections.emptyMap(),
                             Collections.singletonMap("yb_enable_read_committed_isolation",
                                                      "true"));

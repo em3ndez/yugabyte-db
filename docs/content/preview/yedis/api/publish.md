@@ -9,15 +9,14 @@ menu:
 aliases:
   - /preview/api/redis/publish
   - /preview/api/yedis/publish
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 ## Synopsis
 
-<b>`PUBLISH channel message`</b><br>
-This command publishes the given message to the specified channel. All subscribers that are subscribed to the specified channel
-across all the Yugabyte YEDIS API server(s) in the cluster will receive the message.
+**`PUBLISH channel message`**
+
+This command publishes the given message to the specified channel. All subscribers that are subscribed to the specified channel across all the Yugabyte YEDIS API server(s) in the cluster will receive the message.
 
 ## Return value
 

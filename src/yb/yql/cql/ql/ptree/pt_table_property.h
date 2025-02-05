@@ -11,8 +11,7 @@
 // under the License.
 //
 
-#ifndef YB_YQL_CQL_QL_PTREE_PT_TABLE_PROPERTY_H_
-#define YB_YQL_CQL_QL_PTREE_PT_TABLE_PROPERTY_H_
+#pragma once
 
 #include "yb/gutil/strings/substitute.h"
 #include "yb/yql/cql/ql/ptree/list_node.h"
@@ -28,7 +27,6 @@ enum class PropertyType : int {
   kTableProperty = 0,
   kClusteringOrder,
   kTablePropertyMap,
-  kCoPartitionTable,
 };
 
 class PTTableProperty : public PTProperty {
@@ -72,11 +70,6 @@ class PTTableProperty : public PTProperty {
                   const PTExprPtr& expr,
                   const PTOrderBy::Direction direction);
 
-  // Constructor for PropertyType::kCoPartitionTable
-  PTTableProperty(MemoryContext *memctx,
-                  YBLocationPtr loc,
-                  const PTQualifiedName::SharedPtr tname);
-
   PTTableProperty(MemoryContext *memctx,
                   YBLocationPtr loc);
 
@@ -89,31 +82,24 @@ class PTTableProperty : public PTProperty {
   }
 
   // Node semantics analysis.
-  virtual CHECKED_STATUS Analyze(SemContext *sem_context) override;
+  virtual Status Analyze(SemContext *sem_context) override;
   void PrintSemanticAnalysisResult(SemContext *sem_context);
 
-  virtual CHECKED_STATUS SetTableProperty(yb::TableProperties *table_property) const;
+  virtual Status SetTableProperty(yb::TableProperties *table_property) const;
 
   PropertyType property_type() const {
     return property_type_;
   }
 
-  string name() const;
+  std::string name() const;
 
   PTOrderBy::Direction direction() const {
     DCHECK_EQ(property_type_, PropertyType::kClusteringOrder);
     return direction_;
   }
 
-  PTQualifiedName table_name() const {
-    DCHECK_EQ(property_type_, PropertyType::kCoPartitionTable);
-    return *copartition_table_name_;
-  }
-
-  TableId copartition_table_id() const;
-
  protected:
-  bool IsValidProperty(const string& property_name) {
+  bool IsValidProperty(const std::string& property_name) {
     return kPropertyDataTypes.find(property_name) != kPropertyDataTypes.end();
   }
 
@@ -121,16 +107,14 @@ class PTTableProperty : public PTProperty {
   // We just need some default values. These are overridden in various constructors.
   PTOrderBy::Direction direction_ = PTOrderBy::Direction::kASC;
   PropertyType property_type_ = PropertyType::kTableProperty;
-  PTQualifiedName::SharedPtr copartition_table_name_;
-  std::shared_ptr<client::YBTable> copartition_table_;
 
  private:
-  CHECKED_STATUS AnalyzeSpeculativeRetry(const string &val);
+  Status AnalyzeSpeculativeRetry(const std::string &val);
 
   static const std::map<std::string, PTTableProperty::KVProperty> kPropertyDataTypes;
 };
 
-std::ostream& operator<<(ostream& os, const PropertyType& property_type);
+std::ostream& operator<<(std::ostream& os, const PropertyType& property_type);
 
 class PTTablePropertyListNode : public TreeListNode<PTTableProperty> {
  public:
@@ -164,7 +148,7 @@ class PTTablePropertyListNode : public TreeListNode<PTTableProperty> {
     return MCMakeShared<PTTablePropertyListNode>(memctx, std::forward<TypeArgs>(args)...);
   }
 
-  virtual CHECKED_STATUS Analyze(SemContext *sem_context) override;
+  virtual Status Analyze(SemContext *sem_context) override;
 };
 
 class PTTablePropertyMap : public PTTableProperty {
@@ -192,10 +176,10 @@ class PTTablePropertyMap : public PTTableProperty {
   }
 
   // Node semantics analysis.
-  virtual CHECKED_STATUS Analyze(SemContext *sem_context) override;
+  virtual Status Analyze(SemContext *sem_context) override;
   void PrintSemanticAnalysisResult(SemContext *sem_context);
 
-  virtual CHECKED_STATUS SetTableProperty(yb::TableProperties *table_property) const override;
+  virtual Status SetTableProperty(yb::TableProperties *table_property) const override;
 
   void SetPropertyName(MCSharedPtr<MCString> property_name) {
     lhs_ = property_name;
@@ -272,5 +256,3 @@ struct Transactions {
 
 } // namespace ql
 } // namespace yb
-
-#endif // YB_YQL_CQL_QL_PTREE_PT_TABLE_PROPERTY_H_

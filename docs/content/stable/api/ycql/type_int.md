@@ -4,11 +4,10 @@ headerTitle: Integer and counter data types
 linkTitle: Integer and counter
 description: There are several different data types for integers of different value ranges. Integers can be set, inserted, incremented, and decremented.
 menu:
-  stable:
+  stable_api:
     parent: api-cassandra
     weight: 1420
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 ## Synopsis

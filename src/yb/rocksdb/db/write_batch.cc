@@ -58,6 +58,7 @@
 #include "yb/rocksdb/util/statistics.h"
 
 #include "yb/util/stats/perf_step_timer.h"
+#include "yb/util/faststring.h"
 
 namespace rocksdb {
 
@@ -76,27 +77,27 @@ enum ContentFlags : uint32_t {
 struct BatchContentClassifier : public WriteBatch::Handler {
   uint32_t content_flags = 0;
 
-  CHECKED_STATUS PutCF(uint32_t, const SliceParts&, const SliceParts&) override {
+  Status PutCF(uint32_t, const SliceParts&, const SliceParts&) override {
     content_flags |= ContentFlags::HAS_PUT;
     return Status::OK();
   }
 
-  CHECKED_STATUS DeleteCF(uint32_t, const Slice&) override {
+  Status DeleteCF(uint32_t, const Slice&) override {
     content_flags |= ContentFlags::HAS_DELETE;
     return Status::OK();
   }
 
-  CHECKED_STATUS SingleDeleteCF(uint32_t, const Slice&) override {
+  Status SingleDeleteCF(uint32_t, const Slice&) override {
     content_flags |= ContentFlags::HAS_SINGLE_DELETE;
     return Status::OK();
   }
 
-  CHECKED_STATUS MergeCF(uint32_t, const Slice&, const Slice&) override {
+  Status MergeCF(uint32_t, const Slice&, const Slice&) override {
     content_flags |= ContentFlags::HAS_MERGE;
     return Status::OK();
   }
 
-  CHECKED_STATUS Frontiers(const UserFrontiers& range) override {
+  Status Frontiers(const UserFrontiers& range) override {
     content_flags |= ContentFlags::HAS_FRONTIERS;
     return Status::OK();
   }
@@ -104,14 +105,24 @@ struct BatchContentClassifier : public WriteBatch::Handler {
 
 class DirectWriteHandlerImpl : public DirectWriteHandler {
  public:
-  explicit DirectWriteHandlerImpl(MemTable* mem_table, SequenceNumber seq)
-      : mem_table_(mem_table), seq_(seq) {}
+  explicit DirectWriteHandlerImpl(
+      MemTable* mem_table, SequenceNumber seq, WriteBatch::Handler* handler_for_logging)
+      : mem_table_(mem_table), seq_(seq), handler_for_logging_(handler_for_logging) {}
 
-  void Put(const SliceParts& key, const SliceParts& value) override {
+  std::pair<Slice, Slice> Put(const SliceParts& key, const SliceParts& value) override {
+    if (handler_for_logging_) {
+      WARN_NOT_OK(handler_for_logging_->PutCF(0 /* column_family_id */, key, value),
+                  "Logging handler failed on PutCF");
+    }
     Add(ValueType::kTypeValue, key, value);
+    return std::pair(prepared_add_.last_key, prepared_add_.last_value);
   }
 
   void SingleDelete(const Slice& key) override {
+    if (handler_for_logging_) {
+      WARN_NOT_OK(handler_for_logging_->SingleDeleteCF(0 /* column_family_id */, key),
+                  "Logging handler failed on SingleDeleteCF");
+    }
     if (mem_table_->Erase(key)) {
       return;
     }
@@ -141,6 +152,7 @@ class DirectWriteHandlerImpl : public DirectWriteHandler {
 
   MemTable* mem_table_;
   SequenceNumber seq_;
+  WriteBatch::Handler* handler_for_logging_;
   PreparedAdd prepared_add_;
   boost::container::small_vector<KeyHandle, 128> keys_;
 };
@@ -321,7 +333,8 @@ Status ReadRecordFromWriteBatch(Slice* input, char* tag,
   return Status::OK();
 }
 
-Result<size_t> DirectInsert(WriteBatch::Handler* handler, DirectWriter* writer);
+Result<size_t> DirectInsert(
+    WriteBatch::Handler* handler, DirectWriter* writer, WriteBatch::Handler* handler_for_logging);
 
 Status WriteBatch::Iterate(Handler* handler) const {
   Slice input(rep_);
@@ -334,15 +347,19 @@ Status WriteBatch::Iterate(Handler* handler) const {
   size_t found = 0;
   Status s;
 
-  if (frontiers_) {
-    s = handler->Frontiers(*frontiers_);
-  }
   if (s.ok() && direct_writer_) {
-    auto result = DirectInsert(handler, direct_writer_);
+    auto result = DirectInsert(handler, direct_writer_, handler_for_logging_);
     if (result.ok()) {
       direct_entries_ = *result;
     } else {
       s = result.status();
+    }
+  }
+  if (s.ok() && frontiers_) {
+    s = handler->Frontiers(*frontiers_);
+    if (handler_for_logging_) {
+      WARN_NOT_OK(
+          handler_for_logging_->Frontiers(*frontiers_), "Logging handler failed on Frontiers");
     }
   }
   while (s.ok() && !input.empty() && handler->Continue()) {
@@ -361,6 +378,12 @@ Status WriteBatch::Iterate(Handler* handler) const {
         assert(content_flags_.load(std::memory_order_relaxed) &
                (ContentFlags::DEFERRED | ContentFlags::HAS_PUT));
         s = handler->PutCF(column_family, SliceParts(&key, 1), SliceParts(&value, 1));
+        if (handler_for_logging_) {
+          WARN_NOT_OK(
+              handler_for_logging_->PutCF(
+                  column_family, SliceParts(&key, 1), SliceParts(&value, 1)),
+              "Logging handler failed on PutCF");
+        }
         found++;
         break;
       case kTypeColumnFamilyDeletion:
@@ -368,6 +391,11 @@ Status WriteBatch::Iterate(Handler* handler) const {
         assert(content_flags_.load(std::memory_order_relaxed) &
                (ContentFlags::DEFERRED | ContentFlags::HAS_DELETE));
         s = handler->DeleteCF(column_family, key);
+        if (handler_for_logging_) {
+          WARN_NOT_OK(
+              handler_for_logging_->DeleteCF(column_family, key),
+              "Logging handler failed on DeleteCF");
+        }
         found++;
         break;
       case kTypeColumnFamilySingleDeletion:
@@ -375,6 +403,11 @@ Status WriteBatch::Iterate(Handler* handler) const {
         assert(content_flags_.load(std::memory_order_relaxed) &
                (ContentFlags::DEFERRED | ContentFlags::HAS_SINGLE_DELETE));
         s = handler->SingleDeleteCF(column_family, key);
+        if (handler_for_logging_) {
+          WARN_NOT_OK(
+              handler_for_logging_->SingleDeleteCF(column_family, key),
+              "Logging handler failed on SingleDeleteCF");
+        }
         found++;
         break;
       case kTypeColumnFamilyMerge:
@@ -382,10 +415,18 @@ Status WriteBatch::Iterate(Handler* handler) const {
         assert(content_flags_.load(std::memory_order_relaxed) &
                (ContentFlags::DEFERRED | ContentFlags::HAS_MERGE));
         s = handler->MergeCF(column_family, key, value);
+        if (handler_for_logging_) {
+          WARN_NOT_OK(
+              handler_for_logging_->MergeCF(column_family, key, value),
+              "Logging handler failed on MergeCF");
+        }
         found++;
         break;
       case kTypeLogData:
         handler->LogData(blob);
+        if (handler_for_logging_) {
+          handler_for_logging_->LogData(blob);
+        }
         break;
       default:
         return STATUS(Corruption, "unknown WriteBatch tag");
@@ -686,7 +727,7 @@ class MemTableInserter : public WriteBatch::Handler {
     return true;
   }
 
-  CHECKED_STATUS PutCF(
+  Status PutCF(
       uint32_t column_family_id, const SliceParts& key, const SliceParts& value) override {
     Status seek_status;
     if (!SeekToColumnFamily(column_family_id, &seek_status)) {
@@ -748,8 +789,8 @@ class MemTableInserter : public WriteBatch::Handler {
     return Status::OK();
   }
 
-  CHECKED_STATUS DeleteImpl(uint32_t column_family_id, const Slice& key,
-                            ValueType delete_type) {
+  Status DeleteImpl(uint32_t column_family_id, const Slice& key,
+                    ValueType delete_type) {
     Status seek_status;
     if (!SeekToColumnFamily(column_family_id, &seek_status)) {
       ++sequence_;
@@ -785,17 +826,17 @@ class MemTableInserter : public WriteBatch::Handler {
     return Status::OK();
   }
 
-  virtual CHECKED_STATUS DeleteCF(uint32_t column_family_id,
+  virtual Status DeleteCF(uint32_t column_family_id,
                                   const Slice& key) override {
     return DeleteImpl(column_family_id, key, kTypeDeletion);
   }
 
-  virtual CHECKED_STATUS SingleDeleteCF(uint32_t column_family_id,
+  virtual Status SingleDeleteCF(uint32_t column_family_id,
                                         const Slice& key) override {
     return DeleteImpl(column_family_id, key, kTypeSingleDeletion);
   }
 
-  virtual CHECKED_STATUS MergeCF(uint32_t column_family_id, const Slice& key,
+  virtual Status MergeCF(uint32_t column_family_id, const Slice& key,
                                  const Slice& value) override {
     assert(!insert_flags_.Test(InsertFlag::kConcurrentMemtableWrites));
     Status seek_status;
@@ -878,7 +919,7 @@ class MemTableInserter : public WriteBatch::Handler {
     return Status::OK();
   }
 
-  CHECKED_STATUS Frontiers(const UserFrontiers& frontiers) override {
+  Status Frontiers(const UserFrontiers& frontiers) override {
     Status seek_status;
     if (!SeekToColumnFamily(0, &seek_status)) {
       return seek_status;
@@ -970,7 +1011,15 @@ size_t WriteBatchInternal::AppendedByteSize(size_t leftByteSize,
   }
 }
 
-Result<size_t> DirectInsert(WriteBatch::Handler* handler, DirectWriter* writer) {
+Result<size_t> DirectInsert(
+    WriteBatch::Handler* handler, DirectWriter* writer, WriteBatch::Handler* handler_for_logging) {
+#ifndef NDEBUG
+  if (dynamic_cast<MemTableInserter*>(handler) == nullptr) {
+    LOG(FATAL) << "WriteBatch::Iterate cannot be used with write batches using direct writers due "
+                  "to incomplete implementation of direct writers";
+  }
+#endif
+
   auto mem_table_inserter = down_cast<MemTableInserter*>(handler);
   auto* mems = mem_table_inserter->cf_mems_;
   auto current = mems->current();
@@ -979,7 +1028,7 @@ Result<size_t> DirectInsert(WriteBatch::Handler* handler, DirectWriter* writer) 
     current = mems->current();
   }
   DirectWriteHandlerImpl direct_write_handler(
-      current->mem(), mem_table_inserter->sequence_);
+      current->mem(), mem_table_inserter->sequence_, handler_for_logging);
   RETURN_NOT_OK(writer->Apply(&direct_write_handler));
   auto result = direct_write_handler.Complete();
   mem_table_inserter->CheckMemtableFull();

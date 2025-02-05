@@ -29,11 +29,12 @@
 // or implied.  See the License for the specific language governing permissions and limitations
 // under the License.
 //
-#ifndef YB_MASTER_MINI_MASTER_H
-#define YB_MASTER_MINI_MASTER_H
+#pragma once
 
 #include <string>
 #include <vector>
+
+#include "yb/common/hybrid_time.h"
 
 #include "yb/gutil/macros.h"
 #include "yb/gutil/port.h"
@@ -67,23 +68,29 @@ class MiniMaster {
   // Start a master running on the loopback interface and
   // an ephemeral port. To determine the address that the server
   // bound to, call MiniMaster::bound_addr()
-  CHECKED_STATUS Start(bool TEST_simulate_fs_create_failure = false);
+  Status Start(bool TEST_simulate_fs_create_failure = false);
 
   void set_pass_master_addresses(bool value) {
     pass_master_addresses_ = value;
   }
 
-  CHECKED_STATUS StartDistributedMaster(const std::vector<uint16_t>& peer_ports);
+  Status StartDistributedMaster(const std::vector<uint16_t>& peer_ports);
 
-  CHECKED_STATUS WaitForCatalogManagerInit();
+  Status WaitForCatalogManagerInit();
 
-  CHECKED_STATUS WaitUntilCatalogManagerIsLeaderAndReadyForTests();
+  Status WaitUntilCatalogManagerIsLeaderAndReadyForTests();
 
   void Shutdown();
 
   // Restart the master on the same ports as it was previously bound.
   // Requires that the master is currently started.
-  CHECKED_STATUS Restart();
+  Status Restart(bool wait_until_catalog_manager_is_leader = false);
+
+  // Use custom master_addresses, rpc_bind_addresses, and broadcast_addresses.
+  // Warning: this can be used only when starting a master on its own.
+  void SetCustomAddresses(const std::vector<std::string> &master_addresses,
+                          const std::vector<std::string> &rpc_bind_addresses,
+                          const std::vector<std::string> &broadcast_addresses);
 
   HostPort bound_rpc_addr() const;
   Endpoint bound_http_addr() const;
@@ -112,13 +119,17 @@ class MiniMaster {
 
   FsManager& fs_manager() const;
 
+  std::string ToString() const;
+
+  HybridTime Now() const;
+
  private:
-  CHECKED_STATUS StartDistributedMasterOnPorts(uint16_t rpc_port, uint16_t web_port,
+  Status StartDistributedMasterOnPorts(uint16_t rpc_port, uint16_t web_port,
                                        const std::vector<uint16_t>& peer_ports);
 
-  CHECKED_STATUS StartOnPorts(uint16_t rpc_port, uint16_t web_port);
+  Status StartOnPorts(uint16_t rpc_port, uint16_t web_port);
 
-  CHECKED_STATUS StartOnPorts(uint16_t rpc_port, uint16_t web_port,
+  Status StartOnPorts(uint16_t rpc_port, uint16_t web_port,
                       MasterOptions* options);
 
   bool running_;
@@ -131,9 +142,14 @@ class MiniMaster {
   int index_;
   std::unique_ptr<Tunnel> tunnel_;
   bool pass_master_addresses_ = true;
+
+  // Whether to use custom master_addresses, rpc_bind_addresses, and
+  // broadcast_addresses.
+  bool use_custom_addresses_ = false;
+  std::vector<std::string> custom_master_addresses_;
+  std::vector<std::string> custom_rpc_addresses_;
+  std::vector<std::string> custom_broadcast_addresses_;
 };
 
 } // namespace master
 } // namespace yb
-
-#endif /* YB_MASTER_MINI_MASTER_H */

@@ -22,8 +22,11 @@
 #include "yb/yql/cql/ql/ptree/pt_create_table.h"
 #include "yb/yql/cql/ql/ptree/pt_expr.h"
 #include "yb/yql/cql/ql/ptree/sem_context.h"
+#include "yb/util/flags.h"
 
-DEFINE_bool(cql_allow_static_column_index, false,
+using std::string;
+
+DEFINE_UNKNOWN_bool(cql_allow_static_column_index, false,
             "Raise unsupported error when creating an index on static columns");
 
 namespace yb {
@@ -49,7 +52,7 @@ PTColumnDefinition::PTColumnDefinition(MemoryContext *memctx,
 PTColumnDefinition::~PTColumnDefinition() {
 }
 
-CHECKED_STATUS PTColumnDefinition::Analyze(SemContext *sem_context) {
+Status PTColumnDefinition::Analyze(SemContext *sem_context) {
   // When creating INDEX, this node is not yet defined and processed.
   if (!sem_context->processing_column_definition()) {
     return Status::OK();
@@ -98,7 +101,7 @@ PTIndexColumn::PTIndexColumn(MemoryContext *memctx,
 PTIndexColumn::~PTIndexColumn() {
 }
 
-CHECKED_STATUS PTIndexColumn::Analyze(SemContext *sem_context) {
+Status PTIndexColumn::Analyze(SemContext *sem_context) {
   // Seek the table that is being created currently.
   const PTCreateTable* table = sem_context->current_create_table_stmt();
 
@@ -166,13 +169,13 @@ CHECKED_STATUS PTIndexColumn::Analyze(SemContext *sem_context) {
   return Status::OK();
 }
 
-CHECKED_STATUS PTIndexColumn::SetupPrimaryKey(SemContext *sem_context) {
+Status PTIndexColumn::SetupPrimaryKey(SemContext *sem_context) {
   RETURN_NOT_OK(Analyze(sem_context));
   PTCreateTable* table = sem_context->current_create_table_stmt();
   return table->AppendPrimaryColumn(sem_context, coldef_);
 }
 
-CHECKED_STATUS PTIndexColumn::SetupHashKey(SemContext *sem_context) {
+Status PTIndexColumn::SetupHashKey(SemContext *sem_context) {
   RETURN_NOT_OK(Analyze(sem_context));
   PTCreateTable* table = sem_context->current_create_table_stmt();
   return table->AppendHashColumn(sem_context, coldef_);
@@ -182,7 +185,7 @@ std::shared_ptr<QLType> PTIndexColumn::ql_type() const {
   return colexpr_->ql_type();
 }
 
-CHECKED_STATUS PTIndexColumn::SetupCoveringIndexColumn(SemContext *sem_context) {
+Status PTIndexColumn::SetupCoveringIndexColumn(SemContext *sem_context) {
   coldef_ = sem_context->GetColumnDefinition(*name_);
   if (coldef_ && coldef_->colexpr()->opcode() == TreeNodeOpcode::kPTRef) {
     // Ignore as column is already defined as a part of INDEX.

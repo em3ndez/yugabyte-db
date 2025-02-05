@@ -1,6 +1,6 @@
 // Copyright (c) YugaByte, Inc.
 
-import React, { Component } from 'react';
+import { Component } from 'react';
 import { withRouter } from 'react-router';
 import {
   KubernetesProviderConfigurationContainer,
@@ -18,12 +18,12 @@ import openshiftLogo from './images/redhat.png';
 import tanzuLogo from './images/tanzu.png';
 import gcpLogo from './images/gcp.svg';
 import { isAvailable, showOrRedirect } from '../../../utils/LayoutUtils';
+import { NewStorageConfiguration } from '../Storage/StorageConfigurationNew';
 import './DataCenterConfiguration.scss';
 
 class DataCenterConfiguration extends Component {
-
   getTabTitle = (type) => {
-    switch(type) {
+    switch (type) {
       case 'AWS':
         return (
           <div className="title">
@@ -76,20 +76,21 @@ class DataCenterConfiguration extends Component {
       default:
         return null;
     }
-  }
+  };
 
   render() {
     const {
       customer: { currentCustomer },
       params: { tab, section },
-      params
+      params,
+      featureFlags
     } = this.props;
     showOrRedirect(currentCustomer.data.features, 'menu.config');
     const defaultTab = isAvailable(currentCustomer.data.features, 'config.infra')
       ? 'cloud'
       : 'backup';
     const activeTab = tab || defaultTab;
-    const defaultConfig = section || "s3";
+    const defaultConfig = section || 's3';
 
     return (
       <div>
@@ -177,6 +178,12 @@ class DataCenterConfiguration extends Component {
           {isAvailable(currentCustomer.data.features, 'config.security') && (
             <Tab eventKey="security" title="Security" key="security-config">
               <SecurityConfiguration activeTab={section} />
+            </Tab>
+          )}
+          {(featureFlags.test['enableMultiRegionConfig'] ||
+            featureFlags.released['enableMultiRegionConfig']) && (
+            <Tab eventKey="newBackupConfig" title="New Backup Config" key="new-backup-config">
+              <NewStorageConfiguration activeTab={section} />
             </Tab>
           )}
         </YBTabsWithLinksPanel>

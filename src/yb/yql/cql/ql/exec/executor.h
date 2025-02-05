@@ -15,18 +15,19 @@
 // Entry point for the execution process.
 //--------------------------------------------------------------------------------------------------
 
-#ifndef YB_YQL_CQL_QL_EXEC_EXECUTOR_H_
-#define YB_YQL_CQL_QL_EXEC_EXECUTOR_H_
+#pragma once
 
 #include <mutex>
 #include <vector>
 
 #include <rapidjson/document.h>
 
+#include "yb/ash/wait_state_fwd.h"
+
 #include "yb/client/yb_op.h"
 
 #include "yb/common/pgsql_protocol.pb.h"
-#include "yb/common/ql_expr.h"
+#include "yb/qlexpr/ql_expr.h"
 #include "yb/common/ql_type.h"
 
 #include "yb/gutil/callback.h"
@@ -36,6 +37,7 @@
 #include "yb/util/memory/mc_types.h"
 
 #include "yb/yql/cql/ql/exec/exec_fwd.h"
+#include "yb/yql/cql/ql/ptree/column_arg.h"
 #include "yb/yql/cql/ql/ptree/ptree_fwd.h"
 #include "yb/yql/cql/ql/ptree/pt_expr_types.h"
 #include "yb/yql/cql/ql/util/util_fwd.h"
@@ -57,7 +59,7 @@ class AuditLogger;
 
 class QLMetrics;
 
-class Executor : public QLExprExecutor {
+class Executor : public qlexpr::QLExprExecutor {
  public:
   //------------------------------------------------------------------------------------------------
   // Public types.
@@ -91,17 +93,19 @@ class Executor : public QLExprExecutor {
     ResetAsyncCalls(ResetAsyncCalls&& rhs);
     void operator=(ResetAsyncCalls&& rhs);
 
-    bool empty() const {
-      return num_async_calls_ == nullptr;
-    }
-
     void Cancel();
     void Perform();
 
     ~ResetAsyncCalls();
 
    private:
-    std::atomic<int64_t>* num_async_calls_;
+    void PerformUnlocked() REQUIRES(num_async_calls_mutex_);
+
+    // Move the pointer out of this object and return it, and make this object empty.
+    std::atomic<int64_t>* Move() EXCLUDES(num_async_calls_mutex_);
+
+    std::atomic<int64_t>* num_async_calls_ GUARDED_BY(num_async_calls_mutex_);
+    std::mutex num_async_calls_mutex_;
   };
 
   ResetAsyncCalls PrepareExecuteAsync();
@@ -112,15 +116,15 @@ class Executor : public QLExprExecutor {
   // Currently, we don't yet have code generator into byte code, so the following ExecTNode()
   // functions are operating directly on the parse tree.
   // Execute a parse tree.
-  CHECKED_STATUS Execute(const ParseTree& parse_tree, const StatementParameters& params);
+  Status Execute(const ParseTree& parse_tree, const StatementParameters& params);
 
   // Run runtime analysis and prepare for execution within the execution context.
   // Serves for processing things unavailable for initial semantic analysis.
-  CHECKED_STATUS PreExecTreeNode(TreeNode *tnode);
+  Status PreExecTreeNode(TreeNode *tnode);
 
-  CHECKED_STATUS PreExecTreeNode(PTInsertStmt *tnode);
+  Status PreExecTreeNode(PTInsertStmt *tnode);
 
-  CHECKED_STATUS PreExecTreeNode(PTInsertJsonClause *tnode);
+  Status PreExecTreeNode(PTInsertJsonClause *tnode);
 
   // Convert JSON value to an expression acording to its given expected type
   Result<PTExprPtr> ConvertJsonToExpr(const rapidjson::Value& json_value,
@@ -132,74 +136,74 @@ class Executor : public QLExprExecutor {
                                            const YBLocationPtr& loc);
 
   // Execute any TreeNode. This function determines how to execute a node.
-  CHECKED_STATUS ExecTreeNode(const TreeNode *tnode);
+  Status ExecTreeNode(const TreeNode *tnode);
 
   // Execute a list of statements.
-  CHECKED_STATUS ExecPTNode(const PTListNode *tnode);
+  Status ExecPTNode(const PTListNode *tnode);
 
-  CHECKED_STATUS GetOffsetOrLimit(
+  Status GetOffsetOrLimit(
       const PTSelectStmt* tnode,
       const std::function<PTExprPtr(const PTSelectStmt* tnode)>& get_val,
-      const string& clause_type,
+      const std::string& clause_type,
       int32_t* value);
 
   // Create a table (including index table for CREATE INDEX).
-  CHECKED_STATUS ExecPTNode(const PTCreateTable *tnode);
-  CHECKED_STATUS AddColumnToIndexInfo(IndexInfoPB *index_info, const PTColumnDefinition *column);
+  Status ExecPTNode(const PTCreateTable *tnode);
+  Status AddColumnToIndexInfo(IndexInfoPB *index_info, const PTColumnDefinition *column);
 
   // Alter a table.
-  CHECKED_STATUS ExecPTNode(const PTAlterTable *tnode);
+  Status ExecPTNode(const PTAlterTable *tnode);
 
   // Drop a table.
-  CHECKED_STATUS ExecPTNode(const PTDropStmt *tnode);
+  Status ExecPTNode(const PTDropStmt *tnode);
 
   // Create a user-defined type.
-  CHECKED_STATUS ExecPTNode(const PTCreateType *tnode);
+  Status ExecPTNode(const PTCreateType *tnode);
 
   // Creates a role.
-  CHECKED_STATUS ExecPTNode(const PTCreateRole *tnode);
+  Status ExecPTNode(const PTCreateRole *tnode);
 
   // Alter an existing role.
-  CHECKED_STATUS ExecPTNode(const PTAlterRole *tnode);
+  Status ExecPTNode(const PTAlterRole *tnode);
 
   // Grants or revokes a role to another role.
-  CHECKED_STATUS ExecPTNode(const PTGrantRevokeRole* tnode);
+  Status ExecPTNode(const PTGrantRevokeRole* tnode);
 
   // Grants or revokes permissions to resources (roles/tables/keyspaces).
-  CHECKED_STATUS ExecPTNode(const PTGrantRevokePermission* tnode);
+  Status ExecPTNode(const PTGrantRevokePermission* tnode);
 
   // Select statement.
-  CHECKED_STATUS ExecPTNode(const PTSelectStmt *tnode, TnodeContext* tnode_context);
+  Status ExecPTNode(const PTSelectStmt *tnode, TnodeContext* tnode_context);
 
   // Insert statement.
-  CHECKED_STATUS ExecPTNode(const PTInsertStmt *tnode, TnodeContext* tnode_context);
+  Status ExecPTNode(const PTInsertStmt *tnode, TnodeContext* tnode_context);
 
   // Delete statement.
-  CHECKED_STATUS ExecPTNode(const PTDeleteStmt *tnode, TnodeContext* tnode_context);
+  Status ExecPTNode(const PTDeleteStmt *tnode, TnodeContext* tnode_context);
 
   // Update statement.
-  CHECKED_STATUS ExecPTNode(const PTUpdateStmt *tnode, TnodeContext* tnode_context);
+  Status ExecPTNode(const PTUpdateStmt *tnode, TnodeContext* tnode_context);
 
   // Explain statement.
-  CHECKED_STATUS ExecPTNode(const PTExplainStmt *tnode);
+  Status ExecPTNode(const PTExplainStmt *tnode);
 
   // Truncate statement.
-  CHECKED_STATUS ExecPTNode(const PTTruncateStmt *tnode);
+  Status ExecPTNode(const PTTruncateStmt *tnode);
 
   // Start a transaction.
-  CHECKED_STATUS ExecPTNode(const PTStartTransaction *tnode);
+  Status ExecPTNode(const PTStartTransaction *tnode);
 
   // Commit a transaction.
-  CHECKED_STATUS ExecPTNode(const PTCommit *tnode);
+  Status ExecPTNode(const PTCommit *tnode);
 
   // Create a keyspace.
-  CHECKED_STATUS ExecPTNode(const PTCreateKeyspace *tnode);
+  Status ExecPTNode(const PTCreateKeyspace *tnode);
 
   // Use a keyspace.
-  CHECKED_STATUS ExecPTNode(const PTUseKeyspace *tnode);
+  Status ExecPTNode(const PTUseKeyspace *tnode);
 
   // Alter a keyspace.
-  CHECKED_STATUS ExecPTNode(const PTAlterKeyspace *tnode);
+  Status ExecPTNode(const PTAlterKeyspace *tnode);
 
   //------------------------------------------------------------------------------------------------
   // Result processing.
@@ -225,28 +229,26 @@ class Executor : public QLExprExecutor {
   Result<bool> ProcessTnodeResults(TnodeContext* tnode_context);
 
   // Process the status of executing a statement.
-  CHECKED_STATUS ProcessStatementStatus(const ParseTree& parse_tree, const Status& s);
+  Status ProcessStatementStatus(const ParseTree& parse_tree, const Status& s);
 
   // Process the read/write op status.
-  CHECKED_STATUS ProcessOpStatus(const PTDmlStmt* stmt,
-                                 const client::YBqlOpPtr& op,
-                                 ExecContext* exec_context);
-
-  std::shared_ptr<client::YBTable> GetTableFromStatement(const TreeNode *tnode) const;
+  Status ProcessOpStatus(const PTDmlStmt* stmt,
+                         const client::YBqlOpPtr& op,
+                         ExecContext* exec_context);
 
   // Process status of FlushAsyncDone.
   using OpErrors = std::unordered_map<const client::YBqlOp*, Status>;
-  CHECKED_STATUS ProcessAsyncStatus(const OpErrors& op_errors, ExecContext* exec_context);
+  Status ProcessAsyncStatus(const OpErrors& op_errors, ExecContext* exec_context);
 
   // Append rows result.
-  CHECKED_STATUS AppendRowsResult(RowsResult::SharedPtr&& rows_result);
+  Status AppendRowsResult(RowsResult::SharedPtr&& rows_result);
 
   // Read paging state from user's StatementParams.
   Result<QueryPagingState*> LoadPagingStateFromUser(const PTSelectStmt* tnode,
                                                     TnodeContext* tnode_context);
 
   // When request does not need to be executed, create and return empty result (0 row) to users.
-  CHECKED_STATUS GenerateEmptyResult(const PTSelectStmt* tnode);
+  Status GenerateEmptyResult(const PTSelectStmt* tnode);
 
   // Continue a multi-partition select (e.g. table scan or query with 'IN' condition on hash cols).
   Result<bool> FetchMoreRows(const PTSelectStmt* tnode,
@@ -257,28 +259,28 @@ class Executor : public QLExprExecutor {
   // Fetch rows for a select statement using primary keys selected from an uncovered index.
   Result<bool> FetchRowsByKeys(const PTSelectStmt* tnode,
                                const client::YBqlReadOpPtr& select_op,
-                               const QLRowBlock& keys,
+                               const qlexpr::QLRowBlock& keys,
                                TnodeContext* tnode_context);
 
   // Aggregate all result sets from all tablet servers to form the requested resultset.
-  CHECKED_STATUS AggregateResultSets(const PTSelectStmt* pt_select, TnodeContext* tnode_context);
-  CHECKED_STATUS EvalCount(const std::shared_ptr<QLRowBlock>& row_block,
-                           int column_index,
-                           QLValue *ql_value);
-  CHECKED_STATUS EvalMax(const std::shared_ptr<QLRowBlock>& row_block,
-                         int column_index,
-                         QLValue *ql_value);
-  CHECKED_STATUS EvalMin(const std::shared_ptr<QLRowBlock>& row_block,
-                         int column_index,
-                         QLValue *ql_value);
-  CHECKED_STATUS EvalSum(const std::shared_ptr<QLRowBlock>& row_block,
-                         int column_index,
-                         DataType data_type,
-                         QLValue *ql_value);
-  CHECKED_STATUS EvalAvg(const std::shared_ptr<QLRowBlock>& row_block,
-                         int column_index,
-                         DataType data_type,
-                         QLValue *ql_value);
+  Status AggregateResultSets(const PTSelectStmt* pt_select, TnodeContext* tnode_context);
+  Status EvalCount(const std::shared_ptr<qlexpr::QLRowBlock>& row_block,
+                   int column_index,
+                   QLValue *ql_value);
+  Status EvalMax(const std::shared_ptr<qlexpr::QLRowBlock>& row_block,
+                 int column_index,
+                 QLValue *ql_value);
+  Status EvalMin(const std::shared_ptr<qlexpr::QLRowBlock>& row_block,
+                 int column_index,
+                 QLValue *ql_value);
+  Status EvalSum(const std::shared_ptr<qlexpr::QLRowBlock>& row_block,
+                 int column_index,
+                 DataType data_type,
+                 QLValue *ql_value);
+  Status EvalAvg(const std::shared_ptr<qlexpr::QLRowBlock>& row_block,
+                 int column_index,
+                 DataType data_type,
+                 QLValue *ql_value);
 
   // Invoke statement executed callback.
   void StatementExecuted(const Status& s, ResetAsyncCalls* reset_async_calls);
@@ -289,84 +291,84 @@ class Executor : public QLExprExecutor {
   //------------------------------------------------------------------------------------------------
   // Expression evaluation.
 
-  // CHECKED_STATUS EvalTimeUuidExpr(const PTExpr::SharedPtr& expr, EvalTimeUuidValue *result);
-  // CHECKED_STATUS ConvertFromTimeUuid(EvalValue *result, const EvalTimeUuidValue& uuid_value);
-  CHECKED_STATUS PTExprToPB(const PTExprPtr& expr, QLExpressionPB *expr_pb);
+  // Status EvalTimeUuidExpr(const PTExpr::SharedPtr& expr, EvalTimeUuidValue *result);
+  // Status ConvertFromTimeUuid(EvalValue *result, const EvalTimeUuidValue& uuid_value);
+  Status PTExprToPB(const PTExprPtr& expr, QLExpressionPB *expr_pb);
 
   // Constant expressions.
-  CHECKED_STATUS PTConstToPB(const PTExprPtr& const_pt, QLValuePB *const_pb,
-                             bool negate = false);
-  CHECKED_STATUS PTExprToPB(const PTConstVarInt *const_pt, QLValuePB *const_pb, bool negate);
-  CHECKED_STATUS PTExprToPB(const PTConstDecimal *const_pt, QLValuePB *const_pb, bool negate);
-  CHECKED_STATUS PTExprToPB(const PTConstInt *const_pt, QLValuePB *const_pb, bool negate);
-  CHECKED_STATUS PTExprToPB(const PTConstDouble *const_pt, QLValuePB *const_pb, bool negate);
-  CHECKED_STATUS PTExprToPB(const PTConstText *const_pt, QLValuePB *const_pb);
-  CHECKED_STATUS PTExprToPB(const PTConstBool *const_pt, QLValuePB *const_pb);
-  CHECKED_STATUS PTExprToPB(const PTConstUuid *const_pt, QLValuePB *const_pb);
-  CHECKED_STATUS PTExprToPB(const PTConstBinary *const_pt, QLValuePB *const_pb);
+  Status PTConstToPB(const PTExprPtr& const_pt, QLValuePB *const_pb,
+                     bool negate = false);
+  Status PTExprToPB(const PTConstVarInt *const_pt, QLValuePB *const_pb, bool negate);
+  Status PTExprToPB(const PTConstDecimal *const_pt, QLValuePB *const_pb, bool negate);
+  Status PTExprToPB(const PTConstInt *const_pt, QLValuePB *const_pb, bool negate);
+  Status PTExprToPB(const PTConstDouble *const_pt, QLValuePB *const_pb, bool negate);
+  Status PTExprToPB(const PTConstText *const_pt, QLValuePB *const_pb);
+  Status PTExprToPB(const PTConstBool *const_pt, QLValuePB *const_pb);
+  Status PTExprToPB(const PTConstUuid *const_pt, QLValuePB *const_pb);
+  Status PTExprToPB(const PTConstBinary *const_pt, QLValuePB *const_pb);
 
   // Bind variable.
-  CHECKED_STATUS PTExprToPB(const PTBindVar *bind_pt, QLExpressionPB *bind_pb);
+  Status PTExprToPB(const PTBindVar *bind_pt, QLExpressionPB *bind_pb);
 
   // Column types.
-  CHECKED_STATUS PTExprToPB(const PTRef *ref_pt, QLExpressionPB *ref_pb);
-  CHECKED_STATUS PTExprToPB(const PTSubscriptedColumn *ref_pt, QLExpressionPB *ref_pb);
-  CHECKED_STATUS PTExprToPB(const PTJsonColumnWithOperators *ref_pt, QLExpressionPB *ref_pb);
-  CHECKED_STATUS PTExprToPB(const PTAllColumns *ref_all, QLReadRequestPB *req);
+  Status PTExprToPB(const PTRef *ref_pt, QLExpressionPB *ref_pb);
+  Status PTExprToPB(const PTSubscriptedColumn *ref_pt, QLExpressionPB *ref_pb);
+  Status PTExprToPB(const PTJsonColumnWithOperators *ref_pt, QLExpressionPB *ref_pb);
+  Status PTExprToPB(const PTAllColumns *ref_all, QLReadRequestPB *req);
 
   // Operators.
   // There's only one, so call it PTUMinus for now.
-  CHECKED_STATUS PTUMinusToPB(const PTOperator1 *op_pt, QLExpressionPB *op_pb);
-  CHECKED_STATUS PTUMinusToPB(const PTOperator1 *op_pt, QLValuePB *const_pb);
-  CHECKED_STATUS PTJsonOperatorToPB(const PTJsonOperatorPtr& json_pt,
-                                    QLJsonOperationPB *op_pb);
+  Status PTUMinusToPB(const PTOperator1 *op_pt, QLExpressionPB *op_pb);
+  Status PTUMinusToPB(const PTOperator1 *op_pt, QLValuePB *const_pb);
+  Status PTJsonOperatorToPB(const PTJsonOperatorPtr& json_pt,
+                            QLJsonOperationPB *op_pb);
 
   // Builtin calls.
   // Even though BFCall and TSCall are processed similarly in executor at this point because they
   // have similar protobuf, it is best not to merge the two functions "BFCallToPB" and "TSCallToPB"
   // into one. That way, coding changes to one case doesn't affect the other in the future.
-  CHECKED_STATUS PTExprToPB(const PTBcall *bcall_pt, QLExpressionPB *bcall_pb);
-  CHECKED_STATUS BFCallToPB(const PTBcall *bcall_pt, QLExpressionPB *expr_pb);
-  CHECKED_STATUS TSCallToPB(const PTBcall *bcall_pt, QLExpressionPB *expr_pb);
+  Status PTExprToPB(const PTBcall *bcall_pt, QLExpressionPB *bcall_pb);
+  Status BFCallToPB(const PTBcall *bcall_pt, QLExpressionPB *expr_pb);
+  Status TSCallToPB(const PTBcall *bcall_pt, QLExpressionPB *expr_pb);
 
   // Constructors for collection and UDT.
-  CHECKED_STATUS PTExprToPB(const PTCollectionExpr *const_pt, QLValuePB *const_pb);
-  CHECKED_STATUS PTExprToPB(const PTCollectionExpr *expr_pt, QLExpressionPB *expr_pb);
+  Status PTExprToPB(const PTCollectionExpr *const_pt, QLValuePB *const_pb);
+  Status PTExprToPB(const PTCollectionExpr *expr_pt, QLExpressionPB *expr_pb);
 
   // Logic expressions.
-  CHECKED_STATUS PTExprToPB(const PTLogic1 *logic_pt, QLExpressionPB *logic_pb);
-  CHECKED_STATUS PTExprToPB(const PTLogic2 *logic_pt, QLExpressionPB *logic_pb);
+  Status PTExprToPB(const PTLogic1 *logic_pt, QLExpressionPB *logic_pb);
+  Status PTExprToPB(const PTLogic2 *logic_pt, QLExpressionPB *logic_pb);
 
   // Relation expressions.
-  CHECKED_STATUS PTExprToPB(const PTRelation0 *relation_pt, QLExpressionPB *relation_pb);
-  CHECKED_STATUS PTExprToPB(const PTRelation1 *relation_pt, QLExpressionPB *relation_pb);
-  CHECKED_STATUS PTExprToPB(const PTRelation2 *relation_pt, QLExpressionPB *relation_pb);
-  CHECKED_STATUS PTExprToPB(const PTRelation3 *relation_pt, QLExpressionPB *relation_pb);
+  Status PTExprToPB(const PTRelation0 *relation_pt, QLExpressionPB *relation_pb);
+  Status PTExprToPB(const PTRelation1 *relation_pt, QLExpressionPB *relation_pb);
+  Status PTExprToPB(const PTRelation2 *relation_pt, QLExpressionPB *relation_pb);
+  Status PTExprToPB(const PTRelation3 *relation_pt, QLExpressionPB *relation_pb);
 
   //------------------------------------------------------------------------------------------------
 
   // Set the time to live for the values affected by the current write request.
-  CHECKED_STATUS TtlToPB(const PTDmlStmt *tnode, QLWriteRequestPB *req);
+  Status TtlToPB(const PTDmlStmt *tnode, QLWriteRequestPB *req);
 
   // Set the timestamp for the values affected by the current write request.
-  CHECKED_STATUS TimestampToPB(const PTDmlStmt *tnode, QLWriteRequestPB *req);
+  Status TimestampToPB(const PTDmlStmt *tnode, QLWriteRequestPB *req);
 
   // Convert PTExpr to appropriate QLExpressionPB with appropriate validation.
-  CHECKED_STATUS PTExprToPBValidated(const PTExprPtr& expr, QLExpressionPB *expr_pb);
+  Status PTExprToPBValidated(const PTExprPtr& expr, QLExpressionPB *expr_pb);
 
   //------------------------------------------------------------------------------------------------
   // Column evaluation.
 
   // Convert column references to protobuf.
-  CHECKED_STATUS ColumnRefsToPB(const PTDmlStmt *tnode, QLReferencedColumnsPB *columns_pb);
+  Status ColumnRefsToPB(const PTDmlStmt *tnode, QLReferencedColumnsPB *columns_pb);
 
   // Convert column arguments to protobuf.
-  CHECKED_STATUS ColumnArgsToPB(const PTDmlStmt *tnode, QLWriteRequestPB *req);
+  Status ColumnArgsToPB(const PTDmlStmt *tnode, QLWriteRequestPB *req);
 
   // Convert INSERT JSON clause to protobuf.
-  CHECKED_STATUS InsertJsonClauseToPB(const PTInsertStmt *insert_stmt,
-                                      const PTInsertJsonClause *json_clause,
-                                      QLWriteRequestPB *req);
+  Status InsertJsonClauseToPB(const PTInsertStmt *insert_stmt,
+                              const PTInsertJsonClause *json_clause,
+                              QLWriteRequestPB *req);
 
   //------------------------------------------------------------------------------------------------
   // Where clause evaluation.
@@ -375,6 +377,7 @@ class Executor : public QLExprExecutor {
   Result<uint64_t> WhereClauseToPB(QLReadRequestPB *req,
                                    const MCVector<ColumnOp>& key_where_ops,
                                    const MCList<ColumnOp>& where_ops,
+                                   const MCList<MultiColumnOp>& multi_col_where_ops,
                                    const MCList<SubscriptedColumnOp>& subcol_where_ops,
                                    const MCList<JsonColumnOp>& jsoncol_where_ops,
                                    const MCList<PartitionKeyOp>& partition_key_ops,
@@ -382,26 +385,27 @@ class Executor : public QLExprExecutor {
                                    TnodeContext* tnode_context);
 
   // Convert where clause to protobuf for write request.
-  CHECKED_STATUS WhereClauseToPB(QLWriteRequestPB *req,
-                                 const MCVector<ColumnOp>& key_where_ops,
-                                 const MCList<ColumnOp>& where_ops,
-                                 const MCList<SubscriptedColumnOp>& subcol_where_ops);
+  Status WhereClauseToPB(QLWriteRequestPB *req,
+                         const MCVector<ColumnOp>& key_where_ops,
+                         const MCList<ColumnOp>& where_ops,
+                         const MCList<SubscriptedColumnOp>& subcol_where_ops);
 
   // Set a primary key in a read request.
-  CHECKED_STATUS WhereKeyToPB(QLReadRequestPB *req, const Schema& schema, const QLRow& key);
+  Status WhereKeyToPB(QLReadRequestPB *req, const Schema& schema, const qlexpr::QLRow& key);
 
   // Convert an expression op in where clause to protobuf.
-  CHECKED_STATUS WhereOpToPB(QLConditionPB *condition, const ColumnOp& col_op);
-  CHECKED_STATUS WhereSubColOpToPB(QLConditionPB *condition, const SubscriptedColumnOp& subcol_op);
-  CHECKED_STATUS WhereJsonColOpToPB(QLConditionPB *condition, const JsonColumnOp& jsoncol_op);
-  CHECKED_STATUS FuncOpToPB(QLConditionPB *condition, const FuncOp& func_op);
+  Status WhereColumnOpToPB(QLConditionPB *condition, const ColumnOp &col_op);
+  Status WhereMultiColumnOpToPB(QLConditionPB *condition, const MultiColumnOp &col_op);
+  Status WhereSubColOpToPB(QLConditionPB *condition, const SubscriptedColumnOp& subcol_op);
+  Status WhereJsonColOpToPB(QLConditionPB *condition, const JsonColumnOp& jsoncol_op);
+  Status FuncOpToPB(QLConditionPB *condition, const FuncOp& func_op);
 
   //------------------------------------------------------------------------------------------------
   // Add a read/write operation for the current statement and apply it. For write operation, check
   // for inter-dependency before applying. If it is a write operation to a table with secondary
   // indexes, update them as needed.
   void AddOperation(const client::YBqlReadOpPtr& op, TnodeContext *tnode_context);
-  CHECKED_STATUS AddOperation(const client::YBqlWriteOpPtr& op, TnodeContext *tnode_context);
+  Status AddOperation(const client::YBqlWriteOpPtr& op, TnodeContext *tnode_context);
 
   // Is this a batch returning status?
   bool IsReturnsStatusBatch() const {
@@ -409,12 +413,12 @@ class Executor : public QLExprExecutor {
   }
 
   //------------------------------------------------------------------------------------------------
-  CHECKED_STATUS UpdateIndexes(const PTDmlStmt *tnode,
-                               QLWriteRequestPB *req,
-                               TnodeContext* tnode_context);
-  CHECKED_STATUS AddIndexWriteOps(const PTDmlStmt *tnode,
-                                  const QLWriteRequestPB& req,
-                                  TnodeContext* tnode_context);
+  Status UpdateIndexes(const PTDmlStmt *tnode,
+                       QLWriteRequestPB *req,
+                       TnodeContext* tnode_context);
+  Status AddIndexWriteOps(const PTDmlStmt *tnode,
+                          const QLWriteRequestPB& req,
+                          TnodeContext* tnode_context);
 
   int64_t num_async_calls() const {
     return num_async_calls_.load(std::memory_order_acquire);
@@ -505,6 +509,7 @@ class Executor : public QLExprExecutor {
 
     Executor* executor_ = nullptr;
     ResetAsyncCalls reset_async_calls_{nullptr};
+    ash::WaitStateInfoPtr wait_state_{nullptr};
   };
 
   class ProcessAsyncResultsTask : public ExecutorTask {
@@ -539,5 +544,3 @@ QLExpressionPB* CreateQLExpression(QLWriteRequestPB *req, const ColumnDesc& col_
 
 }  // namespace ql
 }  // namespace yb
-
-#endif  // YB_YQL_CQL_QL_EXEC_EXECUTOR_H_

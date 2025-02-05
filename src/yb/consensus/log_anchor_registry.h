@@ -29,14 +29,13 @@
 // or implied.  See the License for the specific language governing permissions and limitations
 // under the License.
 //
-#ifndef YB_CONSENSUS_LOG_ANCHOR_REGISTRY_H
-#define YB_CONSENSUS_LOG_ANCHOR_REGISTRY_H
+#pragma once
 
 #include <map>
 #include <shared_mutex>
 #include <string>
 
-#include <gflags/gflags_declare.h>
+#include "yb/util/flags.h"
 #include <gtest/gtest_prod.h>
 
 #include "yb/consensus/log_fwd.h"
@@ -72,19 +71,19 @@ class LogAnchorRegistry : public RefCountedThreadSafe<LogAnchorRegistry> {
   // Before: anchor must be registered with some log index.
   // After: anchor is now registered using index 'log_index'.
   // See Register().
-  CHECKED_STATUS UpdateRegistration(int64_t log_index, LogAnchor* anchor);
+  Status UpdateRegistration(int64_t log_index, LogAnchor* anchor);
 
   // Release the anchor on a log index.
   // Note: anchor must be the original pointer passed to Register().
-  CHECKED_STATUS Unregister(LogAnchor* anchor);
+  Status Unregister(LogAnchor* anchor);
 
   // Release the anchor on a log index if it is registered.
   // Otherwise, do nothing.
-  CHECKED_STATUS UnregisterIfAnchored(LogAnchor* anchor);
+  Status UnregisterIfAnchored(LogAnchor* anchor);
 
   // Query the registry to find the earliest anchored log index in the registry.
   // Returns Status::NotFound if no anchors are currently active.
-  CHECKED_STATUS GetEarliestRegisteredLogIndex(int64_t* op_id);
+  Status GetEarliestRegisteredLogIndex(int64_t* op_id);
 
   // Simply returns the number of active anchors for use in debugging / tests.
   // This is _not_ a constant-time operation.
@@ -103,7 +102,7 @@ class LogAnchorRegistry : public RefCountedThreadSafe<LogAnchorRegistry> {
   void RegisterUnlocked(int64_t log_index, const std::string& owner, LogAnchor* anchor);
 
   // Unregister an anchor after taking the lock. See Unregister().
-  CHECKED_STATUS UnregisterUnlocked(LogAnchor* anchor);
+  Status UnregisterUnlocked(LogAnchor* anchor);
 
   AnchorMultiMap anchors_;
   mutable simple_spinlock lock_;
@@ -117,6 +116,10 @@ struct LogAnchor {
  public:
   LogAnchor();
   ~LogAnchor();
+
+  int64_t index() const {
+    return log_index;
+  }
 
  private:
   FRIEND_TEST(LogTest, TestGCWithLogRunning);
@@ -142,5 +145,3 @@ struct LogAnchor {
 
 } // namespace log
 } // namespace yb
-
-#endif // YB_CONSENSUS_LOG_ANCHOR_REGISTRY_H

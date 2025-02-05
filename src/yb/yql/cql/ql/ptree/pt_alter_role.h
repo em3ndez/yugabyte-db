@@ -15,8 +15,7 @@
 // Tree node definitions for ALTER ROLE statement.
 //--------------------------------------------------------------------------------------------------
 
-#ifndef YB_YQL_CQL_QL_PTREE_PT_ALTER_ROLE_H
-#define YB_YQL_CQL_QL_PTREE_PT_ALTER_ROLE_H
+#pragma once
 
 #include <boost/optional.hpp>
 
@@ -60,7 +59,7 @@ class PTAlterRole : public TreeNode {
   }
 
   // Node semantics analysis.
-  virtual CHECKED_STATUS Analyze(SemContext* sem_context) override;
+  virtual Status Analyze(SemContext* sem_context) override;
   void PrintSemanticAnalysisResult(SemContext* sem_context);
 
   // Role name.
@@ -95,5 +94,3 @@ class PTAlterRole : public TreeNode {
 
 }  // namespace ql
 }  // namespace yb
-
-#endif // YB_YQL_CQL_QL_PTREE_PT_ALTER_ROLE_H

@@ -13,27 +13,31 @@ package com.yugabyte.yw.commissioner.tasks;
 import static com.yugabyte.yw.common.Util.areMastersUnderReplicated;
 
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableSet;
 import com.yugabyte.yw.commissioner.BaseTaskDependencies;
+import com.yugabyte.yw.commissioner.ITask.Retryable;
 import com.yugabyte.yw.commissioner.UserTaskDetails.SubTaskGroupType;
 import com.yugabyte.yw.commissioner.tasks.params.NodeTaskParams;
 import com.yugabyte.yw.common.DnsManager;
 import com.yugabyte.yw.common.PlacementInfoUtil;
+import com.yugabyte.yw.common.config.UniverseConfKeys;
 import com.yugabyte.yw.forms.UniverseDefinitionTaskParams;
-import com.yugabyte.yw.forms.VMImageUpgradeParams.VmUpgradeTaskType;
 import com.yugabyte.yw.models.Universe;
 import com.yugabyte.yw.models.helpers.NodeDetails;
+import com.yugabyte.yw.models.helpers.NodeDetails.MasterState;
 import com.yugabyte.yw.models.helpers.NodeDetails.NodeState;
-import java.util.Arrays;
-import java.util.HashSet;
+import com.yugabyte.yw.models.helpers.NodeStatus;
+import java.util.Set;
 import javax.inject.Inject;
 import lombok.extern.slf4j.Slf4j;
-import org.apache.commons.lang.StringUtils;
+import org.apache.commons.lang3.StringUtils;
 
 /**
  * Class contains the tasks to start a node in a given universe. It starts the tserver process and
  * the master process if needed.
  */
 @Slf4j
+@Retryable
 public class StartNodeInUniverse extends UniverseDefinitionTaskBase {
 
   @Inject
@@ -47,36 +51,61 @@ public class StartNodeInUniverse extends UniverseDefinitionTaskBase {
   }
 
   @Override
+  public void validateParams(boolean isFirstTry) {
+    super.validateParams(isFirstTry);
+    Universe universe = getUniverse();
+    NodeDetails currentNode = universe.getNode(taskParams().nodeName);
+    if (currentNode == null) {
+      String msg = "No node " + taskParams().nodeName + " found in universe " + universe.getName();
+      log.error(msg);
+      throw new RuntimeException(msg);
+    }
+  }
+
+  @Override
+  protected void createPrecheckTasks(Universe universe) {
+    // Check again after locking.
+    NodeDetails currentNode = universe.getNode(taskParams().nodeName);
+    if (currentNode == null) {
+      String msg = "No node " + taskParams().nodeName + " found in universe " + universe.getName();
+      log.error(msg);
+      throw new RuntimeException(msg);
+    }
+    taskParams().azUuid = currentNode.azUuid;
+    taskParams().placementUuid = currentNode.placementUuid;
+    if (!instanceExists(taskParams())) {
+      String msg = "No instance exists for " + taskParams().nodeName;
+      log.error(msg);
+      throw new RuntimeException(msg);
+    }
+    if (isFirstTry()) {
+      verifyClustersConsistency(Set.of(taskParams().nodeName));
+    }
+  }
+
   public void run() {
-    NodeDetails currentNode = null;
+    log.info(
+        "Start Node with name {} from universe uuid={}",
+        taskParams().nodeName,
+        taskParams().getUniverseUUID());
+    checkUniverseVersion();
+    Universe universe =
+        lockAndFreezeUniverseForUpdate(
+            taskParams().expectedUniverseVersion, null /* Txn callback */);
+
     try {
-      checkUniverseVersion();
-      // Set the 'updateInProgress' flag to prevent other updates from happening.
-      Universe universe = lockUniverseForUpdate(taskParams().expectedUniverseVersion);
-      log.info(
-          "Start Node with name {} from universe {} ({})",
-          taskParams().nodeName,
-          taskParams().universeUUID,
-          universe.name);
+      NodeDetails currentNode = universe.getNode(taskParams().nodeName);
+      UniverseDefinitionTaskParams.Cluster cluster = universe.getCluster(currentNode.placementUuid);
+      boolean followerLagCheckEnabled =
+          confGetter.getConfForScope(universe, UniverseConfKeys.followerLagCheckEnabled);
 
-      currentNode = universe.getNode(taskParams().nodeName);
-      if (currentNode == null) {
-        String msg = "No node " + taskParams().nodeName + " found in universe " + universe.name;
-        log.error(msg);
-        throw new RuntimeException(msg);
-      }
-
+      // Set again just in case not populated in validateParams().
       taskParams().azUuid = currentNode.azUuid;
       taskParams().placementUuid = currentNode.placementUuid;
-      if (!instanceExists(taskParams())) {
-        String msg = "No instance exists for " + taskParams().nodeName;
-        log.error(msg);
-        throw new RuntimeException(msg);
-      }
 
       preTaskActions();
 
-      // Update node state to Starting
+      // Update node state to Starting.
       createSetNodeStateTask(currentNode, NodeState.Starting)
           .setSubTaskGroupType(SubTaskGroupType.StartingNodeProcesses);
 
@@ -84,77 +113,77 @@ public class StartNodeInUniverse extends UniverseDefinitionTaskBase {
       // - Masters should be under replicated;
       // - If GP is on, currentNode should be in default region (when GP and default
       // region is defined, we can have masters only in the default region).
-      boolean masterAdded = false;
       String defaultRegionCode = PlacementInfoUtil.getDefaultRegionCode(taskParams());
-      if (areMastersUnderReplicated(currentNode, universe)
-          && ((defaultRegionCode == null)
-              || StringUtils.equals(defaultRegionCode, currentNode.cloudInfo.region))) {
-        // Clean the master addresses in the conf file for the current node so that
-        // the master comes up as a shell master.
-        createConfigureServerTasks(
-                ImmutableList.of(currentNode),
-                true /* isShell */,
-                true /* updateMasterAddrs */,
-                true /* isMaster */)
-            .setSubTaskGroupType(SubTaskGroupType.ConfigureUniverse);
+      boolean startMaster =
+          areMastersUnderReplicated(currentNode, universe)
+              && (defaultRegionCode == null
+                  || StringUtils.equals(defaultRegionCode, currentNode.cloudInfo.region));
 
-        // Set gflags for master.
-        createGFlagsOverrideTasks(
-            ImmutableList.of(currentNode),
-            ServerType.MASTER,
-            true /*isShell */,
-            VmUpgradeTaskType.None,
-            false /*ignoreUseCustomImageConfig*/);
-
-        // Start a master process.
-        createStartMasterTasks(new HashSet<NodeDetails>(Arrays.asList(currentNode)))
-            .setSubTaskGroupType(SubTaskGroupType.StartingNodeProcesses);
-
-        // Mark node as isMaster in YW DB.
-        createUpdateNodeProcessTask(taskParams().nodeName, ServerType.MASTER, true /* isAdd */)
-            .setSubTaskGroupType(SubTaskGroupType.StartingNodeProcesses);
-
-        // Wait for the master to be responsive.
-        createWaitForServersTasks(
-                new HashSet<NodeDetails>(Arrays.asList(currentNode)), ServerType.MASTER)
-            .setSubTaskGroupType(SubTaskGroupType.ConfigureUniverse);
-
-        // Add stopped master to the quorum.
-        createChangeConfigTask(currentNode, true /* isAdd */, SubTaskGroupType.ConfigureUniverse);
-
-        masterAdded = true;
+      if (!startMaster
+          && (currentNode.masterState == MasterState.ToStart
+              || currentNode.masterState == MasterState.Configured)) {
+        // Make sure that the non under-replicated case is caused by this master.
+        startMaster = currentNode.isMaster;
       }
 
-      // Start the tserver process
-      createTServerTaskForNode(currentNode, "start")
+      boolean startTserver = true;
+      if (cluster.userIntent.dedicatedNodes) {
+        startTserver = currentNode.dedicatedTo == ServerType.TSERVER;
+        startMaster = !startTserver;
+      }
+
+      final Set<NodeDetails> nodeCollection = ImmutableSet.of(currentNode);
+
+      // Make sure clock skew is low enough on the node.
+      createWaitForClockSyncTasks(universe, nodeCollection)
           .setSubTaskGroupType(SubTaskGroupType.StartingNodeProcesses);
 
-      // Mark the node process flags as true.
-      createUpdateNodeProcessTask(taskParams().nodeName, ServerType.TSERVER, true /* isAdd */)
-          .setSubTaskGroupType(SubTaskGroupType.StartingNodeProcesses);
+      if (startMaster) {
+        if (currentNode.masterState == null) {
+          saveNodeStatus(
+              taskParams().nodeName, NodeStatus.builder().masterState(MasterState.ToStart).build());
+        }
+        createStartMasterOnNodeTasks(
+            universe, currentNode, null, false /* stoppable */, false /* ignoreStopError */);
+      }
 
-      // Wait for the tablet server to be responsive.
-      createWaitForServersTasks(
-              new HashSet<NodeDetails>(Arrays.asList(currentNode)), ServerType.TSERVER)
-          .setSubTaskGroupType(SubTaskGroupType.StartingNodeProcesses);
+      if (startTserver) {
+        // Update master addresses for tservers.
+        createConfigureServerTasks(nodeCollection, params -> params.updateMasterAddrsOnly = true)
+            .setSubTaskGroupType(SubTaskGroupType.StartingNodeProcesses);
+        // Start tservers on tserver nodes.
+        createStartTserverProcessTasks(nodeCollection, cluster.userIntent.enableYSQL);
 
-      if (masterAdded) {
-        // Update all server conf files with new master information.
-        createMasterInfoUpdateTask(universe, currentNode);
+        if (followerLagCheckEnabled) {
+          createCheckFollowerLagTask(currentNode, ServerType.TSERVER)
+              .setSubTaskGroupType(SubTaskGroupType.StartingNodeProcesses);
+        }
+      }
 
-        // Update the master addresses on the target universes whose source universe belongs to
-        // this task.
-        createXClusterConfigUpdateMasterAddressesTask();
+      // Start yb-controller process
+      if (universe.isYbcEnabled()) {
+        createStartYbcTasks(nodeCollection)
+            .setSubTaskGroupType(SubTaskGroupType.StartingNodeProcesses);
+
+        // Wait for yb-controller to be responsive on each node.
+        createWaitForYbcServerTask(nodeCollection)
+            .setSubTaskGroupType(SubTaskGroupType.ConfigureUniverse);
       }
 
       // Update node state to running
       createSetNodeStateTask(currentNode, NodeDetails.NodeState.Live)
           .setSubTaskGroupType(SubTaskGroupType.StartingNode);
 
+      // Add node to load balancer.
+      createManageLoadBalancerTasks(
+          createLoadBalancerMap(
+              universe.getUniverseDetails(),
+              ImmutableList.of(cluster),
+              null,
+              ImmutableSet.of(currentNode)));
+
       // Update the DNS entry for this universe.
-      UniverseDefinitionTaskParams.UserIntent userIntent =
-          universe.getUniverseDetails().getClusterByUuid(currentNode.placementUuid).userIntent;
-      createDnsManipulationTask(DnsManager.DnsCommandType.Edit, false, userIntent)
+      createDnsManipulationTask(DnsManager.DnsCommandType.Edit, false, universe)
           .setSubTaskGroupType(SubTaskGroupType.StartingNode);
 
       // Update the swamper target file.
@@ -168,10 +197,6 @@ public class StartNodeInUniverse extends UniverseDefinitionTaskBase {
       getRunnableTask().runSubTasks();
     } catch (Throwable t) {
       log.error("Error executing task {}, error='{}'", getName(), t.getMessage(), t);
-      // Reset the state, on any failure, so that the actions can be retried.
-      if (currentNode != null) {
-        setNodeState(taskParams().nodeName, currentNode.state);
-      }
       throw t;
     } finally {
       unlockUniverseForUpdate();

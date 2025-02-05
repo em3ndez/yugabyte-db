@@ -4,14 +4,13 @@ headerTitle: DROP TYPE
 linkTitle: DROP TYPE
 description: Use the DROP TYPE statement to remove an existing user-defined data type.
 menu:
-  preview:
+  preview_api:
     parent: api-cassandra
     weight: 1280
 aliases:
   - /preview/api/cassandra/ddl_drop_type
   - /preview/api/ycql/ddl_drop_type
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 ## Synopsis
@@ -26,9 +25,10 @@ Use the `DROP TYPE` statement to remove an existing user-defined data type.
 
 ### Grammar
 
-```
+```ebnf
 drop_type ::= DROP TYPE [ IF EXISTS ] type_name;
 ```
+
 Where
 
 - `type_name` is an identifier (possibly qualified with a keyspace name).
@@ -51,4 +51,4 @@ ycqlsh:example> DROP TYPE person;
 ## See also
 
 - [`CREATE TABLE`](../ddl_create_table)
-- [`DROP TYPE`](../ddl_drop_keyspace)
+- [`DROP KEYSPACE`](../ddl_drop_keyspace)

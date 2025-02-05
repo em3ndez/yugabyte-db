@@ -11,8 +11,7 @@
 // under the License.
 //
 
-#ifndef YB_YQL_REDIS_REDISSERVER_REDIS_COMMANDS_H
-#define YB_YQL_REDIS_REDISSERVER_REDIS_COMMANDS_H
+#pragma once
 
 #include <functional>
 #include <string>
@@ -61,7 +60,7 @@ class RedisServiceData {
       const std::string& channel, const std::string& message, const IntFunctor& f) = 0;
 
   // Used for Auth.
-  virtual CHECKED_STATUS GetRedisPasswords(std::vector<std::string>* passwords) = 0;
+  virtual Status GetRedisPasswords(std::vector<std::string>* passwords) = 0;
 
   // Used for Select.
   virtual yb::Result<std::shared_ptr<client::YBTable>> GetYBTableForDB(
@@ -138,7 +137,7 @@ void FillRedisCommands(const scoped_refptr<MetricEntity>& metric_entity,
     BOOST_PP_CAT(METRIC_handler_latency_yb_redisserver_RedisServerService_, name)
 
 #define DEFINE_REDIS_histogram_EX(name_identifier, label_str, desc_str) \
-  METRIC_DEFINE_histogram_with_percentiles( \
+  METRIC_DEFINE_histogram( \
       server, BOOST_PP_CAT(handler_latency_yb_redisserver_RedisServerService_, name_identifier), \
       (label_str), yb::MetricUnit::kMicroseconds, \
       "Microseconds spent handling " desc_str " RPC requests", \
@@ -152,5 +151,3 @@ void FillRedisCommands(const scoped_refptr<MetricEntity>& metric_entity,
 
 } // namespace redisserver
 } // namespace yb
-
-#endif // YB_YQL_REDIS_REDISSERVER_REDIS_COMMANDS_H

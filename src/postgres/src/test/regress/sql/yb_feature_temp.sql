@@ -296,7 +296,16 @@ SELECT pg_sleep(10);
 CREATE TEMP TABLE temptest (k int PRIMARY KEY, v1 int, v2 int);
 CREATE UNIQUE INDEX ON temptest (v1);
 CREATE INDEX ON temptest USING hash (v2);
+
+-- \d temptest has unstable output as the temporary schemaname contains
+-- the tserver uuid. Use regexp_replace to change it to pg_temp_x so that the
+-- result is stable.
+select current_setting('data_directory') || 'describe.out' as desc_output_file
+\gset
+\o :desc_output_file
 \d temptest
+\o
+select regexp_replace(pg_read_file(:'desc_output_file'), 'pg_temp_.{32}_\d+', 'pg_temp_x', 'g');
 
 INSERT INTO temptest VALUES (1, 2, 3), (4, 5, 6);
 INSERT INTO temptest VALUES (2, 2, 3);
@@ -339,3 +348,20 @@ CREATE temp TABLE t4(c0 DECIMAL NULL, UNIQUE(c0));
 INSERT INTO t4(c0) VALUES(0.03);
 UPDATE t4 SET c0 = (0.05) WHERE t4.c0 = 0.03;
 SELECT ALL t4.c0 FROM t4 ORDER BY t4.c0 ASC;
+
+CREATE TEMP TABLE tempt (k int PRIMARY KEY, v1 int, v2 int);
+CREATE UNIQUE INDEX ON tempt (v1);
+INSERT INTO tempt VALUES (1, 2, 3), (4, 5, 6);
+INSERT INTO tempt VALUES (2, 2, 3);
+SELECT * FROM tempt ORDER BY k;
+
+-- types in temp schema
+set search_path = pg_temp, public;
+create domain pg_temp.nonempty as text check (value <> '');
+-- function-syntax invocation of types matches rules for functions
+select nonempty('');
+select pg_temp.nonempty('');
+-- other syntax matches rules for tables
+select ''::nonempty;
+
+reset search_path;

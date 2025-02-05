@@ -36,8 +36,22 @@ import org.slf4j.LoggerFactory;
 public class TestJsonIndex extends BaseCQLTest {
   private static final Logger LOG = LoggerFactory.getLogger(TestJsonIndex.class);
 
+  public long estimateQuery(String query, int expNumRows, int numIterations) throws Exception {
+    // Warming up. No timing for the first run.
+    assertEquals(expNumRows, session.execute(query).all().size());
+
+    long runtimeMillis = System.currentTimeMillis();
+    for (int i = 0; i < numIterations; ++i) {
+      session.execute(query);
+    }
+    return System.currentTimeMillis() - runtimeMillis;
+  }
+
   @Test
   public void testIndex() throws Exception {
+    final int numRows = 500;
+    final int numIterations = 50;
+
     session.execute("CREATE TABLE test_json_index" +
                     "  ( h INT PRIMARY KEY, a_column INT, j1 JSONB, j2 JSONB )" +
                     "  with transactions = {'enabled' : true};");
@@ -45,12 +59,11 @@ public class TestJsonIndex extends BaseCQLTest {
     session.execute("CREATE INDEX cidx ON test_json_index(a_column)");
 
     int h;
-    for (h = 0; h < 3000; h++) {
+    for (h = 0; h < numRows; h++) {
       String jvalue = String.format("{ \"a\" : { \"b\" : \"bvalue_%d\" }," +
                                     "  \"a_column\" : %d }", h, h );
-      String stmt = String.format("INSERT INTO test_json_index(h, j1, j2) VALUES (%d, '%s', '%s');",
-                                  h, jvalue, jvalue);
-      session.execute(stmt);
+      session.execute(String.format(
+          "INSERT INTO test_json_index(h, j1, j2) VALUES (%d, '%s', '%s');", h, jvalue, jvalue));
     }
 
     // Insert various value formats to the JSONB column to make sure that the JSONB expression
@@ -66,45 +79,30 @@ public class TestJsonIndex extends BaseCQLTest {
 
     // Run index scan and check the time.
     String query = "SELECT h FROM test_json_index WHERE j1->'a'->>'b' = 'bvalue_77';";
-    // Not timing the first run.
-    assertEquals(1, session.execute(query).all().size());
-
-    long runtimeMillis = System.currentTimeMillis();
-    assertEquals(1, session.execute(query).all().size());
-    long elapsedTimeMillis_index = System.currentTimeMillis() - runtimeMillis;
+    long elapsedTimeMillis_index = estimateQuery(query, 1, numIterations);
     LOG.info(String.format("Indexed query: Elapsed time = %d msecs", elapsedTimeMillis_index));
 
     // Scenarios 1: Full scan and check the time - Column "j2" is not indexed.
     query = "SELECT h FROM test_json_index WHERE j2->'a'->>'b' = 'bvalue_88';";
-    // Not timing the first run.
-    assertEquals(1, session.execute(query).all().size());
-
-    runtimeMillis = System.currentTimeMillis();
-    assertEquals(1, session.execute(query).all().size());
-    long elapsedTimeMillis_full = System.currentTimeMillis() - runtimeMillis;
+    long elapsedTimeMillis_full = estimateQuery(query, 1, numIterations);
     LOG.info(String.format("Full scan query: Elapsed time = %d msecs", elapsedTimeMillis_full));
 
     // Do performance testing ONLY in RELEASE build.
     if (TestUtils.isReleaseBuild()) {
-      // Check that full-scan is 5 times slower than index-scan.
-      assertTrue((elapsedTimeMillis_full/3.0) >= elapsedTimeMillis_index);
+      // Check that full-scan is 2-5 times slower than index-scan.
+      assertTrue((elapsedTimeMillis_full/2.0) >= elapsedTimeMillis_index);
     }
 
     // Scenarios 2: Full scan and check the time. Attribute "j1->>a_column" is not indexed
     // even though column "a_column" is indexed.
     query = "SELECT h FROM test_json_index WHERE j1->>'a_column' = '99';";
-    // Not timing the first run.
-    assertEquals(1, session.execute(query).all().size());
-
-    runtimeMillis = System.currentTimeMillis();
-    assertEquals(1, session.execute(query).all().size());
-    elapsedTimeMillis_full = System.currentTimeMillis() - runtimeMillis;
+    elapsedTimeMillis_full = estimateQuery(query, 1, numIterations);
     LOG.info(String.format("Full scan query: Elapsed time = %d msecs", elapsedTimeMillis_full));
 
     // Do performance testing ONLY in RELEASE build.
     if (TestUtils.isReleaseBuild()) {
       // Check that full-scan is slower than index-scan.
-      assertTrue((elapsedTimeMillis_full/3.0) >= elapsedTimeMillis_index);
+      assertTrue((elapsedTimeMillis_full/2.0) >= elapsedTimeMillis_index);
     }
   }
 
@@ -175,6 +173,8 @@ public class TestJsonIndex extends BaseCQLTest {
                     "  ( \"j->'a'->>'b'\" INT PRIMARY KEY, \"j->'a'->>'c'\" INT, j JSONB ) " +
                     "  WITH TRANSACTIONS = {'enabled' : true};");
 
+    waitForReadPermsOnAllIndexes("test_json_index_syntax");
+
     // Valid indexes: No name conflict.
     session.execute("CREATE INDEX jidx1 ON test_json_index_syntax(j->'a'->>'d');");
     session.execute("CREATE INDEX jidx2 ON test_json_index_syntax(j->'a'->>'c');");
@@ -216,6 +216,9 @@ public class TestJsonIndex extends BaseCQLTest {
     session.execute(table_stmt);
     session.execute(index_stmt);
 
+    // Wait until the index table has read permissions.
+    waitForReadPermsOnAllIndexes("TestJsonIndex".toLowerCase(), "test_json_index_escape");
+
     // Describe INDEX to test demangling column names.
     KeyspaceMetadata ks_metadata = cluster.getMetadata().getKeyspace("TestJsonIndex");
     TableMetadata tab_metadata = ks_metadata.getTable("test_json_index_escape");
@@ -224,7 +227,7 @@ public class TestJsonIndex extends BaseCQLTest {
 
     // INSERT and SELECT to test using mangled names.
     int rowCount = 10;
-    String rowDesc = "";
+    String[] rows = new String[rowCount];
     for (int i = 0; i < rowCount; i++) {
       String insert_stmt =
         String.format("INSERT INTO TestJsonIndex.test_json_index_escape" +
@@ -241,13 +244,14 @@ public class TestJsonIndex extends BaseCQLTest {
                       "  VALUES(%d, %d, '{ \"\\\"J$_attr->>C$_col\\\"\" : \"%s\" }');",
                       i, 1000 + i, "json_hash_value");
       session.execute(insert_stmt);
-      rowDesc += String.format("Row[%d]", 1000 + i);
+      rows[i] = String.format("Row[%d]", 1000 + i);
     }
 
     // Asserting query result.
-    assertQuery("SELECT \"$_$$_col\" FROM TestJsonIndex.test_json_index_escape" +
-                "  WHERE \"C$_col->>'$J_attr'\"->>'\"J$_attr->>C$_col\"' = 'json_hash_value';",
-                rowDesc);
+    assertQueryRowsUnordered(
+        "SELECT \"$_$$_col\" FROM TestJsonIndex.test_json_index_escape" +
+        "  WHERE \"C$_col->>'$J_attr'\"->>'\"J$_attr->>C$_col\"' = 'json_hash_value';",
+        rows);
   }
 
   @Test

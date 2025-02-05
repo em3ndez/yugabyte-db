@@ -36,7 +36,6 @@
 
 #include "yb/common/common.pb.h"
 #include "yb/common/ql_type.h"
-#include "yb/common/schema.h"
 #include "yb/common/wire_protocol.messages.h"
 
 #include "yb/gutil/port.h"
@@ -53,11 +52,12 @@
 #include "yb/util/slice.h"
 #include "yb/util/status_format.h"
 #include "yb/yql/cql/ql/util/errcodes.h"
+#include "yb/util/flags.h"
 
 using google::protobuf::RepeatedPtrField;
 using std::vector;
 
-DEFINE_string(use_private_ip, "never",
+DEFINE_UNKNOWN_string(use_private_ip, "never",
               "When to use private IP for connection. "
               "cloud - would use private IP if destination node is located in the same cloud. "
               "region - would use private IP if destination node is located in the same cloud and "
@@ -137,9 +137,24 @@ const HostPortPB& GetHostPort(
   return empty_host_port;
 }
 
-} // namespace
+void DupMessage(const Slice& message, AppStatusPB* pb) {
+  pb->set_message(message.cdata(), message.size());
+}
 
-void StatusToPB(const Status& status, AppStatusPB* pb) {
+void DupErrors(const Slice& errors, AppStatusPB* pb) {
+  pb->set_errors(errors.cdata(), errors.size());
+}
+
+void DupMessage(const Slice& message, LWAppStatusPB* pb) {
+  pb->dup_message(message);
+}
+
+void DupErrors(const Slice& errors, LWAppStatusPB* pb) {
+  pb->dup_errors(errors);
+}
+
+template <class PB>
+void SharedStatusToPB(const Status& status, PB* pb) {
   pb->Clear();
 
   if (status.ok()) {
@@ -156,15 +171,15 @@ void StatusToPB(const Status& status, AppStatusPB* pb) {
                  << status << ": sending UNKNOWN_ERROR";
     // For unknown status codes, include the original stringified error
     // code.
-    pb->set_message(status.CodeAsString() + ": " + status.message().ToBuffer());
+    DupMessage(status.CodeAsString() + ": " + status.message().ToBuffer(), pb);
   } else {
     // Otherwise, just encode the message itself, since the other end
     // will reconstruct the other parts of the ToString() response.
-    pb->set_message(status.message().cdata(), status.message().size());
+    DupMessage(status.message(), pb);
   }
 
   auto error_codes = status.ErrorCodesSlice();
-  pb->set_errors(error_codes.data(), error_codes.size());
+  DupErrors(error_codes, pb);
   // We always has 0 as terminating byte for error codes, so non empty error codes would have
   // more than one bytes.
   if (error_codes.size() > 1) {
@@ -179,8 +194,21 @@ void StatusToPB(const Status& status, AppStatusPB* pb) {
     }
   }
 
-  pb->set_source_file(status.file_name());
   pb->set_source_line(status.line_number());
+}
+
+} // namespace
+
+void StatusToPB(const Status& status, AppStatusPB* pb) {
+  SharedStatusToPB(status, pb);
+
+  pb->set_source_file(status.file_name());
+}
+
+void StatusToPB(const Status& status, LWAppStatusPB* pb) {
+  SharedStatusToPB(status, pb);
+
+  pb->dup_source_file(status.file_name());
 }
 
 struct WireProtocolTabletServerErrorTag {
@@ -206,7 +234,7 @@ Status StatusFromOldPB(const PB& pb) {
   auto status_factory = [code, &pb](const Slice& errors) {
     return Status(
         code, Slice(pb.source_file()).cdata(), pb.source_line(), pb.message(), errors,
-        DupFileName::kTrue);
+        pb.source_file().size());
   };
 
   #define ENCODE_ERROR_AND_RETURN_STATUS(Tag, value) \
@@ -236,7 +264,7 @@ Status StatusFromOldPB(const PB& pb) {
   }
 
   return Status(code, Slice(pb.source_file()).cdata(), pb.source_line(), pb.message(), "",
-                nullptr /* error */, DupFileName::kTrue);
+                nullptr /* error */, pb.source_file().size());
   #undef ENCODE_ERROR_AND_RETURN_STATUS
 }
 
@@ -255,7 +283,7 @@ Status DoStatusFromPB(const PB& pb) {
 
   if (pb.has_errors()) {
     return Status(kErrorCodeToStatus[pb.code()], Slice(pb.source_file()).cdata(), pb.source_line(),
-                  pb.message(), pb.errors(), DupFileName::kTrue);
+                  pb.message(), pb.errors(), pb.source_file().size());
   }
 
   return StatusFromOldPB(pb);
@@ -274,6 +302,13 @@ Status StatusFromPB(const LWAppStatusPB& pb) {
 void HostPortToPB(const HostPort& host_port, HostPortPB* host_port_pb) {
   host_port_pb->set_host(host_port.host());
   host_port_pb->set_port(host_port.port());
+}
+
+HostPortPB HostPortToPB(const HostPort& host_port) {
+  HostPortPB hp_pb;
+  hp_pb.set_host(host_port.host());
+  hp_pb.set_port(host_port.port());
+  return hp_pb;
 }
 
 HostPort HostPortFromPB(const HostPortPB& host_port_pb) {
@@ -343,147 +378,6 @@ Status AddHostPortPBs(const std::vector<Endpoint>& addrs,
     }
   }
   return Status::OK();
-}
-
-void SchemaToColocatedTableIdentifierPB(
-    const Schema& schema, ColocatedTableIdentifierPB* colocated_pb) {
-  if (schema.has_colocation_id()) {
-    colocated_pb->set_colocation_id(schema.colocation_id());
-  } else if (schema.has_cotable_id()) {
-    colocated_pb->set_cotable_id(schema.cotable_id().ToString());
-  }
-
-}
-
-void SchemaToPB(const Schema& schema, SchemaPB *pb, int flags) {
-  pb->Clear();
-  SchemaToColocatedTableIdentifierPB(schema, pb->mutable_colocated_table_id());
-  SchemaToColumnPBs(schema, pb->mutable_columns(), flags);
-  schema.table_properties().ToTablePropertiesPB(pb->mutable_table_properties());
-  pb->set_pgschema_name(schema.SchemaName());
-}
-
-void SchemaToPBWithoutIds(const Schema& schema, SchemaPB *pb) {
-  pb->Clear();
-  SchemaToColumnPBs(schema, pb->mutable_columns(), SCHEMA_PB_WITHOUT_IDS);
-}
-
-Status SchemaFromPB(const SchemaPB& pb, Schema *schema) {
-  // Conver the columns.
-  vector<ColumnSchema> columns;
-  vector<ColumnId> column_ids;
-  int num_key_columns = 0;
-  RETURN_NOT_OK(ColumnPBsToColumnTuple(pb.columns(), &columns, &column_ids, &num_key_columns));
-
-  // Convert the table properties.
-  TableProperties table_properties = TableProperties::FromTablePropertiesPB(pb.table_properties());
-  RETURN_NOT_OK(schema->Reset(columns, column_ids, num_key_columns, table_properties));
-
-  if(pb.has_pgschema_name()) {
-    schema->SetSchemaName(pb.pgschema_name());
-  }
-
-  if (pb.has_colocated_table_id()) {
-    switch (pb.colocated_table_id().value_case()) {
-      case ColocatedTableIdentifierPB::kCotableId: {
-        schema->set_cotable_id(
-            VERIFY_RESULT(Uuid::FromString(pb.colocated_table_id().cotable_id())));
-        break;
-      }
-      case ColocatedTableIdentifierPB::kColocationId:
-        schema->set_colocation_id(pb.colocated_table_id().colocation_id());
-        break;
-      case ColocatedTableIdentifierPB::VALUE_NOT_SET:
-        break;
-    }
-  }
-  return Status::OK();
-}
-
-void ColumnSchemaToPB(const ColumnSchema& col_schema, ColumnSchemaPB *pb, int flags) {
-  pb->Clear();
-  pb->set_name(col_schema.name());
-  col_schema.type()->ToQLTypePB(pb->mutable_type());
-  pb->set_is_nullable(col_schema.is_nullable());
-  pb->set_is_static(col_schema.is_static());
-  pb->set_is_counter(col_schema.is_counter());
-  pb->set_order(col_schema.order());
-  pb->set_sorting_type(col_schema.sorting_type());
-  pb->set_pg_type_oid(col_schema.pg_type_oid());
-  // We only need to process the *hash* primary key here. The regular primary key is set by the
-  // conversion for SchemaPB. The reason is that ColumnSchema and ColumnSchemaPB are not matching
-  // 1 to 1 as ColumnSchema doesn't have "is_key" field. That was Kudu's code, and we keep it that
-  // way for now.
-  if (col_schema.is_hash_key()) {
-    pb->set_is_key(true);
-    pb->set_is_hash_key(true);
-  }
-}
-
-
-ColumnSchema ColumnSchemaFromPB(const ColumnSchemaPB& pb) {
-  // Only "is_hash_key" is used to construct ColumnSchema. The field "is_key" will be read when
-  // processing SchemaPB.
-  return ColumnSchema(pb.name(), QLType::FromQLTypePB(pb.type()), pb.is_nullable(),
-                      pb.is_hash_key(), pb.is_static(), pb.is_counter(), pb.order(),
-                      SortingType(pb.sorting_type()), pb.pg_type_oid());
-}
-
-CHECKED_STATUS ColumnPBsToColumnTuple(
-    const RepeatedPtrField<ColumnSchemaPB>& column_pbs,
-    vector<ColumnSchema>* columns , vector<ColumnId>* column_ids, int* num_key_columns) {
-  columns->reserve(column_pbs.size());
-  bool is_handling_key = true;
-  for (const ColumnSchemaPB& pb : column_pbs) {
-    columns->push_back(ColumnSchemaFromPB(pb));
-    if (pb.is_key()) {
-      if (!is_handling_key) {
-        return STATUS(InvalidArgument,
-                      "Got out-of-order key column", pb.ShortDebugString());
-      }
-      (*num_key_columns)++;
-    } else {
-      is_handling_key = false;
-    }
-    if (pb.has_id()) {
-      column_ids->push_back(ColumnId(pb.id()));
-    }
-  }
-
-  DCHECK_LE((*num_key_columns), columns->size());
-  return Status::OK();
-}
-
-Status ColumnPBsToSchema(const RepeatedPtrField<ColumnSchemaPB>& column_pbs,
-                         Schema* schema) {
-
-  vector<ColumnSchema> columns;
-  vector<ColumnId> column_ids;
-  int num_key_columns = 0;
-  RETURN_NOT_OK(ColumnPBsToColumnTuple(column_pbs, &columns, &column_ids, &num_key_columns));
-
-  // TODO(perf): could make the following faster by adding a
-  // Reset() variant which actually takes ownership of the column
-  // vector.
-  return schema->Reset(columns, column_ids, num_key_columns);
-}
-
-void SchemaToColumnPBs(const Schema& schema,
-                       RepeatedPtrField<ColumnSchemaPB>* cols,
-                       int flags) {
-  cols->Clear();
-  size_t idx = 0;
-  for (const ColumnSchema& col : schema.columns()) {
-    ColumnSchemaPB* col_pb = cols->Add();
-    ColumnSchemaToPB(col, col_pb);
-    col_pb->set_is_key(idx < schema.num_key_columns());
-
-    if (schema.has_column_ids() && !(flags & SCHEMA_PB_WITHOUT_IDS)) {
-      col_pb->set_id(schema.column_id(idx));
-    }
-
-    idx++;
-  }
 }
 
 Result<UsePrivateIpMode> GetPrivateIpMode() {
@@ -561,7 +455,7 @@ static const std::string kSplitChildTabletIdsCategoryName = "split child tablet 
 StatusCategoryRegisterer split_child_tablet_ids_category_registerer(
     StatusCategoryDescription::Make<SplitChildTabletIdsTag>(&kSplitChildTabletIdsCategoryName));
 
-std::string SplitChildTabletIdsTag::ToMessage(Value value) {
+std::string SplitChildTabletIdsTag::ToMessage(const Value& value) {
   return Format("Split child tablet IDs: $0", value);
 }
 

@@ -11,8 +11,7 @@
 // under the License.
 //
 
-#ifndef YB_CLIENT_TABLE_ALTERER_H
-#define YB_CLIENT_TABLE_ALTERER_H
+#pragma once
 
 #include <boost/optional.hpp>
 
@@ -36,16 +35,20 @@ namespace client {
 //
 // Sample usage:
 //   YBTableAlterer* alterer = client->NewTableAlterer("table-name");
-//   alterer->AddColumn("foo")->Type(INT32)->NotNull();
+//   alterer->AddColumn("foo")->Type(DataType::INT32)->NotNull();
 //   Status s = alterer->Alter();
 //   delete alterer;
 class YBTableAlterer {
  public:
   ~YBTableAlterer();
 
-  // Renames the table.
-  // If there is no new namespace (only the new table name provided), that means that the table
-  // namespace must not be changed (changing the table name only in the same namespace).
+  // Renames the table. Options:
+  // (1) Provided the new namespace + the new table name - changing the table name and
+  //     moving it to the new namespace (keeping the PG schema name unchanged).
+  // (2) Provided only the new table name - changing the table name only in the same namespace
+  //     (keeping the namespace & the PG schema name unchanged).
+  // (3) Provided only the new PG schema name - changing the table schema only
+  //     (keeping the namespace & the table name unchanged).
   YBTableAlterer* RenameTo(const YBTableName& new_name);
 
   // Adds a new column to the table.
@@ -77,17 +80,20 @@ class YBTableAlterer {
   YBTableAlterer* wait(bool wait);
 
   // Set replication info for the table.
-  YBTableAlterer* replication_info(const master::ReplicationInfoPB& ri);
+  YBTableAlterer* replication_info(const ReplicationInfoPB& ri);
 
   // The altering of this table is dependent upon the success of this higher-level transaction.
   YBTableAlterer* part_of_transaction(const TransactionMetadata* txn);
+
+  // Set increment_schema_version to true.
+  YBTableAlterer* set_increment_schema_version();
 
   // Alters the table.
   //
   // The return value may indicate an error in the alter operation, or a
   // misuse of the builder (e.g. add_column() with default_value=NULL); in
   // the latter case, only the last error is returned.
-  CHECKED_STATUS Alter();
+  Status Alter();
 
  private:
   friend class YBClient;
@@ -95,7 +101,7 @@ class YBTableAlterer {
   YBTableAlterer(YBClient* client, const YBTableName& name);
   YBTableAlterer(YBClient* client, const std::string id);
 
-  CHECKED_STATUS ToRequest(master::AlterTableRequestPB* req);
+  Status ToRequest(master::AlterTableRequestPB* req);
 
   YBClient* const client_;
   const YBTableName table_name_;
@@ -116,14 +122,14 @@ class YBTableAlterer {
 
   boost::optional<uint32_t> wal_retention_secs_;
 
-  std::unique_ptr<master::ReplicationInfoPB> replication_info_;
+  std::unique_ptr<ReplicationInfoPB> replication_info_;
 
   const TransactionMetadata* txn_ = nullptr;
+
+  bool increment_schema_version_ = false;
 
   DISALLOW_COPY_AND_ASSIGN(YBTableAlterer);
 };
 
 } // namespace client
 } // namespace yb
-
-#endif // YB_CLIENT_TABLE_ALTERER_H

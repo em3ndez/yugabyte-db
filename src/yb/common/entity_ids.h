@@ -11,8 +11,7 @@
 // under the License.
 //
 
-#ifndef YB_COMMON_ENTITY_IDS_H
-#define YB_COMMON_ENTITY_IDS_H
+#pragma once
 
 #include <string>
 
@@ -33,10 +32,19 @@ static const uint32_t kPgDatabaseTableOid = 1262;  // Hardcoded for pg_database.
 static const uint32_t kPgFirstNormalObjectId = 16384; // Hardcoded in transam.h
 static const uint32_t kPgYbTablegroupTableOid = 8036;  // Hardcoded in pg_yb_tablegroup.h
 static const uint32_t kPgSequencesTableOid = 2224;  // Hardcoded for pg_sequence. (in pg_sequence.h)
+static const uint32_t kPgYbMigrationTableOid = 8027;  // Hardcoded for pg_yb_migration.
+                                                      // (in pg_yb_migration.h)
+static const uint32_t kPgAttributeTableOid = 1249;    // Hardcoded for pg_attribute.
+                                                      // (in pg_attribute.h)
+static const uint32_t kPgEnumTableOid = 3501;         // Hardcoded for pg_enum (in pg_enum.h).
+static const uint32_t kPgTypeTableOid = 1247;         // Hardcoded for pg_type (in pg_type.h)
+static const uint32_t kTemplate1Oid = 1;              // Hardcoded for template1. (in initdb.c)
 
 extern const TableId kPgProcTableId;
 extern const TableId kPgYbCatalogVersionTableId;
+extern const TableId kPgYbCatalogVersionTableIdPriorVersion;
 extern const TableId kPgTablespaceTableId;
+extern const TableId kPgSequencesDataTableId;
 extern const std::string kPgSequencesDataNamespaceId;
 
 // Get YB namespace id for a Postgres database.
@@ -60,8 +68,18 @@ Result<uint32_t> GetPgsqlTableOid(const TableId& table_id);
 Result<uint32_t> GetPgsqlTablegroupOid(const TablegroupId& tablegroup_id);
 Result<uint32_t> GetPgsqlTablegroupOidByTableId(const TableId& table_id);
 Result<uint32_t> GetPgsqlDatabaseOidByTableId(const TableId& table_id);
+Result<uint32_t> GetPgsqlDatabaseOidByTablegroupId(const TablegroupId& tablegroup_id);
 Result<uint32_t> GetPgsqlTablespaceOid(const TablespaceId& tablespace_id);
 
-}  // namespace yb
+// NOTE: Only catalog table oids are allowed.
+TableId GetPriorVersionYsqlCatalogTableId(uint32_t database_oid, uint32_t table_oid);
 
-#endif  // YB_COMMON_ENTITY_IDS_H
+// If this is a YSQL catalog table, then is it the previous version?
+// Returns false for user tables.
+bool IsPriorVersionYsqlCatalogTable(const TableId& table_id);
+
+// If this is a YSQL catalog table, then is it the current version?
+// Returns false for user tables.
+bool IsCurrentVersionYsqlCatalogTable(const TableId& table_id);
+
+}  // namespace yb

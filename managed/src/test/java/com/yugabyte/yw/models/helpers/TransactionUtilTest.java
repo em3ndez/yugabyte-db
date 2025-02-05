@@ -13,11 +13,14 @@ import static play.inject.Bindings.bind;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.typesafe.config.Config;
+import com.yugabyte.yw.common.CustomWsClientFactory;
+import com.yugabyte.yw.common.CustomWsClientFactoryProvider;
 import com.yugabyte.yw.common.PlatformGuiceApplicationBaseTest;
 import com.yugabyte.yw.common.config.DummyRuntimeConfigFactoryImpl;
 import com.yugabyte.yw.common.config.RuntimeConfigFactory;
 import com.yugabyte.yw.models.TaskInfo;
 import com.yugabyte.yw.models.TaskInfo.State;
+import jakarta.persistence.PersistenceException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
@@ -25,13 +28,11 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicInteger;
-import javax.persistence.PersistenceException;
 import kamon.instrumentation.play.GuiceModule;
 import lombok.extern.slf4j.Slf4j;
 import org.junit.Test;
 import play.Application;
 import play.inject.guice.GuiceApplicationBuilder;
-import play.modules.swagger.SwaggerModule;
 
 @Slf4j
 public class TransactionUtilTest extends PlatformGuiceApplicationBaseTest {
@@ -43,24 +44,23 @@ public class TransactionUtilTest extends PlatformGuiceApplicationBaseTest {
     mockConfig = mock(Config.class);
     when(mockConfig.getString(anyString())).thenReturn("");
     return super.configureApplication(
-            new GuiceApplicationBuilder()
-                .disable(SwaggerModule.class)
-                .disable(GuiceModule.class)
-                .configure(testDatabase()))
+            new GuiceApplicationBuilder().disable(GuiceModule.class).configure(testDatabase()))
         .overrides(
             bind(RuntimeConfigFactory.class)
                 .toInstance(new DummyRuntimeConfigFactoryImpl(mockConfig)))
+        .overrides(
+            bind(CustomWsClientFactory.class).toProvider(CustomWsClientFactoryProvider.class))
         .build();
   }
 
   @Test
   public void testTransactionRollback() {
-    TaskInfo taskInfo = new TaskInfo(TaskType.CreateUniverse);
-    taskInfo.setTaskDetails(mapper.createObjectNode());
+    TaskInfo taskInfo = new TaskInfo(TaskType.CreateUniverse, null);
+    taskInfo.setTaskParams(mapper.createObjectNode());
     taskInfo.setOwner("test");
     taskInfo.setTaskState(State.Created);
     taskInfo.save();
-    UUID taskUUID = taskInfo.getTaskUUID();
+    UUID taskUUID = taskInfo.getUuid();
     assertThrows(
         RuntimeException.class,
         () -> {
@@ -79,12 +79,12 @@ public class TransactionUtilTest extends PlatformGuiceApplicationBaseTest {
 
   @Test
   public void testTransactionCommit() {
-    TaskInfo taskInfo = new TaskInfo(TaskType.CreateUniverse);
-    taskInfo.setTaskDetails(mapper.createObjectNode());
+    TaskInfo taskInfo = new TaskInfo(TaskType.CreateUniverse, null);
+    taskInfo.setTaskParams(mapper.createObjectNode());
     taskInfo.setOwner("test");
     taskInfo.setTaskState(State.Created);
     taskInfo.save();
-    UUID taskUUID = taskInfo.getTaskUUID();
+    UUID taskUUID = taskInfo.getUuid();
     TransactionUtil.doInTxn(
         () -> {
           TaskInfo tf = TaskInfo.get(taskUUID);
@@ -126,8 +126,8 @@ public class TransactionUtilTest extends PlatformGuiceApplicationBaseTest {
   public void testTransaction() {
     List<TaskInfo> tasks = new ArrayList<>();
     for (int i = 0; i < 5; i++) {
-      TaskInfo taskInfo = new TaskInfo(TaskType.CreateUniverse);
-      taskInfo.setTaskDetails(mapper.createObjectNode());
+      TaskInfo taskInfo = new TaskInfo(TaskType.CreateUniverse, null);
+      taskInfo.setTaskParams(mapper.createObjectNode());
       taskInfo.setOwner("test" + i);
       taskInfo.setTaskState(State.Created);
       taskInfo.save();
@@ -142,7 +142,7 @@ public class TransactionUtilTest extends PlatformGuiceApplicationBaseTest {
                 TransactionUtil.doInTxn(
                     () -> {
                       for (TaskInfo taskInfo : tasks) {
-                        TaskInfo tf = TaskInfo.get(taskInfo.getTaskUUID());
+                        TaskInfo tf = TaskInfo.get(taskInfo.getUuid());
                         try {
                           Thread.sleep(10);
                         } catch (InterruptedException e) {

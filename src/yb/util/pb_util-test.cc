@@ -481,5 +481,123 @@ TEST_F(TestPBUtil, TestPBRequiredToRepeated) {
   ASSERT_OK(env_->DeleteFile(path_));
 }
 
+TEST_F(TestPBUtil, TestPBRequiredToOptional) {
+  // Write the file with required fields.
+  {
+    TestObjectRequiredPB pb;
+    pb.set_string1(kTestString + "1");
+    pb.set_string2(kTestString + "2");
+    pb.mutable_record()->set_text(kTestString);
+    ASSERT_OK(WritePBContainerToPath(env_.get(), path_, pb, OVERWRITE, SYNC));
+  }
+
+  // Read it back as optional fields, should validate and contain the expected values.
+  TestObjectOptionalPB pb;
+  ASSERT_OK(ReadPBContainerFromPath(env_.get(), path_, &pb));
+  ASSERT_TRUE(pb.has_string1());
+  ASSERT_TRUE(pb.has_string2());
+  ASSERT_TRUE(pb.has_record());
+  ASSERT_TRUE(pb.record().has_text());
+  ASSERT_EQ(kTestString + "1", pb.string1());
+  ASSERT_EQ(kTestString + "2", pb.string2());
+  ASSERT_EQ(kTestString, pb.record().text());
+
+  // Delete the file.
+  ASSERT_OK(env_->DeleteFile(path_));
+}
+
+// Capture the outcome of the SCHECK into a variable.
+#define PB_FIELDS_ARE_SET(pb, ...) \
+  [&pb]() -> Status { \
+    SCHECK_PB_FIELDS_SET(pb, __VA_ARGS__); \
+    return Status::OK(); \
+  }()
+
+TEST_F(TestPBUtil, TestScheckPbFieldsAreSetMacro) {
+  ProtoContainerTestPB pb;
+  pb.set_name("foo");
+  pb.set_note("bar");
+  // value not set
+
+  ASSERT_OK(PB_FIELDS_ARE_SET(pb, name));
+  ASSERT_OK(PB_FIELDS_ARE_SET(pb, note));
+  ASSERT_NOK_STR_CONTAINS(PB_FIELDS_ARE_SET(pb, value), "Missing required arguments: [value]");
+
+  ASSERT_OK(PB_FIELDS_ARE_SET(pb, name, note));
+  ASSERT_NOK_STR_CONTAINS(
+      PB_FIELDS_ARE_SET(pb, name, value), "Missing required arguments: [value]");
+
+  ASSERT_NOK_STR_CONTAINS(
+      PB_FIELDS_ARE_SET(pb, value, note), "Missing required arguments: [value]");
+
+  ASSERT_NOK_STR_CONTAINS(
+      PB_FIELDS_ARE_SET(pb, name, value, note), "Missing required arguments: [value]");
+
+  pb.Clear();
+  pb.set_name("foo");
+  // value, note not set
+
+  ASSERT_OK(PB_FIELDS_ARE_SET(pb, name));
+  ASSERT_NOK_STR_CONTAINS(
+      PB_FIELDS_ARE_SET(pb, name, value, note), "Missing required arguments: [value, note]");
+  ASSERT_NOK_STR_CONTAINS(
+      PB_FIELDS_ARE_SET(pb, note, name, value), "Missing required arguments: [note, value]");
+
+  pb.Clear();
+  pb.set_note("foo");
+  // name, value not set
+
+  ASSERT_OK(PB_FIELDS_ARE_SET(pb, note));
+  ASSERT_NOK_STR_CONTAINS(
+      PB_FIELDS_ARE_SET(pb, name, value, note), "Missing required arguments: [name, value]");
+}
+
+#undef PB_FIELDS_ARE_SET
+
+// Capture the outcome of the SCHECK into a variable.
+#define PB_FIELDS_NOT_EMPTY(pb, ...) \
+  [&pb]() -> Status { \
+    SCHECK_PB_FIELDS_NOT_EMPTY(pb, __VA_ARGS__); \
+    return Status::OK(); \
+  }()
+
+TEST_F(TestPBUtil, TestScheckPbFieldsNotEmptyMacro) {
+  ProtoContainerTestPB pb;
+
+  // Empty note.
+  pb.set_note("");
+  ASSERT_NOK_STR_CONTAINS(PB_FIELDS_NOT_EMPTY(pb, note), "Empty required arguments: [note]");
+  ASSERT_OK(PB_FIELDS_NOT_EMPTY(pb, value));
+
+  // Empty repeated string field.
+  ASSERT_NOK_STR_CONTAINS(
+      PB_FIELDS_NOT_EMPTY(pb, str_list), "Empty required arguments: [str_list]");
+  pb.add_str_list("");
+  ASSERT_NOK_STR_CONTAINS(
+      PB_FIELDS_NOT_EMPTY(pb, str_list), "Empty required arguments: [str_list]");
+
+  // Empty repeated int field.
+  ASSERT_NOK_STR_CONTAINS(
+      PB_FIELDS_NOT_EMPTY(pb, str_list, int_list),
+      "Empty required arguments: [str_list, int_list]");
+
+  pb.add_int_list(0);
+  ASSERT_NOK_STR_CONTAINS(
+      PB_FIELDS_NOT_EMPTY(pb, str_list, int_list), "Empty required arguments: [str_list]");
+
+  pb.clear_str_list();
+  pb.add_str_list("test");
+
+  ASSERT_NOK_STR_CONTAINS(
+      PB_FIELDS_NOT_EMPTY(pb, name, value, note, str_list, int_list),
+      "Empty required arguments: [name, note]");
+
+  pb.set_name("name");
+  pb.set_note("note");
+  ASSERT_OK(PB_FIELDS_NOT_EMPTY(pb, name, value, note, str_list, int_list));
+}
+
+#undef PB_FIELDS_NOT_EMPTY
+
 } // namespace pb_util
 } // namespace yb

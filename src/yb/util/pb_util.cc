@@ -42,7 +42,7 @@
 #include <unordered_set>
 #include <vector>
 
-#include <glog/logging.h>
+#include "yb/util/logging.h"
 #include <google/protobuf/descriptor.pb.h>
 #include <google/protobuf/descriptor_database.h>
 #include <google/protobuf/dynamic_message.h>
@@ -65,12 +65,16 @@
 #include "yb/util/debug/trace_event.h"
 #include "yb/util/env.h"
 #include "yb/util/env_util.h"
+#include "yb/util/flags.h"
+#include "yb/util/flag_validators.h"
 #include "yb/util/path_util.h"
 #include "yb/util/pb_util-internal.h"
 #include "yb/util/pb_util.pb.h"
 #include "yb/util/result.h"
+#include "yb/util/size_literals.h"
 #include "yb/util/status.h"
 #include "yb/util/status_log.h"
+#include "yb/util/std_util.h"
 
 using google::protobuf::Descriptor;
 using google::protobuf::DescriptorPool;
@@ -94,10 +98,14 @@ using std::shared_ptr;
 using std::string;
 using std::unordered_set;
 using std::vector;
+using std::ostream;
 using strings::Substitute;
 using strings::Utf8SafeCEscape;
 
-static const char* const kTmpTemplateSuffix = ".tmp.XXXXXX";
+using yb::operator"" _MB;
+
+DEFINE_test_flag(bool, fail_write_pb_container, false,
+                 "Simulate a failure during WritePBContainer.");
 
 // Protobuf container constants.
 static const int kPBContainerVersion = 1;
@@ -110,6 +118,33 @@ static const int kPBContainerChecksumLen = sizeof(uint32_t);
 
 COMPILE_ASSERT((arraysize(kPBContainerMagic) - 1) == kPBContainerMagicLen,
                kPBContainerMagic_does_not_match_expected_length);
+
+// Maximum size of RPC should be larger than size of consensus batch
+// At each layer, we embed the "message" from the previous layer.
+// In order to send three strings of 64, the request from cql/redis will be larger
+// than that because we will have overheads from that layer.
+// Hence, we have a limit of 254MB at the consensus layer.
+// The rpc layer adds its own headers, so we limit the rpc message size to 255MB.
+DEFINE_NON_RUNTIME_uint64(rpc_max_message_size, 255_MB,
+    "The maximum size of a message of any RPC that the server will accept. The sum of "
+    "consensus_max_batch_size_bytes and 1MB should be less than rpc_max_message_size. "
+    "This value must also be less than protobuf_message_total_bytes_limit.");
+
+// To permit parsing of very large PB messages, we must use parse through a CodedInputStream and
+// bump the byte limit. The SetTotalBytesLimit() docs say that 512MB is the shortest theoretical
+// message length that may produce integer overflow warnings, so that's what we'll use.
+DEFINE_NON_RUNTIME_uint32(
+    protobuf_message_total_bytes_limit, 511_MB,
+    "Limits single protobuf message size for deserialization. This value must be greater than "
+    "rpc_max_message_size and less than 512MB.");
+TAG_FLAG(protobuf_message_total_bytes_limit, advanced);
+TAG_FLAG(protobuf_message_total_bytes_limit, hidden);
+
+DEFINE_validator(rpc_max_message_size, FLAG_LT_FLAG_VALIDATOR(protobuf_message_total_bytes_limit));
+
+DEFINE_validator(protobuf_message_total_bytes_limit,
+    FLAG_GT_FLAG_VALIDATOR(rpc_max_message_size),
+    FLAG_LT_VALUE_VALIDATOR(512_MB));
 
 namespace yb {
 namespace pb_util {
@@ -164,9 +199,15 @@ uint8_t* GetUInt8Ptr(uint8_t* buffer) {
 }
 
 template <class Out>
-void DoAppendPartialToString(const MessageLite &msg, Out* output) {
+Status DoAppendPartialToString(const MessageLite &msg, Out* output) {
   auto old_size = output->size();
   int byte_size = msg.ByteSize();
+
+  if (std::cmp_greater(byte_size, FLAGS_protobuf_message_total_bytes_limit)) {
+    return STATUS_FORMAT(
+        InternalError, "Serialized protobuf message is too big: $0 > $1", byte_size,
+        FLAGS_protobuf_message_total_bytes_limit);
+  }
 
   output->resize(old_size + byte_size);
 
@@ -175,26 +216,27 @@ void DoAppendPartialToString(const MessageLite &msg, Out* output) {
   if (end - start != byte_size) {
     ByteSizeConsistencyError(byte_size, msg.ByteSize(), end - start);
   }
+  return Status::OK();
 }
 
 } // anonymous namespace
 
-void AppendToString(const MessageLite &msg, faststring *output) {
+Status AppendToString(const MessageLite &msg, faststring *output) {
   DCHECK(msg.IsInitialized()) << InitializationErrorMessage("serialize", msg);
-  AppendPartialToString(msg, output);
+  return AppendPartialToString(msg, output);
 }
 
-void AppendPartialToString(const MessageLite &msg, faststring* output) {
-  DoAppendPartialToString(msg, output);
+Status AppendPartialToString(const MessageLite &msg, faststring* output) {
+  return DoAppendPartialToString(msg, output);
 }
 
-void AppendPartialToString(const MessageLite &msg, std::string* output) {
-  DoAppendPartialToString(msg, output);
+Status AppendPartialToString(const MessageLite &msg, std::string* output) {
+  return DoAppendPartialToString(msg, output);
 }
 
-void SerializeToString(const MessageLite &msg, faststring *output) {
+Status SerializeToString(const MessageLite &msg, faststring *output) {
   output->clear();
-  AppendToString(msg, output);
+  return AppendToString(msg, output);
 }
 
 bool ParseFromSequentialFile(MessageLite *msg, SequentialFile *rfile) {
@@ -204,7 +246,7 @@ bool ParseFromSequentialFile(MessageLite *msg, SequentialFile *rfile) {
 
 Status ParseFromArray(MessageLite* msg, const uint8_t* data, size_t length) {
   CodedInputStream in(data, narrow_cast<uint32_t>(length));
-  in.SetTotalBytesLimit(511 * 1024 * 1024, -1);
+  in.SetTotalBytesLimit(FLAGS_protobuf_message_total_bytes_limit, -1);
   // Parse data into protobuf message
   if (!msg->ParseFromCodedStream(&in)) {
     return STATUS(Corruption, "Error parsing msg", InitializationErrorMessage("parse", *msg));
@@ -215,7 +257,7 @@ Status ParseFromArray(MessageLite* msg, const uint8_t* data, size_t length) {
 Status WritePBToPath(Env* env, const std::string& path,
                      const MessageLite& msg,
                      SyncMode sync) {
-  const string tmp_template = path + kTmpTemplateSuffix;
+  const string tmp_template = MakeTempPath(path);
   string tmp_path;
 
   std::unique_ptr<WritableFile> file;
@@ -538,13 +580,9 @@ Status ReadablePBContainerFile::ReadNextPB(Message* msg) {
   // 2. ParseFromArray() should fail if the data cannot be parsed into the
   //    provided message type.
 
-  // To permit parsing of very large PB messages, we must use parse through a
-  // CodedInputStream and bump the byte limit. The SetTotalBytesLimit() docs
-  // say that 512MB is the shortest theoretical message length that may produce
-  // integer overflow warnings, so that's what we'll use.
   ArrayInputStream ais(body.data(), narrow_cast<int>(body.size()));
   CodedInputStream cis(&ais);
-  cis.SetTotalBytesLimit(512 * 1024 * 1024, -1);
+  cis.SetTotalBytesLimit(FLAGS_protobuf_message_total_bytes_limit, -1);
   if (PREDICT_FALSE(!msg->ParseFromCodedStream(&cis))) {
     return STATUS(IOError, "Unable to parse PB from path", reader_->filename());
   }
@@ -619,8 +657,8 @@ Status ReadablePBContainerFile::ValidateAndRead(size_t length, EofOK eofOK,
       case EOF_NOT_OK:
         return STATUS(Corruption, "File size not large enough to be valid",
                                   Substitute("Proto container file $0: "
-                                      "tried to read $0 bytes at offset "
-                                      "$1 but file size is only $2",
+                                      "tried to read $1 bytes at offset "
+                                      "$2 but file size is only $3",
                                       reader_->filename(), length,
                                       offset_, file_size));
       default:
@@ -689,7 +727,7 @@ Status WritePBContainerToPath(Env* env, const std::string& path,
     return STATUS(AlreadyPresent, Substitute("File $0 already exists", path));
   }
 
-  const string tmp_template = path + kTmpTemplateSuffix;
+  const string tmp_template = MakeTempPath(path);
   string tmp_path;
 
   std::unique_ptr<WritableFile> file;
@@ -703,6 +741,11 @@ Status WritePBContainerToPath(Env* env, const std::string& path,
     RETURN_NOT_OK(pb_file.Sync());
   }
   RETURN_NOT_OK(pb_file.Close());
+
+  if (PREDICT_FALSE(FLAGS_TEST_fail_write_pb_container)) {
+    return STATUS(Corruption, "Test. Failure before rename.");
+  }
+
   RETURN_NOT_OK_PREPEND(env->RenameFile(tmp_path, path),
                         "Failed to rename tmp file to " + path);
   tmp_deleter.Cancel();

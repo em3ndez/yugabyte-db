@@ -15,8 +15,7 @@
 // Tree node definitions for CREATE ROLE statement.
 //--------------------------------------------------------------------------------------------------
 
-#ifndef YB_YQL_CQL_QL_PTREE_PT_CREATE_ROLE_H
-#define YB_YQL_CQL_QL_PTREE_PT_CREATE_ROLE_H
+#pragma once
 
 #include "yb/yql/cql/ql/ptree/tree_node.h"
 #include "yb/yql/cql/ql/ptree/pt_name.h"
@@ -85,7 +84,7 @@ class PTRolePassword : public PTRoleOption {
   }
 
   // Node semantics analysis.
-  virtual CHECKED_STATUS Analyze(SemContext* sem_context) override {
+  virtual Status Analyze(SemContext* sem_context) override {
     return Status::OK();
   }
 
@@ -124,7 +123,7 @@ class PTRoleLogin : public PTRoleOption {
   }
 
   // Node semantics analysis.
-  virtual CHECKED_STATUS Analyze(SemContext* sem_context) override {
+  virtual Status Analyze(SemContext* sem_context) override {
     return Status::OK();
   }
 
@@ -162,7 +161,7 @@ class PTRoleSuperuser : public PTRoleOption {
   }
 
   // Node semantics analysis.
-  virtual CHECKED_STATUS Analyze(SemContext* sem_context) override {
+  virtual Status Analyze(SemContext* sem_context) override {
     return Status::OK();
   }
 
@@ -205,7 +204,7 @@ class PTCreateRole : public TreeNode {
   }
 
   // Node semantics analysis.
-  virtual CHECKED_STATUS Analyze(SemContext* sem_context) override;
+  virtual Status Analyze(SemContext* sem_context) override;
   void PrintSemanticAnalysisResult(SemContext* sem_context);
 
   // Role name.
@@ -243,5 +242,3 @@ class PTCreateRole : public TreeNode {
 
 }  // namespace ql
 }  // namespace yb
-
-#endif // YB_YQL_CQL_QL_PTREE_PT_CREATE_ROLE_H
